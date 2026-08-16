@@ -1,0 +1,42 @@
+[workspace]
+members = ["zksmart"]
+resolver = "2"
+
+
+[workspace.package]
+version = "0.1.0"
+authors = ["arkworks contributors"]
+description = "A library for constructing zkSNARKs for matrix computations"
+repository = "https://github.com/mirandaprivate/zksmart"
+documentation = "https://docs.rs/zksmart"
+keywords = ["cryptography", "commitments", "elliptic-curves", "pairing"]
+include = ["Cargo.toml", "src", "README.md", "LICENSE-APACHE", "LICENSE-MIT"]
+categories = ["cryptography"]
+license = "MIT/Apache-2.0"
+edition = "2018"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+incremental = true
+debug = true
+
+[profile.test]
+opt-level = 3
+debug-assertions = true
+incremental = true
+debug = true
+
+[patch.crates-io]
+ark-std = { git = "https://github.com/arkworks-rs/std/" }
+ark-ff = { git = "https://github.com/mirandaprivate/algebra" }
+ark-ec = { git = "https://github.com/mirandaprivate/algebra" }
+ark-serialize = { git = "https://github.com/mirandaprivate/algebra" }
+ark-poly = { git = "https://github.com/mirandaprivate/algebra" }
+
+ark-crypto-primitives = { git = "https://github.com/mirandaprivate/crypto-primitives/" }
+ark-r1cs-std = { git = "https://github.com/arkworks-rs/r1cs-std/" }
+
+ark-bls12-377 = { git = "https://github.com/mirandaprivate/algebra" }
+ark-bls12-381 = { git = "https://github.com/mirandaprivate/algebra" }
+ark-bn254 = { git = "https://github.com/mirandaprivate/algebra" }

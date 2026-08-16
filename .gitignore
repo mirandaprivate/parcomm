@@ -1,0 +1,76 @@
+# Rust build products and local tool caches
+/target/
+**/target/
+/.cache/
+*.rlib
+*.rmeta
+*.dSYM/
+
+# OS and editor metadata
+.DS_Store
+Thumbs.db
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
+/.venv/
+/venv/
+
+# Local secrets and machine-specific configuration
+/.env
+/.env.*
+!/.env.example
+
+# AI-agent state, worktrees, and scratch space
+**/.agents/
+**/.codex/
+**/.claude/
+**/.cursor/
+**/.continue/
+**/.gemini/
+**/.trae/
+**/.windsurf/
+/.worktrees/
+/worktrees/
+/.ai-worktrees/
+/ai-worktrees/
+/scratch/
+/tmp/
+
+# Generated experiment and benchmark intermediates
+/outputs/
+/results/
+/experiment-results/
+/benchmark-results/
+/artifacts/
+/logs/
+/checkpoints/
+/refine-logs/
+/data/cache/
+/data/generated/
+/srs/
+/parameters/
+*.log
+*.pid
+*.exit
+*.tmp
+*.proof
+*.params
+*.statement
+*.profraw
+*.profdata
+/zksmart/benches/*_server_result.md
+
+# Paper sources are maintained outside this code release.
+/latex/
+
+# Generated local manifests
+/MANIFEST.md
