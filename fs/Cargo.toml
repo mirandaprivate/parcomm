@@ -1,0 +1,30 @@
+[package]
+name = "fs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ark-ff = { version = "^0.5.0", features = ["std", "parallel"] }
+ark-std = { version = "^0.5.0", features = ["std", "parallel"] }
+ark-poly = { version = "^0.5.0", features = ["std", "parallel"] }
+ark-relations = { version = "^0.5.0", features = ["std"] }
+ark-r1cs-std = { version = "^0.5.0", features = ["std"] }
+ark-crypto-primitives = { version = "^0.5.0", features = ["std", "sponge", "r1cs"] }
+ark-serialize = { version = "^0.5.0", features = ["std", "derive"] }
+ark-ec = { version = "^0.5.0", features = ["std", "parallel"] }
+
+ark-bls12-381 = { version = "^0.5.0", features = ["std", "curve"] }
+
+hex = "0.4"
+rayon = "1.7"
+rand = "0.9"
+
+[dev-dependencies]
+criterion = { version = "0.7.0", features = ["html_reports"] }
+
+[features]
+default = ["std", "parallel"]
+std = []
+parallel = []
+
+# Profiles are configured at workspace root

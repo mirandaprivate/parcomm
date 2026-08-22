@@ -1,19 +1,39 @@
 [workspace]
-members = ["zksmart"]
+members = [
+    "atomic_proof",
+    "batch",
+    "fs",
+    "mat",
+    "poly-commit",
+]
 resolver = "2"
 
+[patch.crates-io]
+ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-ec = { path = "vendor/ark-ec" }
+ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+
+[patch."https://github.com/a16z/arkworks-algebra"]
+ark-ec = { path = "vendor/ark-ec" }
 
 [workspace.package]
 version = "0.1.0"
 authors = ["arkworks contributors"]
-description = "A library for constructing zkSNARKs for matrix computations"
-repository = "https://github.com/mirandaprivate/zksmart"
-documentation = "https://docs.rs/zksmart"
-keywords = ["cryptography", "commitments", "elliptic-curves", "pairing"]
+description = "ParComm collection commitments for heterogeneous vectors"
+repository = "https://github.com/mirandaprivate/parcomm"
+keywords = ["cryptography", "commitments", "elliptic-curves", "pairing", "zksnark"]
 include = ["Cargo.toml", "src", "README.md", "LICENSE-APACHE", "LICENSE-MIT"]
 categories = ["cryptography"]
 license = "MIT/Apache-2.0"
-edition = "2018"
+edition = "2021"
+
+[workspace.dependencies]
+atomic_proof = {path = "atomic_proof"}
+poly-commit = { path = "poly-commit" }
+batch = {path = "batch"}
+fs = {path = "fs"}
+mat = {path = "mat"}
 
 [profile.release]
 opt-level = 3
@@ -26,17 +46,3 @@ opt-level = 3
 debug-assertions = true
 incremental = true
 debug = true
-
-[patch.crates-io]
-ark-std = { git = "https://github.com/arkworks-rs/std/" }
-ark-ff = { git = "https://github.com/mirandaprivate/algebra" }
-ark-ec = { git = "https://github.com/mirandaprivate/algebra" }
-ark-serialize = { git = "https://github.com/mirandaprivate/algebra" }
-ark-poly = { git = "https://github.com/mirandaprivate/algebra" }
-
-ark-crypto-primitives = { git = "https://github.com/mirandaprivate/crypto-primitives/" }
-ark-r1cs-std = { git = "https://github.com/arkworks-rs/r1cs-std/" }
-
-ark-bls12-377 = { git = "https://github.com/mirandaprivate/algebra" }
-ark-bls12-381 = { git = "https://github.com/mirandaprivate/algebra" }
-ark-bn254 = { git = "https://github.com/mirandaprivate/algebra" }

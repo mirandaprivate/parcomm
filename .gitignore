@@ -67,10 +67,14 @@ __pycache__/
 *.statement
 *.profraw
 *.profdata
-/zksmart/benches/*_server_result.md
+/python/*.csv
+/python/*.png
+/python/*:Zone.Identifier
+/working_tree.txt
 
 # Paper sources are maintained outside this code release.
 /latex/
 
 # Generated local manifests
 /MANIFEST.md
+/*_PACKAGE.md

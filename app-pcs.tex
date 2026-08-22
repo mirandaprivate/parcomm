@@ -1,0 +1,386 @@
+% !TEX root = main.tex
+\input{tab-pcs}
+\section{Base PCS Optimization}
+\label{appx:pcs}
+
+In our experiments, we employ a variant of Dory~\cite{tcc/Lee21} as the base PCS.
+We compare the performance of this PCS with other PCSs implemented in the
+\textsf{arkworks} library, and report the results in
+Table~\ref{table:experimentPCS}, for committing to and opening a
+size-$2^{30}$ 8-bit vector.
+
+The total commitment-plus-opening time is comparable to the measured Brakedown
+implementation, while our PCS has smaller proof size and verifier time on this
+benchmark and retains logarithmic asymptotic proof size and verifier time.
+
+The PCS does not convert an entire 8-bit vector into field elements during
+commitment or opening.  Its $3.46$\,GB peak RAM is therefore more than an order
+of magnitude below every other implementation in
+Table~\ref{table:experimentPCS}.
+
+Our PCS is compatible with bucket-wise computation.  For a BVA, both commitment
+and opening iterate over the original vector entries and their logical offsets;
+neither intra-bucket zero suffixes nor the final implicit zero suffix is materialized.
+
+Below, we briefly describe the construction of this PCS.
+
+\subsection{Pairing Related Notations}
+
+\mysmallskip {\bf Pairing.}
+\label{sec:notationPairing}
+A pairing is a bilinear map $e: \Group_1 \times \Group_2 \mapsto \Group_T$ over three cyclic groups $\Group_1$, $\Group_2$, and $\Group_T$, each of prime order $p$, such that:
+\[
+	e(aA, bB) = ab\, e(A, B), \, \forall\, a, b\in \Field, \, A \in \Group_1, B \in \Group_2,
+\]
+where $\Field$ denotes the ring of integers modulo $p$, and $\Field^* := \Field \backslash \{ 0 \}$.
+We use the asymmetric (type-3) pairing, characterized by no efficiently computable homomorphism between $\Group_1$ and $\Group_2$.
+
+\mysmallskip{\bf Group elements.}
+\label{sec:notationGroupElements}
+Group elements such as $G, H, U, L, R, A, B$ are capitalized.
+Commitments to $a, b, c, d \in \Field$ are denoted by 
+$C_a, C_b, C_c, C_d \in \Group_T$, respectively.
+We adopt the additive notation for group operations, using $\gadd$ for group addition and $\gzero$ for the identity element in $\Group_T$.
+The summation of indexed group elements is represented as $\gsum_{i = \mathit{start}}^{\mathit{end}}$.
+
+\mysmallskip{\bf Group matrices and vectors.}
+Group matrices or vectors are denoted by uppercase bold letters, \eg, $\bm{A}, \bm{B}, \vec{\bm{A}}, \vec{\bm{B}}$.
+
+\mysmallskip{\bf Group matrix multiplication.}
+Define the product of group elements $A \in \Group_1$ and $B \in \Group_2$ as their pairing $e(A, B)$:
+\[
+	AB := BA := e(A, B).
+\]
+This allows for extending matrix multiplication to group matrices in a manner analogous to field matrices.
+Consider $\bm{A} = \{ A_{ik}\} \in \Group_1^{m\times l}$ and $\bm{B} = \{ B_{kj}\} \in \Group_2^{l \times n}$, their product $\bm{A} \bm{B}$ is an $m\times n$ matrix with the $(i, j)$ entry defined as 
+$\gsum_{k = 1}^l e(A_{ik}, B_{kj})
+$.
+Multiplying a group element $A \in \Group_1$ by a group matrix $\bm{B} = \{ B_{kj}\} \in \Group_1^{l \times n}$ results in a group matrix $\{ e(A, B_{kj}) \} $.
+When $\bm{B} = \{ B_{ik}\} \in \Group_2^{m \times l}$ and $\bm{A} = \{ A_{kj}\} \in \Group_1^{l \times n}$, their product $\bm{B}\bm{A}$ is also well defined.
+Matrix multiplication between field matrices and group matrices is defined similarly.
+
+
+\mysmallskip{\bf Inner product.}
+The inner product is a special case of matrix multiplication.
+The inner product of two group vectors $\vec{\bm{A}} \in \Group_1^n$ and $\vec{\bm{B}} \in \Group_2^n$ is defined as:
+\[
+	\langle \vec{\bm{A}}, \vec{\bm{B}} \rangle :=
+	\vec{\bm{A}}^\top \vec{\bm{B}} = 
+	\vec{\bm{B}}^\top \vec{\bm{A}} = 
+	\langle \vec{\bm{B}}, \vec{\bm{A}} \rangle .
+\]
+
+
+\mysmallskip {\bf Partition.}
+Given a vector $\vec{\bm{A}} \in \Group_T^n$, we define its left half as 
+$\vec{\bm{A}}_L := (A_1, \ldots, A_{n/2})$ and its right half as 
+$\vec{\bm{A}}_R := (A_{n/2 + 1}, \ldots, A_{n})$.
+This partitioning procedure is denoted by
+$(\vec{\bm{A}}_L || \vec{\bm{A}}_R) \Half \vec{\bm{A}}$.
+For a matrix $\bm{a} \in \Group_T^{m\times n}$, it can be divided into left and right halves denoted as $\bm{A}_L$ and $\bm{A}_R$,
+or into upper and lower halves represented by $\bm{A}_U$ and $\bm{A}_D$.
+
+
+\subsection{Cryptographic Assumptions}
+\label{appx:assumptions}
+%Our definitions for Pedersen commitment, Pedersen vector commitment, and discrete logarithm relation are the same as the literature~\cite{sp/BuenzBBPWM18}.
+
+Our $\Group_T$-Bulletproofs rely on the following $q$-type assumptions:
+\begin{assumption}[$q$-PDH~\cite{asiacrypt/Groth10,cacm/ParnoHGR16}]
+\label{def:pdh}
+	The $q$-power Diffie-Hellman ($q$-PDH) assumption holds for a group $\Group$ if for all PPT adversary $\Adversary$:
+	\begin{align}
+		%\label{eq:qPKE}
+		& \Pr
+		\left(
+			\left.
+			\begin{aligned}
+				& C = \hat{s}^{q + 1}\hat{G} \\ 
+			\end{aligned}
+			\right.
+			\left|
+			\begin{aligned}
+				& (p, \Group) \leftarrow \Setup(1^{\lambda}); \\
+				& \hat{G} \ChooseRandom \Group; \hat{s}\ChooseRandom \Field^*; \\
+				& \srs \leftarrow (p, \Group; [\hat{G}], [\hat{s}\hat{G}], \ldots, [\hat{s}^q \hat{G}]);\\
+				& C \leftarrow \Adversary(\srs)
+			\end{aligned}
+			\right.
+		\right)
+		\le \Negl(\lambda).
+		\nonumber
+	\end{align}
+\end{assumption}
+
+
+\begin{assumption}[$q$-PKE~\cite{asiacrypt/Groth10,cacm/ParnoHGR16}]
+	The $q$-power knowledge of exponent ($q$-PKE) assumption holds for $(\Group_1, \Group_2, \Group_T, e)$ if for all PPT adversary $\Adversary$, there exists a non-uniform PPT extractor $\Extractor_{\Adversary}$ such that:
+	\begin{align}
+		% \label{eq:qPKE}
+		& \Pr
+		\left(
+			\left.
+			\begin{aligned}
+				& V' = {\nu}V \\
+				& \wedge V \ne (\sum_{i = 0}^{q} {\alpha}_i \hat{s}^i)\hat{G}\\ 
+			\end{aligned}
+			\right.
+			\left|
+			\begin{aligned}
+				& (p, \Group_1, \Group_2, \Group_T, e) \leftarrow \Setup(1^{\lambda}); \\
+				& \hat{G} \ChooseRandom \Group_i, i\in \{1, 2\}; \nu, \hat{s}\ChooseRandom \Field^*; \\
+				& \srs \leftarrow (p, \Group_1, \Group_2, \Group_T, e; \hat{G}, \hat{s}\hat{G}, \ldots, \\
+				& \quad \hat{s}^q \hat{G}, \nu \hat{G}, \nu \hat{s}\hat{G}, \ldots, \nu \hat{s}^q \hat{G});\\
+				& (V', V; \alpha_0, \ldots, \alpha_q) \leftarrow (\Adversary|| \Extractor_{\Adversary})(\srs, \bm{z})
+			\end{aligned}
+			\right.
+		\right)
+		\nonumber \\ 
+		& \le \Negl(\lambda),
+		\nonumber
+	\end{align}
+for any auxiliary information $\bm{z} \in \{0, 1\}^{\Poly(\lambda)} $ that is generated independently of $\nu$.
+Note that $(y_1; y_2) \gets (\Adversary|| \Extractor_{\Adversary})(x)$ means that on input $x$, $\Adversary$ outputs $y_1$ and
+that $\Extractor_{\Adversary}$ with the same input $x$ and $\Adversary$'s random tape, produces $y_2$.
+%and for the class Z of auxiliary input generators for every non-uniform PPT auxiliary input generator $Z\in Z$ and
+\end{assumption}
+
+%~\cite{asiacrypt/KateZG10}
+\begin{assumption}[$q$-BSDH]
+	The $q$-bilinear strong Diffie-Hellman ($q$-BSDH) assumption holds for $(\Group_1, \Group_2, \Group_T)$ if for all PPT adversary~$\Adversary$:
+	\begin{align}
+		% \label{eq:qPKE}
+		& \Pr
+		\left(
+			\left.
+			\begin{aligned}
+				& E = (\hat{s} - r)^{-1} e(\hat{G}, \hat{H}) \\ 
+			\end{aligned}
+			\right.
+			\left|
+			\begin{aligned}
+				& (p, \Group, \Group_T, e) \leftarrow \Setup(1^{\lambda}); \\
+				& \hat{G} \ChooseRandom \Group_1; \hat{H} \ChooseRandom \Group_2; \hat{s}\ChooseRandom \Field^*; \\
+				& \srs \leftarrow (p,\Group, \Group_T, e; \hat{G}, \hat{s}\hat{G}, \ldots, \\
+				& \quad \hat{s}^q \hat{G}, \hat{H}, \hat{s}\hat{H}, \ldots, \hat{s}^q \hat{H})\\
+				& (E \in \Group_T, r \in \Field^*) \leftarrow \Adversary(\srs)
+			\end{aligned}
+			\right.
+		\right)
+		\nonumber \\
+		& \le \Negl(\lambda) .
+		\nonumber
+	\end{align}
+\end{assumption}
+
+\subsection{Two-Tier Commitment}
+\label{appx:twotier}
+The two-tier commitment~\cite{asiacrypt/Groth11} to a matrix $\bm{a} \in \Field^{n \times n}$ is defined as:
+\begin{itemize}
+\item \textbf{First-tier commitment:}
+Apply the Pedersen vector commitment to each column or row of $\bm{a}$ using the base vector $\vec{\bm{G}} \in \Group_1^n$ or $\vec{\bm{H}} \in \Group_2^n$.
+This results in $\vec{\bm{A}}_G \in \Group_1^n$ or $\vec{\bm{A}}_H \in \Group_2^n$ as follows:
+	\[
+		\vec{\bm{A}}_G = \vec{\bm{G}}^\top\bm{a} \quad 
+		\text{or} \quad
+		\vec{\bm{A}}_H = \bm{a}\vec{\bm{H}}.
+	\]
+\item \textbf{Second-tier commitment:}
+Commit to $\vec{\bm{A}}_G$ or $\vec{\bm{A}}_H$ using AFGHO commitments~\cite{crypto/AbeFGHO10}, resulting in $C_a \in \Group_T$:
+	\[
+		C_a = \langle \vec{\bm{A}}_G, \vec{\bm{H}} \rangle = \langle \vec{\bm{A}}_H, \vec{\bm{G}} \rangle 
+		= \vec{\bm{G}}^\top\bm{a}\vec{\bm{H}}.
+	\]
+We can add a hiding factor $\tilde{a} \in \Field$ with the base $\tilde{U} \in \Group_T$ to the two-tier commitment as follows:
+	\[
+		C_a = \vec{\bm{G}}^\top\bm{a}\vec{\bm{H}} \, \gadd \, \tilde{a} \tilde{U}.
+	\]
+\end{itemize}
+
+\mysmallskip
+{\bf Caching first-tier commitment and other optimizations.}
+In the commitment phase, the prover caches the first-tier commitments $\vec{A}_G \in \Group_1^n$ or $\vec{A}_H \in \Group_2^n$.
+These caches are reused in the PCS opening.
+
+\mysmallskip
+{\bf Bucket-wise commitment.}
+For the expanded vector produced by a BVA, the two-tier commitment can be
+computed bucket by bucket without materializing padded coordinates.  The
+expanded vector is conceptually reshaped into a square matrix and committed
+using the two-tier commitment scheme.  During the first-tier commitment, the
+prover iterates only over stored input entries, computes the logical position of
+each entry, multiplies it by the corresponding group element in $\vec{\bm{G}}$,
+and accumulates the result into the first-tier commitment.
+
+\subsection{Bulletproofs in pairing group.}
+\mysmallskip
+{\bf Trusted Setup.}
+We set up the below elements in $(\Group_1, \Group_2, \Group_T, e)$,
+with the hyperparameter $q$ exceeding the largest supported matrix dimension.
+$\hat{s}$ and $\nu$ 
+%are the ``toxic waste'' that 
+must be securely discarded after setup.
+\(
+\begin{aligned}
+	&
+	\hat{s}, \nu \ChooseRandom \Field^*; 
+	\quad
+	\hat{G} \ChooseRandom \Group_1;
+	\,\,
+	\hat{H} \ChooseRandom \Group_2;
+	\,\,
+	G' \leftarrow \hat{s}\hat{G} \in \Group_1;
+	\,\,
+	H' \leftarrow \hat{s}^q\hat{H} \in \Group_2;
+	\\
+ 	& \hat{G}'' \leftarrow \nu \hat{G}; \,\, \hat{H}'' \leftarrow \nu \hat{H}; \quad
+ 	\vec{\bm{G}} \leftarrow (\hat{G}, \hat{s}\hat{G}, \ldots, \hat{s}^{q - 1}\hat{G});
+	\\
+ 	&
+ 	\vec{\bm{H}} \leftarrow (\hat{H}, \hat{s}^q\hat{H}, \ldots, \hat{s}^{(q - 1)q}\hat{H}); \quad
+	 \vec{\bm{G}}' \leftarrow (\hat{G}, \hat{s}^q\hat{G}, \ldots, \hat{s}^{(q - 1)q}\hat{G});
+	\\
+ 	&
+ 	\vec{\bm{G}}'' \leftarrow (\nu \hat{G}, \nu \hat{s}\hat{G}, \ldots, \nu \hat{s}^{q - 1}\hat{G}); \,
+ 	\vec{\bm{H}}'' \leftarrow (\nu \hat{H}, \nu \hat{s}^q\hat{H}, \ldots, \nu \hat{s}^{(q - 1)q}\hat{H});
+	\\
+ 	&
+ 	G_0 \leftarrow \hat{s}^{-1} \hat{G}; \quad H_0 \leftarrow \hat{H};\quad 
+ 	U \leftarrow \hat{s}^{-1} \hat{G} \hat{H}; \quad \tilde{U} \leftarrow \hat{s}^{-2} \hat{G} \hat{H}.
+\end{aligned}
+\)
+
+This setup is similar to that in BMMTV21~\cite{asiacrypt/BuenzMMTV21}.
+With this setup, an inner product $C = \vec{\bm{\xi}} \bullet \vec{\bm{G}}$ for public $\vec{\bm{\xi}} \in \Zp$ is equivalent to $C = \phi(\hat{s})\hat{G}$, where $\phi$ is an $n$-degree univariate polynomial with coefficients $\vec{\bm{\xi}}$.
+This polynomial structure enables efficient pairing-based proofs for the inner product $C$.
+
+In our trusted setup,
+\(
+ 	\gsum_{i=1}^q G'_i H_{q+1-i} = \gzero
+\)
+forms a non-trivial inner-pairing product, 
+violating a key assumption of Dory~\cite[Lemma~1]{tcc/Lee21}
+for the absence of non-trivial inner-pairing-product relations.
+To overcome this, we derive our PCS from Bulletproofs over $\Group_T$.
+From the $(q^2 + 2)$-PDH assumption (Appendix~\ref{appx:assumptions}),
+the assumption of no non-trivial discrete logarithm relation~\cite[Definition~1]{sp/BuenzBBPWM18} 
+%for Bulletproofs
+still holds 
+%for our trusted setup 
+among the $q^2$ entries of
+\(
+ 	\vec{\bm{G}} \kronecker \vec{\bm{H}} \in \Group_T^{q^2},
+\)
+where the tensor product of group vectors is defined similarly to that of field vectors,
+using pairings to compute group element products.
+
+\iffalse
+\mysmallskip
+{\bf Two-tier commitment in $\Group_T$ as Pedersen vector commitment.}
+Using the $\Group_T$ base $\vec{\bm{G}} \kronecker \vec{\bm{H}}$,
+the Pedersen vector commitment~\cite[Definition~7]{sp/BuenzBBPWM18} for a flattened matrix $\bm{a} \in \Zp^{n \times n}$
+aligns with the two-tier commitment~\cite{asiacrypt/Groth11},
+which first commits to each column of $\bm{a}$ using $\vec{\bm{G}}$ to derive $\vec{\bm{A}} \in \Group_1$ and then apply the AFGHO commitments~\cite{crypto/AbeFGHO10}
+to compute $C_a = \vec{\bm{A}} \bullet \vec{\bm{H}}$.
+Specifically:
+\[
+ 	\vectorize{\bm{a}} \bullet (\vec{\bm{G}} \kronecker \vec{\bm{H}}) = \vec{\bm{G}}^\top \bm{a} \vec{\bm{H}} = \vec{\bm{A}} \bullet \vec{\bm{H}} := C_a \in \Group_T.
+\]
+\fi
+
+
+\input{algorithm/alg-pcs}
+\mysmallskip{\bf Square-root group operations in $\Group_T$-Bulletproofs.}
+We observe that 
+$\Group_T$-Bulletproofs iteratively fold the $n^2$-vector $\vec{\bm{G}} \kronecker \vec{\bm{H}}$.
+To achieve square-root 
+%pairings and 
+group operations,
+%in Bulletproofs, 
+we propose replacing these $\Group_T$ foldings with more efficient $\Group_1$ or $\Group_2$ foldings on shorter $n$-vectors,
+exploiting the following tensor product property:
+\begin{align*}
+& (\vec{\bm{G}}
+	\kronecker 
+	\vec{\bm{H}})_\mathsf{L} \,
+\gadd \, 
+x_{(1)} 
+	(\vec{\bm{G}}
+	\kronecker
+	\vec{\bm{H}})_\mathsf{R} =
+	(\vec{\bm{G}}_\mathsf{L} \, \gadd \, x_{(1)}\vec{\bm{G}}_\mathsf{R}) \kronecker \vec{\bm{H}}.
+\end{align*}
+While the LHS folding has $O(n^2)$ complexity, 
+the RHS folding requires only $O(n)$.
+By utilizing this optimization, $\Group_T$-Bulletproofs achieve the same asymptotic efficiency as Dory.
+The concrete numbers of pairings and group operations are similar to BMMTV21.
+
+This $\Group_T$-Bulletproofs are presented in Algorithm~\ref{alg:pcs}.
+
+\mysmallskip
+\noindent
+{\bf Trusted setup only for the final check.}
+Algorithm~\ref{alg:pcs} is compatible with both transparent and trusted setups, depending on how
+$\vec{\bm{G}}$ and $\vec{\bm{H}}$ are generated.
+A trusted setup is required only for the final public multi-exponentiation checks
+$V_G = \langle \vec{\bm{\xi}}_G , \vec{\bm{G}} \rangle \in \Group_1$ and
+$V_H = \langle \vec{\bm{\xi}}_H , \vec{\bm{H}} \rangle \in \Group_2$
+at Line~\ref{line:gtbulletfinalcheck}.
+Under a transparent setup, these equations can be verified in logarithmic time
+(see~\cite[\S 4.5]{iacr/cong25}),
+whereas a trusted setup enables constant-time verification, as discussed in
+Appendix~\ref{appx:g2acc}.
+
+\mysmallskip
+\noindent
+{\bf Bucket-wise opening.}
+For the expanded vector produced by a BVA, 
+Algorithm~\ref{alg:pcs} can be executed without materializing the BVA.
+In Algorithm~\ref{alg:pcs}, the only computations involving the witness $\bm{a}$
+are the matrix projections in Lines~\ref{line:computeal} and~\ref{line:computear}.
+These matrix projections can be performed bucket by bucket
+without materializing padded coordinates.
+Conceptually, the expanded vector is reshaped into a square matrix.
+The prover iterates only over the real buckets, computes the position of each element within the expanded vector, multiplies the element by the corresponding entry in $\vec{\bm{l}}$ or $\vec{\bm{\xi}_H^{-1}}$, respectively, and accumulates the result to obtain $\vec{\bm{l}}^\top \bm{a}$ and $\bm{a}\vec{\bm{\xi}_H^{-1}}$.
+All other computations in Algorithm~\ref{alg:pcs} are independent of $\bm{a}$.
+
+
+\subsection{Verifier acceleration via trusted setup}
+\label{appx:g2acc}
+In Line~\ref{line:gtbulletfinalcheck} of Algorithm~\ref{alg:pcs}, the verification requires computing two multi-exponentiations
+$V_G = \langle \vec{\bm{\xi}}_G , \vec{\bm{G}} \rangle \in \Group_1$ and
+$V_H = \langle \vec{\bm{\xi}}_H, \vec{\bm{H}} \rangle \in \Group_2$,
+with public tensor-structured vectors $\vec{\bm{\xi}}_G$ and $\vec{\bm{\xi}}_H$.
+zkMatrix~\cite[\S 3]{asiaccs/CongYY24} suggests that using the trusted setup,
+the prover can provide additional proof for the $\Group_1$ multi-exponentiation $V_G = \langle \vec{\bm{\xi}}_G, \vec{\bm{G}} \rangle \in \Group_1$ via two extra $\Group_1$ multi-exponentiations.
+
+
+
+To verify the $\Group_2$ multi-exponentiation $V_H = \langle \vec{\bm{\xi}}_H, \vec{\bm{H}} \rangle \in \Group_2$.
+Define a polynomial:
+\[
+	\phi(s): = \xi_{H1} + \xi_{H2}s^q + \cdots + \xi_{Hn} s^{q(n - 1)}.
+\]
+For a random challenge $s \ChooseRandom \Field^*$, compute the coefficients of $\hat{s}^q$ in:
+\[
+	\frac{\phi(s) - \phi(\hat{s})}{s^q - \hat{s}^q} = \zeta_1 + \zeta_2 \hat{s}^q + \cdots + \zeta_{n - 1} \hat{s}^{q(n 
+ - 2)},
+\]
+collecting these coefficients into $\vec{\bm{\zeta}}_H \in \Field^{n - 1} $.
+
+Using the trusted setup, the prover computes:
+\[
+	V_H' \leftarrow \vec{\bm{\xi}}_H \bullet \vec{\bm{H}}'' \in \Group_2, \quad
+	W_H \leftarrow \vec{\bm{\zeta}}_H \bullet \vec{\bm{G}}' \in \Group_1.
+\]
+The verifier checks two pairing equations:
+\[
+	e(\hat{G}, V_H') = e(G'', V_H), \quad
+	e(\hat{G}, \phi(s)\hat{H} \gminus V_H) = e(W_H, s^q \hat{H} \gminus H').
+\]
+This check runs in constant time and is sufficient to ensure that $V_H = \langle \vec{\bm{\xi}}_H, \vec{\bm{H}} \rangle$.
+
+Using this technique, the overall proof size and verifier time of
+Algorithm~\ref{alg:pcs} are logarithmic.
+
+Knowledge soundness of this approach is demonstrated similarly to the $\Group_1$ multi-exponentiation method in ~\cite[Appendix A.1]{asiaccs/CongYY24} and is therefore omitted.

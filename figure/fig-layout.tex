@@ -1,0 +1,121 @@
+% Per-vector packing, decreasing-size BVA layout, and one EO-folding round.
+\definecolor{rainbowyellow}{HTML}{FFF3CE}
+\definecolor{rainbowgreen}{HTML}{D6E9D5}
+\definecolor{rainbowred}{HTML}{FAD8D4}
+\definecolor{rainbowcyan}{HTML}{AFE3E6}
+\definecolor{rainbowblue}{HTML}{D9E8FC}
+\definecolor{rainbowgray}{HTML}{BAC8D3}
+\definecolor{rainbowpurple}{HTML}{D9D2E9}
+\definecolor{rainboworange}{HTML}{FCE5CD}
+\definecolor{rainbowpink}{HTML}{EAD1DC}
+
+\begin{tikzpicture}[
+  x=0.30cm,
+  y=0.70cm,
+  >=Latex,
+  font=\sffamily\scriptsize,
+  bucket/.style={draw=black!75, line width=0.55pt, minimum height=0.58cm,
+                 inner sep=0pt, align=center},
+  padboundary/.style={draw=black!48, densely dashed, line width=0.5pt},
+  groupboundary/.style={draw=black!60, line width=0.55pt},
+  implicit/.style={draw=black!55, dashed, line width=0.55pt, fill=none},
+  flow/.style={->, draw=black!55, line width=0.65pt}
+]
+
+% Draw one BVA bucket.  Only the first ``data'' coordinates are colored;
+% the conceptual zero suffix remains blank.
+\newcommand{\BVADataBucket}[5]{%
+  % start, cover size, data length, fill color, vertical coordinate
+  \path[fill=#4,draw=none] (#1,#5) rectangle ++(#3,0.82);
+  \path[bucket,fill=none] (#1,#5) rectangle ++(#2,0.82);
+}
+
+% ---------------------------------------------------------------------------
+% (a) Packed EO-LiteBullet's first reduction.  The colored input width is
+% proportional to the native length.  Each four-coordinate block is compressed
+% with y_0 into one full-field element; logical padding remains blank.
+\node[anchor=west,font=\bfseries] at (0,7.10) {(a) Packed reduction ($\kappa=4$)};
+\node[anchor=south,text=black!65] at (16,6.55)
+  {native low-bit-width entries};
+
+% Representative length 32 is compressed to length 8.
+\node[anchor=east] at (-0.35,6.00) {$32$};
+\path[fill=rainbowcyan,draw=none] (0,5.59) rectangle ++(32,0.82);
+\path[bucket,fill=none] (0,5.59) rectangle ++(32,0.82);
+\foreach \i in {1,...,31}{
+  \pgfmathsetmacro{\cellx}{\i}
+  \draw[black!22,line width=0.25pt] (\cellx,5.59) -- (\cellx,6.41);
+}
+\foreach \i in {4,8,...,28}{
+  \pgfmathsetmacro{\groupx}{\i}
+  \draw[groupboundary] (\groupx,5.59) -- (\groupx,6.41);
+}
+% Omitted vectors are arranged vertically between the first and last examples.
+\node at (16,5.25) {$\vdots$};
+
+% Representative length 4 is compressed to length 1.
+% Its cover is centered with the length-32 cover above.
+\node[anchor=east] at (13.65,4.50) {$4$};
+\path[fill=rainbowpink,draw=none] (14,4.09) rectangle ++(4,0.82);
+\path[bucket,fill=none] (14,4.09) rectangle ++(4,0.82);
+\foreach \i in {1,...,3}{
+  \pgfmathsetmacro{\cellx}{14+\i}
+  \draw[black!22,line width=0.25pt] (\cellx,4.09) -- (\cellx,4.91);
+}
+% ---------------------------------------------------------------------------
+% (b) N=S=25, K=32.  Only the nine real covers are buckets; the remaining
+% seven coordinates form one implicit suffix.
+\node[anchor=west,font=\bfseries] at (0,3.50) {(b) Decreasing-size BVA};
+\node[anchor=east,font=\bfseries,align=right] at (-0.35,2.50)
+  {$S=25$\\$K=32$};
+
+% Input lengths: 8,4,4,2,2,2,1,1,1.
+\BVADataBucket{0}{8}{8}{rainbowcyan}{2.09}
+\BVADataBucket{8}{4}{4}{rainbowgreen}{2.09}
+\BVADataBucket{12}{4}{4}{rainbowred}{2.09}
+\BVADataBucket{16}{2}{2}{rainbowyellow}{2.09}
+\BVADataBucket{18}{2}{2}{rainbowgray}{2.09}
+\BVADataBucket{20}{2}{2}{rainbowblue}{2.09}
+\BVADataBucket{22}{1}{1}{rainbowpurple}{2.09}
+\BVADataBucket{23}{1}{1}{rainboworange}{2.09}
+\BVADataBucket{24}{1}{1}{rainbowpink}{2.09}
+\path[implicit] (25,2.09) rectangle ++(7,0.82);
+
+% The packed vectors are not drawn separately.  The arrows point directly to
+% their corresponding materialized segments in the BVA: 32 -> 8 and 4 -> 1.
+\draw[flow] (16,5.55) --
+  node[above,sloped,fill=white,inner sep=1pt] {$y_0$} (3.5,2.93);
+\draw[flow] (16,4.05) --
+  node[above,sloped,fill=white,inner sep=1pt] {$y_0$} (24.5,2.93);
+
+\foreach \x/\s in {4/8,10/4,14/4,17/2,19/2,21/2,
+                     22.5/1,23.5/1,24.5/1}
+  \node[anchor=north,text=black!65] at (\x,2.03) {$\s$};
+\node[anchor=north,text=black!65] at (28.5,2.03) {$K-S=7$};
+\node[anchor=west,text=black!65] at (0,1.55)
+  {$k_1\ge k_2\ge\cdots\ge k_9$; blank regions are conceptual zeros};
+
+\draw[flow] (16,1.95) -- node[right,fill=white,inner sep=1pt] {EO-fold} (16,1.05);
+
+% ---------------------------------------------------------------------------
+% (c) K/2=16 and S'=13 after one EO fold.  The three unit buckets yield two
+% units: the first pair folds together, and the last unit folds with zero.
+\node[anchor=west,font=\bfseries] at (0,1.16) {(c) Folded BVA};
+\node[anchor=east,font=\bfseries,align=right] at (-0.35,0.50)
+  {$S'=13$\\$K/2=16$};
+\BVADataBucket{0}{4}{4}{rainbowcyan}{0.09}
+\BVADataBucket{4}{2}{2}{rainbowgreen}{0.09}
+\BVADataBucket{6}{2}{2}{rainbowred}{0.09}
+\BVADataBucket{8}{1}{1}{rainbowyellow}{0.09}
+\BVADataBucket{9}{1}{1}{rainbowgray}{0.09}
+\BVADataBucket{10}{1}{1}{rainbowblue}{0.09}
+\BVADataBucket{11}{1}{1}{rainbowpurple!50!rainboworange}{0.09}
+\BVADataBucket{12}{1}{1}{rainbowpink}{0.09}
+\path[implicit] (13,0.09) rectangle ++(3,0.82);
+\foreach \x/\s in {2/4,5/2,7/2,8.5/1,9.5/1,10.5/1,
+                     11.5/1,12.5/1}
+  \node[anchor=north,text=black!65] at (\x,0.03) {$\s$};
+\node[anchor=north,text=black!65] at (14.5,0.03) {$3$};
+\node[anchor=west,text=black!65,align=left] at (16.7,0.50)
+  {pair two unit buckets\\pair the last unit with implicit zero};
+\end{tikzpicture}

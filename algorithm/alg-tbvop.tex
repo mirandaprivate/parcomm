@@ -1,0 +1,92 @@
+% !TEX root = main.tex
+\begin{algorithm}[!t]
+\caption{Linear Operators for a Decreasing-Size TBV}
+\label{alg:tbvop}
+\KwIn{
+$\bm{\zeta}=\big(K,T,\{(k_i,\eta_i,\bm{z}_i)\}_{i\in[T]}\big)\in\TBV(\Field)$
+with $K\ge2$ for splitting or folding;\\
+\qquad optional $y\in\Field$ (for folding);\\
+\qquad optional $\widetilde{\bm{\zeta}}=\big(K,T,\{(k_i,\widetilde\eta_i,\widetilde{\bm{z}}_i)\}_{i\in[T]}\big)\in\TBV(\Field)$;\\
+\qquad optional $\bm{a}\in\Field^K$ (for inner product)
+}
+\KwOut{
+(\textsf{Even-Odd Split}) $(\bm{\zeta}_O,\bm{\zeta}_E)\in\TBV(\Field)^2$;\\
+\qquad (\textsf{Even-Odd Fold}) $\bm{\zeta}'\in\TBV(\Field)$;\\
+\qquad (\textsf{TBV Inner Product}) $c'=\langle\bm{\zeta},\widetilde{\bm{\zeta}}\rangle$;\\
+\qquad (\textsf{Dense--TBV Inner Product}) $c=\langle\bm{a},\bm{\zeta}\rangle$
+}
+
+\SetKwFunction{Tail}{Tail}
+\SetKwFunction{EOFold}{EO-Fold}
+\SetKw{KwSplit}{EO-Split}
+\SetKw{KwFold}{EO-Fold}
+\SetKw{KwIP}{TBV Inner Product}
+\SetKw{KwIPMix}{Dense--TBV Inner Product}
+
+\BlankLine
+Let $T_1\leftarrow|\{i\in[T]:k_i=1\}|$ and $J\leftarrow T-T_1$\;
+\tcp*{the unit buckets are $J+1,\ldots,T$}
+
+\BlankLine
+\textbf{\KwSplit: produce $\bm{\zeta}_O,\bm{\zeta}_E$ of length $K/2$.}\\
+Initialize $\mathsf{listO}\leftarrow[\,]$ and $\mathsf{listE}\leftarrow[\,]$\;
+\For{$i\leftarrow1$ \KwTo $J$}{
+    $\mathsf{listO}.\mathsf{append}\big(\tfrac{k_i}{2},\eta_i,\Tail(\bm{z}_i)\big)$\;
+    $\mathsf{listE}.\mathsf{append}\big(\tfrac{k_i}{2},\eta_i z_{i,1},\Tail(\bm{z}_i)\big)$\;
+}
+\For{$r\leftarrow1$ \KwTo $\lfloor T_1/2\rfloor$}{
+    $p\leftarrow J+2r-1$\;
+    $\mathsf{listO}.\mathsf{append}(1,\eta_p,[\,])$\;
+    $\mathsf{listE}.\mathsf{append}(1,\eta_{p+1},[\,])$\;
+}
+\If{$T_1$ is odd}{
+    $\mathsf{listO}.\mathsf{append}(1,\eta_T,[\,])$
+    \tcp*{the corresponding odd coordinate is implicit zero}
+}
+$\bm{\zeta}_O\leftarrow\big(\tfrac K2,|\mathsf{listO}|,\mathsf{listO}\big)$\;
+$\bm{\zeta}_E\leftarrow\big(\tfrac K2,|\mathsf{listE}|,\mathsf{listE}\big)$\;
+\Return $(\bm{\zeta}_O,\bm{\zeta}_E)$\;
+
+\BlankLine
+\textbf{\KwFold: compute $\bm{\zeta}'=\bm{\zeta}_O+y\bm{\zeta}_E$.}\\
+Initialize $\mathsf{listFold}\leftarrow[\,]$\;
+\For{$i\leftarrow1$ \KwTo $J$}{
+    $\mathsf{listFold}.\mathsf{append}\big(\tfrac{k_i}{2},
+      \eta_i(1+y z_{i,1}),\Tail(\bm{z}_i)\big)$\;
+}
+\For{$r\leftarrow1$ \KwTo $\lfloor T_1/2\rfloor$}{
+    $p\leftarrow J+2r-1$\;
+    $\mathsf{listFold}.\mathsf{append}(1,\eta_p+y\eta_{p+1},[\,])$\;
+}
+\If{$T_1$ is odd}{
+    $\mathsf{listFold}.\mathsf{append}(1,\eta_T,[\,])$
+    \tcp*{$\eta_T+y\cdot0$}
+}
+$\bm{\zeta}'\leftarrow\big(\tfrac K2,|\mathsf{listFold}|,\mathsf{listFold}\big)$\;
+\Return $\bm{\zeta}'$\;
+
+\BlankLine
+\textbf{\KwIP: compute $c'=\langle\bm{\zeta},\widetilde{\bm{\zeta}}\rangle$.}\\
+$c'\leftarrow0$\;
+\For{$i\leftarrow1$ \KwTo $T$}{
+    $c'\leftarrow c'+\eta_i\widetilde\eta_i
+    \prod_{s=1}^{\log_2k_i}(1+z_{i,s}\widetilde z_{i,s})$\;
+}
+\Return $c'$\;
+
+\BlankLine
+\textbf{\KwIPMix: compute $c=\langle\bm{a},\bm{\zeta}\rangle$.}\\
+$c\leftarrow0$\; partition
+$\bm{a}=\bm{a}^{(1)}\|\cdots\|\bm{a}^{(T)}\|\bm{a}^{(\mathsf{pad})}$
+with $|\bm{a}^{(i)}|=k_i$ and
+$|\bm a^{(\mathsf{pad})}|=K-\sum_i k_i$\;
+\For{$i\leftarrow1$ \KwTo $T$}{
+    $\bm{v}\leftarrow\bm{a}^{(i)}$\;
+    \For{$s\leftarrow1$ \KwTo $\log_2k_i$}{
+        $\bm{v}\leftarrow\EOFold(\bm{v},z_{i,s})$\;
+        \tcp*{length halved}
+    }
+    $c\leftarrow c+\eta_i\bm{v}[0]$\;
+}
+\Return $c$\;
+\end{algorithm}

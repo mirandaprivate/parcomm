@@ -1,0 +1,51 @@
+\begin{table}[!t]
+\begin{threeparttable}
+\caption{Performance at comparable data size and different logical-domain size.}
+\label{table:experiment}
+%\renewcommand{\TPTnoteSettings}{\footnotesize}
+	% \begin{tabular*}{\columnwidth}{@{} l r r}
+	\begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}} l r r}
+	\toprule
+	& \quad Homogeneous
+	%Multiplications
+	& \quad Heterogeneous
+		\\
+	% & \multirow{2}{*}{\makecell{Memory \\ Usage}} 
+	\midrule
+	Input entries $N$ & $2^{34}$ & $2^{34}+1$ \\
+	\hline
+	Logical domain $K$ & $2^{34}$ & $2^{35}$ \\
+	\hline
+	Dense $K$-domain witness\tnote{a} & $512$\,GiB & $1$\,TiB \\
+	\hline
+	Evaluation time & $208.06$ s & $280.22$ s  \\ 
+	\hline
+	Setup time & $6.84$ s & $7.73$ s  \\ 
+	\hline
+	Commit time & $1,727.64$ s & $1,761.87$ s  \\ 
+	\hline
+	Commit size & $576$ B & $576$ B  \\ 
+    \hline
+	Value\&point commit time & $0.16$ s & $0.26$ s  \\ 
+	\hline
+	Value\&point commit size & $576$ B  & $576$ B  \\ 
+	\hline
+	Open time & $360.14$ s & $383.75$ s  \\
+	\hline
+	   \quad Inner product proof & $254.99$ s & $247.55$ s \\
+	   \quad Proof of TBV evaluation & $0.75$ s & $0.67$ s \\
+	   \quad Base PCS opening & $104.38$ s & $135.45$ s  \\
+    \hline
+    Proof size & $101.81$ KB & $103.03$ KB  \\
+		\hline
+	Verifier time & $0.30$ s & $0.33$ s \\
+		\hline
+	Peak RAM & $291.85$ GB & $404.41$ GB  \\
+	\bottomrule
+\end{tabular*}
+\begin{tablenotes}[para, flushleft]
+	\item[a] Estimated at 32 bytes per field element; this dense representation is not allocated.
+	\item Parallelized across $64$ CPU threads except for verifier algorithms.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}

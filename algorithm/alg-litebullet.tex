@@ -1,0 +1,68 @@
+% !TEX root = main.tex
+\begin{algorithm}[!t]
+\caption{\packedeolitebullet with contiguous stride-$\kappa$ blocks}
+\label{alg:packedeolitebullet}
+\KwIn{$K=2^\mu$; $2\le\kappa=2^\tau\le K$; $c\in\Field$;
+$\bm a,\bm b\in\Field^K$}
+\KwOut{reduced scalars $\hat a,\hat b$; MLE point
+$\bm y\in\Field^\mu$; acceptance bit $\mathsf{ok}$}
+
+Let $\bm a_{\rm in}$ and $\bm b_{\rm in}$ denote the original input views\;
+View $\bm a$ and $\bm b$ as
+$\bm A=[\bm a_{(1)}|\cdots|\bm a_{(\kappa)}]$ and
+$\bm B=[\bm b_{(1)}|\cdots|\bm b_{(\kappa)}]$, where\
+\Indp
+$A_{i,s}=a_{(i-1)\kappa+s}$ and
+$B_{i,s}=b_{(i-1)\kappa+s}$ for
+$i\in[K/\kappa]$ and $s\in[\kappa]$\;
+\Indm
+Let $\bm D:=\bm A^\top\bm B$ denote the logical matrix with
+$d_{ss'}=\langle\bm a_{(s)},\bm b_{(s')}\rangle$\;
+\tcp{Accumulate the diagonal sums without materializing $\bm D$}
+\For{$h\leftarrow-(\kappa-1)$ \KwTo $\kappa-1$}{
+  $c_h\leftarrow\sum_{s'-s=h}d_{ss'}$\;
+}
+$\bm c_+\leftarrow(c_1,\ldots,c_{\kappa-1})$; \quad
+$\bm c_-\leftarrow(c_{-1},\ldots,c_{-(\kappa-1)})$\;
+$\PtoV$: $(\bm c_+,\bm c_-)$; \quad
+$\VtoP$: $y_0\ChooseRandom\Field^*$\;
+$\overline{\bm a}\leftarrow
+\bm A(1,y_0^{-1},\ldots,y_0^{-(\kappa-1)})^\top$\;
+$\overline{\bm b}\leftarrow
+\bm B(1,y_0,\ldots,y_0^{\kappa-1})^\top$\;
+$\overline c\leftarrow
+c+\sum_{h=1}^{\kappa-1}(c_hy_0^h+c_{-h}y_0^{-h})$; \quad
+$\widehat c\leftarrow\overline c$\;
+
+\For{$j\leftarrow1$ \KwTo $\log_2(K/\kappa)$}{
+  EO-split
+  $(\overline{\bm a}_{\sf O},\overline{\bm a}_{\sf E})
+  \leftarrow\overline{\bm a}$ and
+  $(\overline{\bm b}_{\sf O},\overline{\bm b}_{\sf E})
+  \leftarrow\overline{\bm b}$\;
+  $\iota_j\leftarrow
+  \langle\overline{\bm a}_{\sf O},\overline{\bm b}_{\sf E}\rangle$; \quad
+  $\rho_j\leftarrow
+  \langle\overline{\bm a}_{\sf E},\overline{\bm b}_{\sf O}\rangle$\;
+  \label{line:litebulletCrossIP}
+  $\PtoV$: $(\iota_j,\rho_j)$; \quad
+  $\VtoP$: $y_j\ChooseRandom\Field^*$\;
+  $\widehat c\leftarrow
+  \widehat c+y_j\iota_j+y_j^{-1}\rho_j$\;
+  $\overline{\bm a}\leftarrow
+  \overline{\bm a}_{\sf O}+y_j^{-1}\overline{\bm a}_{\sf E}$\;
+  $\overline{\bm b}\leftarrow
+  \overline{\bm b}_{\sf O}+y_j\overline{\bm b}_{\sf E}$\;
+  \label{line:litebulletFoldB}
+}
+$\PtoV$: $\hat a\leftarrow\overline{\bm a}[0]$; \quad
+$\hat b\leftarrow\overline{\bm b}[0]$\;
+$\bm y\leftarrow(y_0,y_0^2,\ldots,y_0^{2^{\tau-1}},
+y_1,\ldots,y_{\log_2(K/\kappa)})$\;
+$\mathsf{ok}\leftarrow(\hat a\hat b\EqOrNot\widehat c)$\;
+\tcp{Subsequent PCS/TBV checks}
+$\mathsf{ok}\leftarrow\mathsf{ok}\wedge
+[\hat a\EqOrNot\tensorproj{\bm a_{\rm in}}{\bm y^{-1}}]\wedge
+[\hat b\EqOrNot\tensorproj{\bm b_{\rm in}}{\bm y}]$\;
+\Return $(\mathsf{ok},\hat a,\hat b,\bm y)$\;
+\end{algorithm}

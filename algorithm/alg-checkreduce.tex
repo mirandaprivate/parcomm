@@ -1,0 +1,73 @@
+% !TEX root = main.tex
+\begin{algorithm}[!t]
+\caption{Proof of TBV Evaluation}
+\label{alg:tbveval}
+
+\KwIn{
+$K, T \in \mathbb{N}$;
+$\bar{b} \in \Field$; $\bm{y} \in \Field^{\log_2 K}$; $\phi:[T] \mapsto [T]$\;
+\qquad $\bm{\zeta}=\big(K,T,\{(k_i,\eta_i,\bm{z}_i)\}_{i\in[T]}\big)\in\TBV(\Field) $\;
+\qquad A base PCS $\pc$ over $\Field$ with public parameters \\
+\qquad $\pp$ and commitment space $\ComSpace$;
+\quad $C_I, C_X \in \ComSpace$\;
+}
+\KwOut{$\TRUE$ for $\bar{b} = \tensorproj{\bm{\zeta}}{\bm{y}}$ or $\FALSE$ otherwise
+}
+
+\BlankLine
+{\bf Prover preprocessing.}
+$\Prover$ computes:\\
+\Indp
+(1) $\bm{I},\bm{Z}\in\Field^{T\times \log_2 K}$ as in Eq.~\eqref{eq:defZI}\;
+(2) $\bm{X} \leftarrow \bm{1}_{T\times \log_2 K} - \bm{I} + (\bm{Z}+\bm{I})\circ(\bm{1}_T^\top \bm{y}) \in \Field^{T\times \log_2 K}$\;
+(3) $\bm{W}\in\Field^{T\times \log_2 K}$, where for each row $i$ and column $j$,
+\(
+    W_{i,1} \leftarrow 1,\quad
+    W_{i,j} \leftarrow \prod_{q=1}^{j-1} X_{i,q}\ \ (j\ge 2)
+\)\;
+(4) $\bm{W}' \leftarrow \bm{X}\circ \bm{W} \in \Field^{T\times \log_2 K}$\;
+(5) $\bm{\omega} \leftarrow
+(\eta_{\phi(1)},\eta_{\phi(2)},\ldots,\eta_{\phi(T)})\in\Field^{T}$\;
+\Indm
+
+\BlankLine
+{\bf Commit to the matrix $\bm{W}$.}
+$C_W \leftarrow \pc.\Com(\pp,\bm{W})$\;
+$\PtoV$: send $C_W$\;
+$\VtoP$: sample $\theta \ChooseRandom \Field^*$\;
+$\Prover$ and $\Verifier$ compute
+\(
+\bm{\theta} \leftarrow (1,\theta,\ldots,\theta^{\log_2 K-1}),
+\quad
+\bm{\theta}' \leftarrow (0)\ \text{if }\log_2K=1,\ \text{and otherwise } 
+(1,\theta,\ldots,\theta^{\log_2 K-2},0)
+\in\Field^{\log_2 K}
+\)\;
+
+\BlankLine
+{\bf Evalyn reduction.}
+$\Prover$ and $\Verifier$ invoke the Evalyn proof reduction~[Alg. 2]\cite{asiaccs/CongYY24} for the system:
+\[
+\left\{
+\begin{aligned}
+& \bm{W}' = \bm{X}\circ \bm{W},\\
+& \bm{W}\bm{\theta}^\top - \bm{1}_T^\top = \theta\cdot \bm{W}'\bm{\theta}^{'\top},\\
+& \bar{b} = \bm{\omega}\,\bm{W}'\,\bm{\epsilon}_{\log_2 K}^\top,\\
+& \bm{X} = \bm{1}_{T\times \log_2 K} - \bm{I} + (\bm{Z}+\bm{I})\circ(\bm{1}_T^\top \bm{y}),
+\end{aligned}
+\right.
+\]
+reducing verification to checking leaf-node evaluations of
+$\bm{I},\bm{Z},\bm{W}$ and the public tensor-structured vectors
+$\bm{\omega},\bm{\theta},\bm{\theta}',\bm{\epsilon}_{\log_2 K},\bm{1}_T,\bm{1}_{T\times \log_2 K}$\;
+
+\BlankLine
+{\bf Leaf verification.}
+$\Verifier$ evaluates and verifies
+$\bm{\omega},\bm{\theta},\bm{\theta}',\bm{\epsilon}_{\log_2 K},\bm{1}_T,\bm{1}_{T\times \log_2 K}$ directly (tensor/closed form)\;
+
+$\Prover$ and $\Verifier$ run $\pc.\Open/\pc.\Verify$ to prove and verify the evaluations of $\bm{I},\bm{Z}$, and $\bm{W}$ (committed by $C_I,C_X$, and $C_W$)\;
+
+\BlankLine
+\Return $\TRUE$ iff all sub-protocols accept, else \Return $\FALSE$\;
+\end{algorithm}

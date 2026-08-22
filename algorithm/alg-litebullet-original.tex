@@ -1,0 +1,50 @@
+% !TEX root = main.tex
+\begin{algorithm}[!t]
+	\caption{LiteBullet Proof}
+	\label{alg:litebullet}
+	\KwIn{$m \in \mathbb{N}; c \in \Field; \bm{a}, \bm{b} \in \Field^m$;}
+	% \\
+	 % \phantom{\KwIn{}}$\Prover$'s private input: $\vec{\bm{a}}, \vec{\bm{b}} \in \Field^m$ }
+	\KwOut{$\TRUE$ or $\FALSE$; \\
+    \qquad reduced scalars $\bar{a}, \bar{b} \in \Field$; challenges $\bm{y} \in \Field^{\log_2 m}$
+    }
+	\ForEach{$j \leftarrow 1$ \KwTo $\log_2 m$ }{
+		$\Prover$ LR-splits $\vec{\bm{a}}$ and $\vec{\bm{b}}$ into partitions:\\
+		\Indp
+		 $ \bm{a}_{\sf L},  \bm{a}_{\sf R} \leftarrow \vec{\bm{a}}$; \,
+		$\bm{b}_{\sf L},  \bm{b}_{\sf R} \leftarrow \vec{\bm{b}}$\;
+	   \Indm	
+        $\Prover$ computes:\\
+            \Indp
+		$ \iota_{(j)} \leftarrow
+					\langle \bm{a}_{\sf L}, \bm{b}_{\sf R} \rangle \in \Field
+		$ ; \,
+		$ \rho_{(j)} \leftarrow
+					\langle \bm{a}_{\sf R}, \bm{b}_{\sf L} \rangle \in \Field
+		$ \; 
+		\Indm
+		$\PtoV$: $ \iota_{(j)},\rho_{(j)} \in \Field$\;
+		$\VtoP$: $ y_{(j)} \ChooseRandom \Field^*$\;
+		$\Prover$ computes:
+		%:\\\Indp
+			$\bm{a} \leftarrow \bm{a}_{\sf L} + y_{(j)}^{-1} \bm{a}_{\sf R} \in \Field^{m/2^j}$;
+			$\bm{b} \leftarrow \bm{b}_{\sf L} + y_{(j)} \bm{b}_{\sf R} \in \Field^{m/2^j} $\;
+		%\Indm
+	}
+	$\PtoV$: $\bar{a} \leftarrow \bm{a}[0] \in \Field$; $\bar{b} \leftarrow \bm{b}[0] \in \Field$\;
+	$ \Verifier$ checks:
+		$\mathsf{ok} \leftarrow \bar{a}\bar{b} \EqOrNot $
+		$c \, + \, \sum_{j=1}^{\log_2 m} (y_{(j)} \iota_{(j)} \, + \, y_{(j)}^{-1} \rho_{(j)})
+		$
+		\;
+     $\Prover$ and $\Verifier$ compute: $\bm{y} \leftarrow (y_{(1)}, \ldots, y_{(\log_2 m)})$\;
+    \Return ($\mathsf{ok}$, $\bar{a}$, $\bar{b}$, $\bm{y}$) 
+    \BlankLine
+    \tcp{Subsequent checks via other protocols}
+    $\bar{a} \EqOrNot\langle \bm{a}~,~ (1,y_{(1)}^{-1})\kronecker \cdots \kronecker (1,y_{(\log_2m)}^{-1}) \rangle$ and $\bar{b} \EqOrNot \langle \bm{b}~,~  (1,y_{(1)})\kronecker \cdots \kronecker (1,y_{(\log_2m)}) \rangle$\;
+    \label{line:litebulletfinal}
+\end{algorithm}
+
+%\todo{
+%(polynomial) commitment still needs srs
+%}

@@ -1,0 +1,100 @@
+% !TEX root = main.tex
+\begin{algorithm}[!t]
+	\caption{Protocol of $\Group_T$-Bulletproofs}
+	\label{alg:pcs}
+	\KwIn{ Public input: $C \in \Group_T, \vec{\bm{l}} \in \Field^n, \vec{\bm{r}} \in \Field^n $ \;\\
+					\qquad 
+					$ \vec{\bm{G}}\in \Group_1^{n}, \vec{\bm{H}} \in \Group_2^{n}$; $G_0 \in \Group_1, H_0 \in \Group_2$;
+	\\
+	$ \qquad \Prover$'s private input: $\bm{a} \in \Field^{n \times n}$ and cache: \\
+		$\qquad \qquad \qquad \vec{\bm{A}} = \vec{\bm{G}}^\top \bm{a} \in \Group_1^n$ }
+% It is not closed because it is a G1 element.
+%Left open if it is in G2.
+%Closed if it is in GT.
+	\KwOut{$\TRUE$ or $\FALSE$}
+	$\Prover$ computes: 
+	$\vec{\bm{v}} \leftarrow \vec{\bm{l}}^\top\bm{a} \in \Field^n$\;
+    \label{line:computeal}
+	\ForEach{$j \in [1, \log_2 n]$ }{
+		$\Prover$ computes:\\
+		\Indp
+		$(\vec{\bm{A}}_\mathsf{L} || \vec{\bm{A}}_\mathsf{R}) \Half \vec{\bm{A}}$;\,
+		$(\vec{\bm{H}}_\mathsf{L} || \vec{\bm{H}}_\mathsf{R}) \Half \vec{\bm{H}}$\;
+		$(\vec{\bm{v}}_{\mathsf{L}} || \vec{\bm{v}}_{\mathsf{R}}) \Half \vec{\bm{v}}$;\,
+		$(\vec{\bm{r}}_\mathsf{L} || \vec{\bm{r}}_\mathsf{R}) \Half \vec{\bm{r}}$\;
+		$ L_{(j)} \leftarrow \langle \vec{\bm{A}}_{L}, \vec{\bm{H}}_\mathsf{R}\rangle \gadd
+		\langle \vec{\bm{v}}_{L}, \vec{\bm{r}}_\mathsf{R} \rangle \cdot G_0H_o	
+		$ \;
+	\label{line:computeL1}
+		$ R_{(j)} \leftarrow \langle \vec{\bm{A}}_{R}, \vec{\bm{H}}_\mathsf{L}\rangle \gadd
+		\langle \vec{\bm{v}}_{R}, \vec{\bm{r}}_\mathsf{L}\rangle \cdot G_0H_0 
+		$ \;
+		\Indm
+		$\PtoV$: $L_{(j)}, R_{(j)} \in \Group_T$\;
+		$\VtoP$: $ x_{(j)} \ChooseRandom \Field^*$ \;
+		$\Prover$ computes: \\
+		\Indp
+		$\vec{\bm{A}} \leftarrow \vec{\bm{A}}_\mathsf{L} \gadd x_{(j)}^{-1} \vec{\bm{A}}_\mathsf{R} $;
+		$\vec{\bm{H}} \leftarrow \vec{\bm{H}}_\mathsf{L} \gadd x_{(j)} \vec{\bm{H}}_\mathsf{R} $\;
+	\label{line:computeAH}
+		$\vec{\bm{v}} \leftarrow \vec{\bm{v}}_{\mathsf{L}} + x_{(j)}^{-1} \vec{\bm{v}}_{\mathsf{R}} $;
+		$\vec{\bm{r}} \leftarrow \vec{\bm{r}}_\mathsf{L} + x_{(j)} \vec{\bm{r}}_\mathsf{R} $\;
+	\label{line:computevr}
+		\Indm
+	}
+	% \tcp{Lengths of $\vec{\bm{A}}, \vec{\bm{v}}$, and $\vec{\bm{H}}$ become 1} 
+	$\Prover$ and $\Verifier$ compute:\\
+		\Indp
+		$\vec{\bm{\xi}}_H \leftarrow (1, x_{(1)}) \kronecker \cdots \kronecker (1, x_{(\log_2 n)}) \in \Field^n$\;
+	\Indm
+	$\Prover$ computes:\\
+		\Indp
+	$\vec{\bm{a}} \leftarrow \bm{a} \vec{\bm{\xi}}_H^{-1} \in \Field^n$;\,	$V_H \leftarrow \vec{\bm{H}} \in \Group_1$;\, $r\leftarrow \vec{\bm{r}} \in \Field$\;
+    \label{line:computear}
+	\Indm
+	\ForEach{$j \in [\log_2 n +1, 2\log_2 n]$ }{
+	$\Prover$ computes:\\
+	\Indp
+		$(\vec{\bm{a}}_\mathsf{L} || \vec{\bm{a}}_\mathsf{R}) \Half \vec{\bm{a}}$;
+		$(\vec{\bm{G}}_\mathsf{L} || \vec{\bm{G}}_\mathsf{R}) \Half \vec{\bm{H}}$;
+		$(\vec{\bm{l}}_\mathsf{L} || \vec{\bm{l}}_\mathsf{R}) \Half \vec{\bm{l}}$\;
+		$ L_{(j)} \leftarrow \langle \vec{\bm{a}}_{L}, \vec{\bm{G}}_\mathsf{R}\rangle \cdot V_H \gadd
+        \langle \vec{\bm{a}}_{L}, \vec{\bm{l}}_\mathsf{R}\rangle
+        \cdot (rG_0H_0)
+        $\;
+	\label{line:computeL2}
+		$ R_{(j)} \leftarrow \langle \vec{\bm{a}}_{R}, \vec{\bm{G}}_\mathsf{L}\rangle \cdot V_H \gadd
+		\langle \vec{\bm{a}}_{R}, \vec{\bm{l}}_\mathsf{L}\rangle
+        \cdot (rG_0H_0)
+		$\;
+	\Indm
+		$\PtoV$: $ L_{(j)}, R_{(j)} \in \Group_T$\;
+		$\VtoP$: $ x_{(j)} \ChooseRandom \Field^*$ \;
+	$\Prover$ computes:\\
+	\Indp
+		$\vec{\bm{a}} \leftarrow \vec{\bm{a}}_\mathsf{L} + x_{(j)}^{-1} \vec{\bm{a}}_\mathsf{R}, \vec{\bm{l}} \leftarrow \vec{\bm{l}}_\mathsf{L} + x_{(j)} \vec{\bm{l}}_\mathsf{R} \in \Field^{n/2^j}$\;
+		$\vec{\bm{G}} \leftarrow \vec{\bm{G}}_\mathsf{L} \gadd x_{(j)} \vec{\bm{G}}_\mathsf{R} \in \Group_1^{n/2^j}$\;
+	\label{line:computeG}
+	\Indm
+	}
+	% \tcp{Now, the length of $\vec{\bm{a}}$ is 1}
+		$\PtoV$: $\hat{a} \leftarrow \vec{\bm{a}}[0] \in \Field$; $V_G \leftarrow \vec{\bm{G}}[0] \in \Group_1$; \;
+	\label{line:reduceHata}
+		$\Verifier$ computes:\\
+	\Indp
+		$\vec{\bm{\xi}}_G \leftarrow (1, x_{(\log_2 n +1)}) \kronecker \cdots \kronecker (1, x_{(2\log_2 n)}) \in \Field^n$\;
+		\Indm
+	$\Verifier$ checks:
+		$C\, \gadd \, \gsum_{j=1}^{2\log_2(n)} (x_{(j)} L_{(j)} \gadd x_{(j)}^{-1}R_{(j)}) \EqOrNot$ 
+		$ 
+        [\langle \vec{\bm{\xi}}_G ,\,\vec{\bm{l}}\rangle \cdot
+        \langle \vec{\bm{\xi}}_H ,\, \vec{\bm{r}} \rangle
+        \cdot (\hat{a} G_0 H_0)]
+		\gadd
+		(\hat{a} V_G V_H)
+		$\;
+		\label{line:verifierPCS}
+	$\Prover$ provides proofs (see Appendix~\ref{appx:g2acc}) to let $\Verifier$ verify:
+		$V_G \EqOrNot \langle \vec{\bm{\xi}}_G , \vec{\bm{G}}\rangle$; $ V_H \EqOrNot \langle \vec{\bm{\xi}}_H, \vec{\bm{H}} \rangle$\;
+        \label{line:gtbulletfinalcheck}
+\end{algorithm}

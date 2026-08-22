@@ -1,0 +1,1320 @@
+% !TEX root = main.tex
+\section{ParComm: Collection Commitment and Opening}
+\label{sec:parcomm}
+
+ParComm commits to a collection of matrices through one BVA.  At opening time,
+it compiles the independent left and right evaluation points into one TBV,
+expresses all matrix evaluations as a single BVA--TBV inner product, and applies
+Packed EO-LiteBullet to reduce this inner product to an MLE claim on the
+committed BVA.  The compilation is proved from one commitment to the original
+points and the registered shape-only matrices: lookup proofs bind the local
+points and their source rows, while one prefix recurrence derives the TBV
+scales directly from the selected point coordinates.
+The remaining TBV evaluation is checked by one prefix recurrence.
+
+\subsection{Recursive Matrix Splitting}
+\label{sec:matrix-splitting}
+
+For each $\tau\in[t]$, let
+$\bm C_\tau\in\Field^{\mu_\tau\times\nu_\tau}$, and let
+\[
+  \bm x_{l,\tau}\in\Field^{\lceil\log_2\mu_\tau\rceil},
+  \qquad
+  \bm x_{r,\tau}\in\Field^{\lceil\log_2\nu_\tau\rceil}
+\]
+be its left and right evaluation points.  We write
+\[
+  \bm l_\tau:=\tensorspan{\bm x_{l,\tau}},
+  \qquad
+  \bm r_\tau:=\tensorspan{\bm x_{r,\tau}}.
+\]
+Let $\overline{\bm C}_\tau$ denote the zero extension of $\bm C_\tau$ to the
+dimensions of $\bm l_\tau$ and $\bm r_\tau$.  The claimed evaluation is
+\begin{equation}
+\label{eq:individual-evaluations}
+\begin{aligned}
+  u_\tau
+  &=\bm l_\tau\overline{\bm C}_\tau\bm r_\tau^{\top}\\
+  &=\left\langle
+      \vectorize{\overline{\bm C}_\tau},
+      \tensorspan{\bm x_{r,\tau}\|\bm x_{l,\tau}}
+    \right\rangle .
+\end{aligned}
+\end{equation}
+The order $\bm x_{r,\tau}\|\bm x_{l,\tau}$ follows from row-major
+vectorization.
+
+\begin{lemma}[Recursive dyadic splitting]
+\label{lemma:mat-splitting}
+A $\mu\times\nu$ matrix can be partitioned into at most
+\[
+  (\lfloor\log_2\mu\rfloor+1)
+  (\lfloor\log_2\nu\rfloor+1)
+\]
+  aligned submatrices whose two dimensions are powers of two.  Hence, $t$
+matrices of total size $N$ produce
+$T=O(t\log^2 N)$ such submatrices.
+\end{lemma}
+
+\begin{proof}
+Let $\alpha=\lfloor\log_2\mu\rfloor$ and
+$\beta=\lfloor\log_2\nu\rfloor$.  First separate the top $2^\alpha$ rows.
+Splitting their columns according to the binary expansion of $\nu$ gives at
+most $\beta+1$ power-of-two submatrices.  Next, in the remaining lower part,
+separate the leftmost $2^\beta$ columns.  Splitting their rows according to the
+binary expansion of $\mu-2^\alpha$ gives at most $\alpha$ submatrices.
+
+It remains to process the lower-right block.  Both of its logarithmic
+dimensions are at most $\alpha-1$ and $\beta-1$, respectively.  Recursing on
+this block therefore gives, by induction, at most $\alpha\beta$ further
+submatrices.  The total is at most
+\[
+  (\beta+1)+\alpha+\alpha\beta
+  =(\alpha+1)(\beta+1).
+\]
+The recursion stops when one dimension is one, in which case the other
+dimension is partitioned by its binary expansion.  Every resulting interval is
+aligned to its own length because it starts after a sum of larger powers of
+two.  Summing the bound over all matrices proves the second claim.
+\end{proof}
+
+Apply this deterministic splitting rule to all matrices.  Let
+$\bm a^{(j)}$ be the row-major vectorization of the resulting submatrices,
+ordered by non-increasing size, with ties broken by the original matrix,
+row, and column positions.  Define
+\[
+  k_j:=|\bm a^{(j)}|,
+  \qquad j\in[T].
+\]
+Every $k_j$ is a power of two and
+\[
+    \sum_{j=1}^{T}k_j=N.
+\]
+Let
+\[
+  K:=\mathsf{next\_power\_of\_two}(N),
+  \qquad
+  m:=\log_2K,
+\]
+and form the BVA
+\begin{equation}
+\label{eq:matrix-bva}
+  \bm a
+  :=\bm a^{(1)}\|\cdots\|\bm a^{(T)}\|\bm0^{K-N}.
+\end{equation}
+Because the bucket sizes are non-increasing powers of two, each bucket is
+aligned to its own size.  The public layout is
+$\mathcal L=(K,N,T,\{k_j\}_{j\in[T]})$, and the prover commits once:
+\begin{equation}
+\label{eq:dory-bva-commit}
+  C_a=\pc.\Com(\pp,\bm a).
+\end{equation}
+Only the $N$ matrix entries are stored; the final zero suffix is implicit.
+
+
+\subsection{Compiling Matrix Points into a TBV}
+\label{sec:point-compilation}
+
+For clarity, let the BVA cover size be a power of two and write
+$m:=\log_2K$.  Consider matrices
+$\{\bm C_\tau\}_{\tau\in[t]}$ with evaluation claims
+\[
+    u_\tau
+    =
+    \bm l_\tau^{\top}\bm C_\tau\bm r_\tau,
+    \qquad
+    \bm l_\tau=\tensorspan{\bm x_{l,\tau}},
+    \qquad
+    \bm r_\tau=\tensorspan{\bm x_{r,\tau}}.
+\]
+Lemma~\ref{lemma:mat-splitting} partitions these matrices into
+\[
+    T\le t(m+1)^2
+\]
+aligned submatrices whose row and column dimensions are powers of two.
+We compile the evaluation points of these submatrices into the scales
+$\eta_j$ and local points $\bm z_j$ of a single TBV.
+
+\mysmallskip\noindent
+\textbf{Original evaluation points.}
+Pad every point to length $m$ and arrange the points row-wise:
+\begin{equation}
+\label{eq:point-matrix}
+\bm X_l=
+\begin{pmatrix}
+\bm x_{l,1}^{\top}\|\bm0^{\top}\\[-1mm]
+\vdots\\[-1mm]
+\bm x_{l,t}^{\top}\|\bm0^{\top}
+\end{pmatrix},
+\qquad
+\bm X_r=
+\begin{pmatrix}
+\bm x_{r,1}^{\top}\|\bm0^{\top}\\[-1mm]
+\vdots\\[-1mm]
+\bm x_{r,t}^{\top}\|\bm0^{\top}
+\end{pmatrix}.
+\end{equation}
+Thus,
+\[
+    \bm X_l,\bm X_r\in\Field^{t\times m}.
+\]
+We prepend one fixed zero column and define
+\begin{equation}
+\label{eq:combined-point-matrix}
+    \bm X
+    :=
+    \concat{\bm0_{t\times1},\bm X_r,\bm X_l}
+    \in\Field^{t\times(2m+1)}.
+\end{equation}
+Column $0$ is the fixed zero entry, columns $1,\ldots,m$ contain the
+right points, and columns $m+1,\ldots,2m$ contain the left points.  The order
+$\bm X_r\|\bm X_l$ follows row-major vectorization.  The prover commits to
+the point matrix as
+\[
+    C_X=\pc.\Com(\pp,\bm X).
+\]
+
+\mysmallskip\noindent
+\textbf{Shape metadata.}
+Index the $j$-th split submatrix by
+\[
+    (\tau_j,\alpha_{l,j},\gamma_{l,j},
+             \alpha_{r,j},\gamma_{r,j}),
+\]
+where $\tau_j$ identifies its source matrix,
+$(\alpha_{l,j},\alpha_{r,j})$ is its row and column offset, and its shape is
+\[
+    2^{\gamma_{l,j}}\times2^{\gamma_{r,j}}.
+\]
+Let $\bm\delta_{l,j}$ and $\bm\delta_{r,j}$ be the $m$-bit little-endian
+decompositions of $\alpha_{l,j}$ and $\alpha_{r,j}$, respectively.
+Alignment gives
+\begin{equation}
+\label{eq:split-alignment}
+\begin{aligned}
+    \delta_{l,j,h}&=0,
+        &&h\in[\gamma_{l,j}],\\
+    \delta_{r,j,h}&=0,
+        &&h\in[\gamma_{r,j}].
+\end{aligned}
+\end{equation}
+
+Arrange the metadata as
+\[
+\begin{aligned}
+    \bm\tau&=(\tau_1,\ldots,\tau_T)^\top,\\
+    \bm\alpha_l&=(\alpha_{l,1},\ldots,\alpha_{l,T})^\top,
+    &\bm\alpha_r&=(\alpha_{r,1},\ldots,\alpha_{r,T})^\top,\\
+    \bm\gamma_l&=(\gamma_{l,1},\ldots,\gamma_{l,T})^\top,
+    &\bm\gamma_r&=(\gamma_{r,1},\ldots,\gamma_{r,T})^\top.
+\end{aligned}
+\]
+The primary shape metadata is
+\begin{equation}
+\label{eq:shape-metadata}
+    \bm\alpha
+    :=
+    \concat{\bm\tau,\bm\alpha_l,\bm\alpha_r},
+    \qquad
+    \bm\gamma
+    :=
+    \concat{\bm\gamma_l,\bm\gamma_r}.
+\end{equation}
+Thus, $\bm\alpha\in\Field^{T\times3}$ and
+$\bm\gamma\in\Field^{T\times2}$.  In particular, the source-matrix
+assignment $\bm\tau$ is included in $\bm\alpha$ and requires no separate
+persistent commitment.
+
+The public size $k_j$ of the corresponding BVA bucket satisfies
+\begin{equation}
+\label{eq:bucket-size-gamma}
+    \gamma_{l,j}+\gamma_{r,j}
+    =
+    \log_2 k_j.
+\end{equation}
+
+\mysmallskip\noindent
+\textbf{Derived matrices.}
+The local evaluation point of the $j$-th submatrix is
+\begin{equation}
+\label{eq:matZfromX}
+    \bm z_j
+    =
+    \bm X_{r,\tau_j,[1:\gamma_{r,j}]}^\top
+    \|
+    \bm X_{l,\tau_j,[1:\gamma_{l,j}]}^\top.
+\end{equation}
+It contains exactly the coordinates that vary within the submatrix and has
+length
+\[
+    |\bm z_j|
+    =
+    \gamma_{r,j}+\gamma_{l,j}
+    =
+    \log_2k_j.
+\]
+
+Let $\bm\sigma_j\in\Field^{2m}$ record the corresponding column positions
+in $\bm X$:
+\begin{equation}
+\label{eq:sigma-row}
+\bm\sigma_j
+=
+\bigl(
+1,\ldots,\gamma_{r,j},
+m+1,\ldots,m+\gamma_{l,j},
+0,\ldots,0
+\bigr).
+\end{equation}
+The zero entries select the fixed zero column of $\bm X$.
+
+Arrange the derived vectors row-wise:
+\begin{equation}
+\label{eq:compiled-point-matrices}
+\bm\Sigma=
+\begin{pmatrix}
+\bm\sigma_1^\top\\[-1mm]
+\vdots\\[-1mm]
+\bm\sigma_T^\top
+\end{pmatrix},
+\quad
+\bm D=
+\begin{pmatrix}
+(\bm\delta_{r,1}\|\bm\delta_{l,1})^\top\\[-1mm]
+\vdots\\[-1mm]
+(\bm\delta_{r,T}\|\bm\delta_{l,T})^\top
+\end{pmatrix},
+\quad
+\bm Z=
+\begin{pmatrix}
+\bm z_1^\top\|\bm0^\top\\[-1mm]
+\vdots\\[-1mm]
+\bm z_T^\top\|\bm0^\top
+\end{pmatrix}.
+\end{equation}
+All three matrices have dimensions $T\times2m$.  Only the first
+$\gamma_{r,j}+\gamma_{l,j}$ entries of row $j$ of $\bm Z$ form the local
+point $\bm z_j$; the remaining entries are zero padding.
+
+Finally, copy the source point row associated with each bucket:
+\begin{equation}
+\label{eq:selected-point-matrix}
+\bm X'
+=
+\begin{pmatrix}
+(\bm X_r\|\bm X_l)_{\tau_1,*}\\[-1mm]
+\vdots\\[-1mm]
+(\bm X_r\|\bm X_l)_{\tau_T,*}
+\end{pmatrix}
+\in\Field^{T\times2m}.
+\end{equation}
+The matrices $\bm\Sigma$ and $\bm D$ depend only on the deterministic split,
+not on an evaluation point.  They are therefore committed and proved once
+during registration together with $\bm\alpha$ and $\bm\gamma$.  Every opening
+reuses the same commitments $C_\Sigma$ and $C_D$.  Their consistency with
+$\bm\gamma$ and $\bm\alpha$ is established by the following lemma.
+
+\begin{lemma}[Consistency of the Shape-Derived Matrices]
+\label{lemma:shape-derived-consistency}
+Suppose that
+\[
+    0\le\gamma_{l,j},\gamma_{r,j}\le m,
+    \qquad
+    0\le\alpha_{l,j},\alpha_{r,j}<N
+\]
+for every $j\in[T]$.  Let
+$\bm\Sigma$, $\bm D$, $\bm\alpha$, and $\bm\gamma$ be fixed before
+$\vartheta\ChooseRandom\Field\setminus\{0,1\}$ is sampled.
+
+Consistency between $\bm\Sigma$ and $\bm\gamma$ is checked simultaneously
+for all rows by the following matrix equation:
+\begin{equation}
+\label{eq:Sigma-gamma-polynomial}
+\begin{aligned}
+&(1-\vartheta)
+\Bigg[
+(1-\vartheta)\bm\Sigma
+(1,\vartheta,\ldots,\vartheta^{2m-1})^\top\\
+&\qquad
++(\bm\gamma_r-m\bm1_T)
+    \circ\vartheta^{\bm\gamma_r}\\
+&\qquad
++(m\bm1_T+\bm\gamma_l)
+    \circ\vartheta^{\bm\gamma_r+\bm\gamma_l}
+\Bigg]\\
+&\hspace{12mm}
+=
+\bm1_T-\vartheta^{\bm\gamma_r+\bm\gamma_l},
+\end{aligned}
+\end{equation}
+where exponentiation of a vector is defined componentwise; for example,
+\[
+\vartheta^{\bm\gamma_r}
+=
+\bigl(
+\vartheta^{\gamma_{r,1}},
+\ldots,
+\vartheta^{\gamma_{r,T}}
+\bigr)^\top.
+\]
+Except with probability at most
+\[
+    \frac{2m-1}{|\Field|-2},
+\]
+Eq.~\eqref{eq:Sigma-gamma-polynomial} simultaneously enforces, for every
+$j\in[T]$,
+\[
+\bm\Sigma_{j,*}
+=
+\bigl(
+1,\ldots,\gamma_{r,j},
+m+1,\ldots,m+\gamma_{l,j},
+0,\ldots,0
+\bigr).
+\]
+
+Consistency between $\bm D$ and the offset columns of $\bm\alpha$ is
+enforced by
+\begin{equation}
+\label{eq:D-alpha-consistency}
+\begin{aligned}
+    \bm D\circ(\bm1-\bm D)
+    &=\bm0,\\
+    \bm D_{*,[1:m]}
+    (1,2,\ldots,2^{m-1})^\top
+    &=\bm\alpha_r,\\
+    \bm D_{*,[m+1:2m]}
+    (1,2,\ldots,2^{m-1})^\top
+    &=\bm\alpha_l.
+\end{aligned}
+\end{equation}
+These equations uniquely determine $\bm D$ as the little-endian bit
+decomposition of $(\bm\alpha_r,\bm\alpha_l)$.
+\end{lemma}
+
+\begin{proof}
+For the row prescribed by Eq.~\eqref{eq:sigma-row}, we have
+\[
+\begin{aligned}
+&
+\left\langle
+\bm\sigma_j,
+(1,\vartheta,\ldots,\vartheta^{2m-1})
+\right\rangle\\
+&\quad=
+\sum_{h=1}^{\gamma_{r,j}}
+    h\vartheta^{h-1}
++
+\sum_{h=1}^{\gamma_{l,j}}
+    (m+h)\vartheta^{\gamma_{r,j}+h-1}.
+\end{aligned}
+\]
+Substituting this expression into
+Eq.~\eqref{eq:Sigma-gamma-polynomial} and telescoping consecutive
+coefficients gives
+\[
+    1-\vartheta^{\gamma_{r,j}+\gamma_{l,j}},
+\]
+which proves completeness.
+
+For soundness, let $\bm\sigma_j^\star$ denote the prescribed row and
+subtract its valid equation from
+Eq.~\eqref{eq:Sigma-gamma-polynomial}.  If
+$\bm\sigma_j\neq\bm\sigma_j^\star$, then
+\[
+(1-\vartheta)^2
+\left\langle
+\bm\sigma_j-\bm\sigma_j^\star,
+(1,\vartheta,\ldots,\vartheta^{2m-1})
+\right\rangle
+=0
+\]
+is a nonzero polynomial equation of degree at most $2m-1$ after excluding
+the fixed root $\vartheta=1$.  The claimed bound follows from the
+Schwartz--Zippel lemma.
+
+Since $\bm\gamma$ is committed, the powers in
+Eq.~\eqref{eq:Sigma-gamma-polynomial} are bound to their exponents by
+lookup from the public table
+\[
+    \{(h,\vartheta^h):h=0,\ldots,2m\}.
+\]
+Equation~\eqref{eq:bucket-size-gamma} additionally binds
+$\gamma_{r,j}+\gamma_{l,j}$ to the public bucket size.
+
+For $\bm D$, the first equation of
+Eq.~\eqref{eq:D-alpha-consistency} makes every entry Boolean.  The
+remaining two equations reconstruct the numerical offsets from their
+little-endian bits.  Since each offset lies in $[0,N)$, its $m$-bit
+representation is unique.
+\end{proof}
+
+It remains to enforce alignment.  Since the nonzero entries of
+$\bm\sigma_j$ are precisely
+\[
+    1,\ldots,\gamma_{r,j},
+    \qquad
+    m+1,\ldots,m+\gamma_{l,j},
+\]
+the indexed-zero constraints
+\begin{equation}
+\label{eq:alignment-indexed-zero}
+    D_{j,\Sigma_{j,h}}=0
+    \qquad
+    \text{whenever }\Sigma_{j,h}\neq0
+\end{equation}
+are equivalent to Eq.~\eqref{eq:split-alignment}.  These constraints are
+proved using the same indexed-read argument as the point lookup below.
+
+\mysmallskip\noindent
+\textbf{Compiling the local points.}
+After the opening-time matrices $\bm Z$ and $\bm X'$ are fixed, the prover
+uses the registered $\bm\Sigma$ in the following row-wise lookup:
+\begin{equation}
+\label{eq:coordinate-lookup}
+\begin{aligned}
+&
+\left\{
+Z_{j,h}+\vartheta\Sigma_{j,h}
+:
+h\in[2m]
+\right\}\\
+&\quad\subseteq
+\{0\}
+\cup
+\left\{
+X'_{j,h}+\vartheta h
+:
+h\in[2m]
+\right\}.
+\end{aligned}
+\end{equation}
+The challenge $\vartheta$ binds each value to its prescribed column.
+A padded pair $(Z_{j,h},\Sigma_{j,h})=(0,0)$ reads the fixed zero entry.
+Together with the cached registration check in
+Eq.~\eqref{eq:Sigma-gamma-polynomial}, this proves that row $j$ of
+$\bm Z$ contains exactly the local point prescribed by
+$(\gamma_{r,j},\gamma_{l,j})$.
+
+\mysmallskip\noindent
+\textbf{Binding the source matrix.}
+After receiving the batching challenge $\omega$, define
+\[
+\bm n=
+\begin{pmatrix}
+1\\[-1mm]
+\vdots\\[-1mm]
+t
+\end{pmatrix},
+\qquad
+\bm\omega=
+\begin{pmatrix}
+1\\[-1mm]
+\omega\\[-1mm]
+\vdots\\[-1mm]
+\omega^{t-1}
+\end{pmatrix},
+\qquad
+\bm\omega'=
+\begin{pmatrix}
+\omega^{\tau_1-1}\\[-1mm]
+\vdots\\[-1mm]
+\omega^{\tau_T-1}
+\end{pmatrix}.
+\]
+Once $\bm X'$ and $\bm\omega'$ are fixed, the verifier samples
+$\theta\in\Field^*$ and sets
+\[
+    \bm\theta
+    =
+    (\theta^2,\theta^3,\ldots,\theta^{2m+1})^\top.
+\]
+The prover proves the multiset lookup
+\begin{equation}
+\label{eq:source-row-lookup}
+\begin{aligned}
+\left\{
+\bm\tau+\theta\bm\omega'
++\bm X'\bm\theta
+\right\}
+\subseteq
+\left\{
+\bm n+\theta\bm\omega
++\concat{\bm X_r,\bm X_l}\bm\theta
+\right\}.
+\end{aligned}
+\end{equation}
+Here the braces denote the multisets of vector entries.
+The random linear compression simultaneously binds, for every $j\in[T]$,
+\[
+    \bm X'_{j,*}
+    =
+    \concat{\bm X_r,\bm X_l}_{\tau_j,*},
+    \qquad
+    \omega'_j
+    =
+    \omega^{\tau_j-1}.
+\]
+Since $\bm\tau$ is the first column of the committed matrix $\bm\alpha$,
+the source-matrix assignment is bound to the persistent shape encoding.
+
+Equations~\eqref{eq:coordinate-lookup} and
+\eqref{eq:source-row-lookup} can be summarized as
+\begin{equation}
+\label{eq:point-lookup}
+\begin{aligned}
+    (\bm X',\bm\Sigma)
+    &\xrightarrow{\text{row-wise lookup}}
+    \bm Z,\\
+    (\bm\alpha,\bm X)
+    &\xrightarrow{\text{source lookup}}
+    (\bm\tau,\bm X',\bm\omega').
+\end{aligned}
+\end{equation}
+
+\mysmallskip\noindent
+\textbf{Compiling the scales.}
+For the reverse tensor span, a fixed zero bit contributes $1$, while a fixed
+one bit contributes the corresponding point coordinate.  The prover
+materializes and commits to one prefix matrix
+$\bm P^{\mathsf{cmp}}\in\Field^{T\times2m}$.  Its rows start from
+$\bm\omega'$ and directly absorb the factors selected by the registered
+$\bm D$: for every $j\in[T]$,
+\begin{equation}
+\label{eq:eta-prefix-recurrence}
+\begin{aligned}
+P^{\mathsf{cmp}}_{j,1}
+&=
+\omega'_j
+\bigl(1-D_{j,1}+D_{j,1}X'_{j,1}\bigr),\\
+P^{\mathsf{cmp}}_{j,h+1}
+&=
+P^{\mathsf{cmp}}_{j,h}\\[-1mm]
+&\quad\cdot
+\bigl(1-D_{j,h+1}+D_{j,h+1}X'_{j,h+1}\bigr),
+&&h\in[2m-1],\\
+\eta_j&=P^{\mathsf{cmp}}_{j,2m}.
+\end{aligned}
+\end{equation}
+For row $j$, $\bm D$ selects exactly the coordinates fixed to one by the
+aligned row and column offsets.  Equation~\eqref{eq:alignment-indexed-zero}
+ensures that none of the local coordinates contained in $\bm z_j$ is also
+treated as fixed.  After the commitments to $\bm X'$, $\bm\omega'$,
+$\bm P^{\mathsf{cmp}}$, and $\bm\eta$ are fixed, one transcript challenge
+batches the initialization, all prefix steps, and the terminal equality in
+Eq.~\eqref{eq:eta-prefix-recurrence}.  Thus, the factors
+$\bm1-\bm D+\bm D\circ\bm X'$ are never separately committed, and no
+independent row-product proof is required.
+
+Consequently, for every $j\in[T]$,
+\begin{equation}
+\label{eq:single-bucket-compilation}
+    \omega^{\tau_j-1}
+    \left.
+    (\bm l_{\tau_j}\kronecker\bm r_{\tau_j})
+    \right|_j
+    =
+    \eta_j\tensorspan{\bm z_j}.
+\end{equation}
+Summing over all split submatrices gives
+\begin{equation}
+\label{eq:compiled-bva-tbv}
+\begin{aligned}
+\sum_{\tau=1}^{t}
+    \omega^{\tau-1}u_\tau
+&=
+\sum_{j=1}^{T}
+    \eta_j
+    \tensorproj{\bm a^{(j)}}{\bm z_j}\\
+&= 
+\langle\bm a,\bm\zeta\rangle,
+\end{aligned}
+\end{equation}
+where $\bm a$ is the BVA of the split submatrices and
+\[
+    \bm\zeta
+    =
+    \bigl(
+        N,T,
+        \{(k_j,\eta_j,\bm z_j)\}_{j\in[T]}
+    \bigr).
+\]
+
+The coordinate lookup has $2Tm$ queries, the source-row lookup has $T$
+queries, and the batched prefix recurrence involves
+$O(Tm)$ entries.  The compilation therefore takes
+\[
+    O(T\log K)
+    =
+    O(t\log^3K)
+\]
+prover time.  Its proof size and verifier time are inherited from the
+underlying succinct lookup and matrix-reduction protocols.  For commitment
+and MLE opening, all matrices are embedded into their next power-of-two
+rectangular covers, with the added entries fixed to zero.
+
+\subsection{Commit to and Hide the Shapes}
+\label{sec:shape-hiding}
+
+The matrices $\bm\alpha$, $\bm\gamma$, $\bm\Sigma$, and $\bm D$ depend only
+on the original matrix shapes and the deterministic splitting rule.  They are
+independent of the evaluation points, so the prover commits during
+registration to:
+\begin{equation}
+\label{eq:shape-commitments}
+\begin{aligned}
+    C_\alpha&=\pc.\Com(\pp,\bm\alpha),
+    &C_\gamma&=\pc.\Com(\pp,\bm\gamma),\\
+    C_\Sigma&=\pc.\Com(\pp,\bm\Sigma),
+    &C_D&=\pc.\Com(\pp,\bm D).
+\end{aligned}
+\end{equation}
+
+The one-time registration proof establishes that the committed metadata
+describes the deterministic splitting used to construct the BVA.  In
+particular, it verifies
+\begin{equation}
+\label{eq:shape-registration}
+\begin{aligned}
+    \gamma_{l,j}+\gamma_{r,j}
+    &=\log_2k_j,\\
+    2^{\gamma_{l,j}}
+    &\mid\alpha_{l,j},\\
+    2^{\gamma_{r,j}}
+    &\mid\alpha_{r,j},
+    \qquad j\in[T],
+\end{aligned}
+\end{equation}
+and proves that the resulting rectangles are disjoint and form the
+prescribed partition of each source matrix.  The same proof establishes
+Eqs.~\eqref{eq:Sigma-gamma-polynomial},
+\eqref{eq:D-alpha-consistency}, and
+\eqref{eq:alignment-indexed-zero}, thereby binding $C_\Sigma$ and $C_D$ to
+the unique matrices derived from $C_\gamma$ and $C_\alpha$.  These checks are
+cached with the registration result; subsequent openings reuse $C_\Sigma$
+and $C_D$ without repeating the shape-only relations.
+
+Algorithm~\ref{alg:shapeencoding} makes both directions explicit: its
+\textsf{Encode} part computes $(\bm\alpha,\bm\gamma)$ from the original
+matrix shapes, after which Eqs.~\eqref{eq:sigma-row} and
+\eqref{eq:compiled-point-matrices} derive $(\bm\Sigma,\bm D)$.  Its
+\textsf{Recover} part reconstructs the original shapes from
+$(\bm\alpha,\bm\gamma)$.
+
+\input{algorithm/alg-shapeencoding}
+
+\begin{proposition}[Injectivity of the Shape Encoding]
+\label{prop:shape-encoding}
+Fix the public BVA layout and the deterministic splitting rule of
+Lemma~\ref{lemma:mat-splitting}.  Any well-formed tuple
+\[
+    (\bm\alpha,\bm\gamma,\bm\Sigma,\bm D)
+\]
+that satisfies the registration relations uniquely determines the complete
+dyadic splitting of every $\bm C_\tau$ and hence its exact shape.
+\end{proposition}
+
+\begin{proof}
+Consider the row corresponding to the $j$-th BVA bucket.  The first entry of
+$\bm\alpha_{j,*}$ identifies its source matrix $\bm C_{\tau_j}$.  The
+remaining entries give the row and column offsets
+$\alpha_{l,j}$ and $\alpha_{r,j}$, while $\bm\gamma_{j,*}$ gives the
+submatrix dimensions
+\[
+    2^{\gamma_{l,j}}
+    \times
+    2^{\gamma_{r,j}}.
+\]
+Therefore, row $j$ uniquely determines the rectangle
+\[
+\begin{aligned}
+&
+[\alpha_{l,j},
+  \alpha_{l,j}+2^{\gamma_{l,j}})
+\\[-1mm]
+&\qquad\times
+[\alpha_{r,j},
+  \alpha_{r,j}+2^{\gamma_{r,j}})
+\end{aligned}
+\]
+inside $\bm C_{\tau_j}$.
+
+For every $\tau\in[t]$, the registration proof establishes that the
+rectangles satisfying $\tau_j=\tau$ form the deterministic disjoint
+partition of $\bm C_\tau$.  Its exact dimensions are consequently recovered
+as
+\[
+\begin{aligned}
+\max_{j:\tau_j=\tau}
+\left\{
+\alpha_{l,j}+2^{\gamma_{l,j}}
+\right\},
+\qquad
+\max_{j:\tau_j=\tau}
+\left\{
+\alpha_{r,j}+2^{\gamma_{r,j}}
+\right\}.
+\end{aligned}
+\]
+Thus, $(\bm\alpha,\bm\gamma)$ uniquely determines every original matrix
+shape and the assignment of every BVA bucket.
+
+Finally, Eq.~\eqref{eq:Sigma-gamma-polynomial} uniquely derives
+$\bm\Sigma$ from $\bm\gamma$, while
+Eq.~\eqref{eq:D-alpha-consistency} uniquely derives $\bm D$ from the offset
+columns of $\bm\alpha$.  The commitments to these matrices therefore bind
+the reusable shape-only compiler tables without introducing another choice.
+\end{proof}
+
+By PCS binding, the commitments in Eq.~\eqref{eq:shape-commitments}
+determine a unique tuple $(\bm\alpha,\bm\gamma,\bm\Sigma,\bm D)$ and hence a unique
+collection of matrix shapes by
+Proposition~\ref{prop:shape-encoding}.  By PCS hiding and the zero knowledge
+of the registration, consistency, lookup, and grand-product proofs, the
+verifier learns neither the committed metadata nor the exact matrix shapes
+beyond the public BVA layout.
+
+\subsection{The Final TBV Evaluation}
+\label{sec:final-tbv-evaluation}
+
+Packed EO-LiteBullet reduces the BVA--TBV inner product to an MLE claim on
+each input vector.  For the TBV side, its challenges define the point
+\begin{equation}
+\label{eq:final-tbv-point}
+\bm y^\top
+=
+\bigl(
+y_0,y_0^2,y_0^4,\ldots,y_0^{\kappa/2},
+	y_1,\ldots,y_{\log_2(K/\kappa)}
+\bigr)
+\in\Field^{1\times m}.
+\end{equation}
+The inverse point $\bm y^{-1}$ is used for the BVA-side opening; the remaining
+TBV claim is
+\[
+    \tensorproj{\bm\zeta}{\bm y}
+    =
+    \left\langle
+        \bm\zeta,
+        \tensorspan{\bm y}
+    \right\rangle .
+\]
+We evaluate this claim directly from the compact description of
+$\bm\zeta$, without expanding either tensor-structured vector.
+
+\mysmallskip\noindent
+\textbf{Global bucket positions.}
+For the $j$-th BVA bucket, define
+\begin{equation}
+\label{eq:global-bucket-gamma}
+    \bm\gamma'
+    :=
+    \bm\gamma_l+\bm\gamma_r,
+    \qquad
+    \gamma'_j
+    =
+    \log_2 k_j.
+\end{equation}
+Thus, exponentiation componentwise gives
+\[
+    2^{\bm\gamma'}
+    =
+    (k_1,\ldots,k_T)^\top.
+\]
+Let
+\[
+    \bm\alpha'
+    =
+    (\alpha'_1,\ldots,\alpha'_T)^\top
+\]
+contain the starting positions of the BVA buckets.  Since the buckets are
+concatenated in their fixed BVA order,
+\begin{equation}
+\label{eq:global-bucket-offsets}
+\begin{aligned}
+    \alpha'_1&=0,\\
+    \alpha'_{j+1}
+        &=\alpha'_j+2^{\gamma'_j},
+        &&j\in[T-1],\\
+    \alpha'_T+2^{\gamma'_T}
+        &=N.
+\end{aligned}
+\end{equation}
+
+Both $\bm\gamma'$ and $\bm\alpha'$ are determined by the public ordered
+bucket sizes in $\mathcal L$.  The verifier therefore derives them directly
+from Eqs.~\eqref{eq:global-bucket-gamma} and
+\eqref{eq:global-bucket-offsets}; neither vector is committed or opened.
+
+\mysmallskip\noindent
+\textbf{Compiling the restriction of $\tensorspan{\bm y}$.}
+From the public $\bm\gamma'$ and $\bm\alpha'$, the verifier derives
+\[
+    \bm\Sigma',\bm D'
+    \in\Field^{T\times m},
+\]
+while the prover constructs and commits to
+$\bm Z'\in\Field^{T\times m}$.  For every $j\in[T]$, the $j$-th row of
+$\bm\Sigma'$ is
+\begin{equation}
+\label{eq:Sigma-prime-row}
+    \bm\Sigma'_{j,*}
+    =
+    \bigl(
+        1,\ldots,\gamma'_j,
+        0,\ldots,0
+    \bigr).
+\end{equation}
+Thus, its nonzero entries identify the first $\gamma'_j$ coordinates of
+$\bm y$.  The $j$-th row of $\bm D'$ is the $m$-bit little-endian
+decomposition of $\alpha'_j$, while
+\begin{equation}
+\label{eq:Z-prime-row}
+    \bm Z'_{j,*}
+    =
+    \bigl(
+        y_1,\ldots,y_{\gamma'_j},
+        0,\ldots,0
+    \bigr).
+\end{equation}
+
+Since the ordered bucket sizes and offsets are public, these definitions
+uniquely determine $\bm\Sigma'$ and $\bm D'$.  Bucket alignment also makes
+the first $\gamma'_j$ bits of $\alpha'_j$ zero by construction.  Thus, no
+commitment, Booleanity proof, reconstruction proof, or alignment lookup is
+needed for either public table.
+
+Finally, $\bm Z'$ is selected from $\bm y$ according to $\bm\Sigma'$.
+After committing to $\bm Z'$, the prover gives the genuine row-tagged LogUp:
+\begin{equation}
+\label{eq:Z-prime-lookup}
+\begin{aligned}
+\left\{
+(j,Z'_{j,h},\Sigma'_{j,h})
+:
+\substack{j\in[T],\\h\in[m]}
+\right\}
+&\quad\subseteq
+\left\{(j,0,0):j\in[T]\right\}\\
+&\qquad\cup
+\left\{
+(j,y_h,h)
+:
+\substack{j\in[T],\\h\in[m]}
+\right\}.
+\end{aligned}
+\end{equation}
+The public row tag prevents a query from borrowing an entry from another
+bucket.  Since $\bm\Sigma'$ is verifier-derived, this lookup proves that row
+$j$ of committed $\bm Z'$ consists of the first $\gamma'_j$ coordinates of
+$\bm y$, followed by zeros.
+
+\mysmallskip\noindent
+\textbf{Compiling the tensor scales.}
+The bit decomposition $\bm D'$ records the coordinates fixed by the global
+offset of each bucket.  A fixed zero bit contributes $1$ to the reverse
+tensor span, while a fixed one bit contributes the corresponding coordinate
+of $\bm y$.  Since both $\bm D'$ and $\bm y$ are public, the verifier directly
+derives:
+\begin{equation}
+\label{eq:eta-prime-public}
+    \bm\eta'
+    =
+    \mathsf{GrandProdRow}\!\left(
+        \bm1_{T\times m}
+        -
+        \bm D'
+        +
+        \bm D'
+        \circ
+        (\bm1_T\bm y^\top)
+    \right).
+\end{equation}
+No commitment or grand-product proof is needed for $\bm\eta'$.  Bucket
+alignment ensures that the coordinates contained in $\bm Z'$ are not also
+included in the scale.  Consequently, for every bucket $j$:
+\begin{equation}
+\label{eq:y-bucket-restriction}
+    \left.
+        \tensorspan{\bm y}
+    \right|_j
+    =
+    \eta'_j
+    \tensorspan{
+        \bm Z'_{j,[1:\gamma'_j]}
+    }.
+\end{equation}
+
+\mysmallskip\noindent
+\textbf{Final evaluation.}
+Recall that the $j$-th bucket of $\bm\zeta$ is
+\[
+    \eta_j\tensorspan{\bm z_j}.
+\]
+Since $k_j\le N$, we have $\gamma'_j\le m$, and all genuine entries of
+$\bm z_j$ lie in the first $m$ columns of $\bm Z$.  Writing
+\[
+\bm\eta=(\eta_1,\ldots,\eta_T)^\top,
+\]
+the mixed-product property and
+Eq.~\eqref{eq:y-bucket-restriction} give
+\begin{equation}
+\label{eq:final-tbv-evaluation}
+\begin{aligned}
+\tensorproj{\bm\zeta}{\bm y}
+&=
+\sum_{j=1}^{T}
+\eta_j\eta'_j
+\prod_{h=1}^{\gamma'_j}
+\left(
+    1+Z_{j,h}Z'_{j,h}
+\right).
+\end{aligned}
+\end{equation}
+The zero padding in $\bm Z$ and $\bm Z'$ contributes only unit factors, so
+the row-wise product is exactly over the
+$\gamma'_j=\log_2k_j$ local coordinates of each bucket.
+
+The proof does not materialize separate factor and scale commitments and does
+not invoke a second row-product protocol.  Instead, it commits to a prefix
+matrix $\bm P\in\Field^{T\times m}$ and a bucket-evaluation vector
+$\bm v\in\Field^T$ satisfying the single batched recurrence:
+\begin{equation}
+\label{eq:final-prefix-recurrence}
+\begin{aligned}
+P_{j,1}
+    &=\eta_j\eta'_j,\\
+P_{j,h+1}
+    &=P_{j,h}\left(1+Z_{j,h}Z'_{j,h}\right),
+    &&j\in[T],\ h\in[m-1],\\
+v_j
+    &=P_{j,m}\left(1+Z_{j,m}Z'_{j,m}\right),
+    &&j\in[T],\\
+\tensorproj{\bm\zeta}{\bm y}
+    &=\bm1_T^\top\bm v.
+\end{aligned}
+\end{equation}
+One transcript challenge batches the initialization, all prefix steps, and
+the final output into one degree-three hidden relation over the existing
+commitments to $\bm Z$ and $\bm\eta$, the LogUp-bound commitment to
+$\bm Z'$, the public $\bm\eta'$, and the new commitments $C_P$ and $C_v$.
+The prover then opens $C_v$ at the all-half point of its public padded row
+cover.  Multiplying the hidden opening by the row-cover size yields
+$\bm1_T^\top\bm v$, which is checked against the hidden terminal scalar from
+Packed EO-LiteBullet.
+
+All matrices introduced in this subsection have dimensions at most
+$T\times m$.  Deriving the public tables, constructing the prefixes, proving
+the $\bm Z'$ LogUp, and proving the recurrence therefore take
+\[
+    O(Tm)
+    =
+    O(T\log K)
+    =
+    O(t\log^3K)
+\]
+prover time.  The final proof adds three primary commitments
+$(C_{Z'},C_P,C_v)$; $\bm\Sigma'$ and $\bm\eta'$ require neither a commitment
+nor a PCS opening.  The proof size and verifier time are inherited from the
+underlying succinct lookup and matrix-reduction protocols.
+
+\subsection{The Complete Protocol and Complexity}
+\label{sec:complete-protocol}
+
+The protocol consists of a one-time registration phase and an opening phase
+that is repeated for each collection of matrix-evaluation claims.  The
+registration phase commits to the matrices and their hidden shapes.  During
+an opening, the original matrix points are compiled into one TBV, after which
+Packed EO-LiteBullet reduces the resulting BVA--TBV inner product to one
+opening of the committed BVA and one compact TBV evaluation.
+
+Algorithm~\ref{alg:mleclaimconversion} summarizes this complete MLE claim
+conversion argument.
+
+\input{algorithm/alg-batchpcs}
+
+\mysmallskip\noindent
+\textbf{Registration.}
+The prover applies the deterministic splitting rule of
+Lemma~\ref{lemma:mat-splitting} to
+$\{\bm C_\tau\}_{\tau\in[t]}$, obtaining the $T$ power-of-two submatrices.
+Their row-major vectorizations are concatenated in the prescribed order to
+form the BVA $\bm a$.  For every BVA bucket, the prover also constructs
+\[
+    \bm\alpha
+    =
+    \concat{\bm\tau,\bm\alpha_l,\bm\alpha_r},
+    \qquad
+    \bm\gamma
+    =
+    \concat{\bm\gamma_l,\bm\gamma_r}.
+\]
+It also derives the shape-only matrices $\bm\Sigma$ and $\bm D$ from
+Eqs.~\eqref{eq:sigma-row} and
+\eqref{eq:compiled-point-matrices}.  It publishes the shape commitments
+before the dense BVA commitment:
+\[
+\begin{aligned}
+    C_\alpha&=\pc.\Com(\pp,\bm\alpha),
+    &C_\gamma&=\pc.\Com(\pp,\bm\gamma),\\
+    C_\Sigma&=\pc.\Com(\pp,\bm\Sigma),
+    &C_D&=\pc.\Com(\pp,\bm D),\\
+    C_a&=\pc.\Com(\pp,\bm a).
+\end{aligned}
+\]
+
+The one-time registration proof establishes that these commitments encode the
+same deterministic split.  In particular, it proves that the committed BVA
+is the concatenation of the split submatrices and that, for every
+$j\in[T]$,
+\[
+\begin{aligned}
+    \gamma_{l,j}+\gamma_{r,j}
+        &=\log_2k_j,\\
+    2^{\gamma_{l,j}}
+        &\mid\alpha_{l,j},\\
+    2^{\gamma_{r,j}}
+        &\mid\alpha_{r,j}.
+\end{aligned}
+\]
+It additionally proves that the rectangles encoded by
+$(\bm\alpha,\bm\gamma)$ form the prescribed disjoint partition of each
+source matrix.  The same registration proof binds $\bm\Sigma$ to
+$\bm\gamma$, binds $\bm D$ to $\bm\alpha$, and proves their alignment through
+Eqs.~\eqref{eq:Sigma-gamma-polynomial}--\eqref{eq:alignment-indexed-zero}.
+This proof is verified once, and all five collection commitments are reused
+for subsequent openings.
+
+\mysmallskip\noindent
+\textbf{Point compilation.}
+For one opening batch, the claimed values
+$\{u_\tau\}_{\tau\in[t]}$ and the corresponding points
+$\{\bm x_{l,\tau},\bm x_{r,\tau}\}_{\tau\in[t]}$ are fixed by the prover
+before the batching challenge.  The prover forms the point matrix $\bm X$ in
+Eq.~\eqref{eq:combined-point-matrix} and sends only its hiding commitment:
+\[
+    C_X=\pc.\Com(\pp,\bm X).
+\]
+The verifier does not receive the entries of $\bm X$ or the original
+evaluation points.  It samples $\omega\ChooseRandom\Field^*$ after $C_X$ is
+fixed.
+
+Using the registered $\bm\Sigma$ and $\bm D$, the committed primary metadata,
+and the challenge $\omega$, the prover
+constructs
+\[
+    \bm X',\quad
+    \bm Z,\quad
+    \bm\omega',\quad
+    \bm P^{\mathsf{cmp}},\quad
+    \bm\eta.
+\]
+Their consistency is established by
+\begin{equation}
+\label{eq:complete-point-compilation}
+\begin{aligned}
+    (\bm X',\bm\Sigma)
+    &\xrightarrow{\text{Eq.~\eqref{eq:coordinate-lookup}}}
+        \bm Z,\\
+    (\bm\alpha,\bm X)
+    &\xrightarrow{\text{Eq.~\eqref{eq:source-row-lookup}}}
+        (\bm\tau,\bm X',\bm\omega'),\\
+    (\bm\omega',\bm D,\bm X')
+    &\xrightarrow{\text{Eq.~\eqref{eq:eta-prefix-recurrence}}}
+        (\bm P^{\mathsf{cmp}},\bm\eta).
+\end{aligned}
+\end{equation}
+The cached indexed-zero relation in
+Eq.~\eqref{eq:alignment-indexed-zero} already proves that the local
+coordinates selected by registered $\bm\Sigma$ are disjoint from the fixed
+coordinates selected by registered $\bm D$.  All opening-time relations are
+zero knowledge, so the compilation binds to $C_X$ without disclosing its
+entries.
+
+These relations compile the original claims into
+\begin{equation}
+\label{eq:complete-bva-tbv}
+\begin{aligned}
+    \sum_{\tau=1}^{t}
+        \omega^{\tau-1}u_\tau
+    &=
+    \sum_{j=1}^{T}
+        \eta_j
+        \tensorproj{\bm a^{(j)}}{\bm z_j}\\
+    &=
+    \langle\bm a,\bm\zeta\rangle,
+\end{aligned}
+\end{equation}
+where
+\[
+    \bm\zeta
+    =
+    \bigl(
+        N,T,
+        \{(k_j,\eta_j,\bm z_j)\}_{j\in[T]}
+    \bigr).
+\]
+
+\mysmallskip\noindent
+\textbf{BVA--TBV reduction.}
+The prover runs Packed EO-LiteBullet on
+Eq.~\eqref{eq:complete-bva-tbv}.  Its transcript reduces the aggregated
+claim to
+\begin{equation}
+\label{eq:complete-packed-reduction}
+    \tensorproj{\bm a}{\bm y^{-1}},
+    \qquad
+    \tensorproj{\bm\zeta}{\bm y}.
+\end{equation}
+The first claim is an MLE opening of the original BVA.  The prover therefore
+opens $C_a$ at $\bm y^{-1}$ using the underlying PCS, without materializing
+the logical padding of $\bm a$.
+
+To prove the second claim, the prover constructs
+\[
+    \bm Z',\quad
+    \bm P,\quad
+    \bm v,
+\]
+as in Section~\ref{sec:final-tbv-evaluation}.  The verifier derives
+$\bm\gamma'$, $\bm\alpha'$, $\bm\Sigma'$, $\bm D'$, and $\bm\eta'$ directly
+from the public layout and $\bm y$.  The row-tagged LogUp in
+Eq.~\eqref{eq:Z-prime-lookup} binds committed $\bm Z'$ to public
+$\bm\Sigma'$, while the single relation in
+Eq.~\eqref{eq:final-prefix-recurrence} binds $C_P$ and $C_v$ to the existing
+commitments to $\bm Z$ and $\bm\eta$.  Opening $C_v$ at the all-half point
+and checking its hidden sum against the Packed EO terminal scalar completes
+the claim.  Thus, the verifier receives neither the expanded length-$N$
+representation of $\bm\zeta$ nor the original evaluation points.
+
+Every opening-time witness matrix is committed before the challenge used in
+its lookup or polynomial check.  Public-derived tables enter those checks
+directly and require no PCS opening.  The verifier accepts if the cached
+registration proof, the point-compilation proof, the Packed EO-LiteBullet
+transcript, the separate BVA opening, and the final TBV evaluation proof all
+accept.
+
+\mysmallskip\noindent
+\textbf{Prover time.}
+Recall that
+\[
+    m=\log_2K,
+    \qquad
+    T\le t(m+1)^2.
+\]
+The BVA contains exactly $N$ matrix entries.  Constructing it and computing
+its commitment take $O(N)$ time.  Constructing the shape metadata and proving
+its consistency require $O(Tm)$ additional work.  Hence, registration takes
+\[
+    O(N+Tm)
+    =
+    O(N+t\log^3K)
+\]
+prover time.
+
+For each opening, constructing $\bm X$ takes $O(tm)$ time.  All matrices in
+the point-compilation proof have $O(Tm)$ entries, so
+Eq.~\eqref{eq:complete-point-compilation} requires $O(Tm)$ prover time, while
+the shape-only checks for $\bm\Sigma$ and $\bm D$ are not repeated.  The
+public final tables and the prefix recurrence also have dimensions bounded by
+$T\times m$ and require another $O(Tm)$ operations.
+
+Packed EO-LiteBullet takes
+\[
+    O\left(
+        \frac{N}{\kappa}M(\kappa)
+        +
+        \frac{N}{\kappa}
+        +
+        T
+    \right)
+\]
+time, where $M(\kappa)$ is the cost of multiplying degree-$(\kappa-1)$
+polynomials.  The PCS opening of the BVA scans its $N$ stored entries.
+Therefore, the total opening-prover time is
+\begin{equation}
+\label{eq:complete-prover-time}
+    O\left(
+        N
+        +
+        \frac{N}{\kappa}M(\kappa)
+        +
+        T\log K
+    \right).
+\end{equation}
+Using $T\le t(\log_2K+1)^2$, this becomes
+\[
+    O\left(
+        N
+        +
+        \frac{N}{\kappa}M(\kappa)
+        +
+        t\log^3K
+    \right).
+\]
+For fixed $\kappa$, the opening-prover time is
+\[
+    O(N+t\log^3K).
+\]
+
+\mysmallskip\noindent
+\textbf{Memory.}
+The persistent representation stores the $N$ original matrix entries and the
+$O(Tm)$ registered shape tables, including $\bm\Sigma$ and $\bm D$.  The
+opening-time point-compilation and final-prefix matrices also contain
+$O(Tm)$ field elements.  Hence, for field-valued inputs, the total storage is
+\[
+    O(N+T\log K).
+\]
+When the packed first round streams native short-bitwidth entries, the
+full-field working memory after this round is
+\[
+    O\left(
+        \frac{N}{\kappa}
+        +
+        \kappa
+        +
+        T\log K
+    \right),
+\]
+in addition to the native representation of the matrices.  No expanded TBV
+or padding proportional to a larger logical cover is materialized.
+
+\mysmallskip\noindent
+\textbf{Proof size and verifier time.}
+Packed EO-LiteBullet contributes
+\[
+    2\kappa-2
+    +
+    2\log_2(K/\kappa)
+    +
+    2
+\]
+field elements.  The remaining consistency, lookup, grand-product,
+matrix-reduction, and PCS-opening proofs have logarithmic communication and
+verification cost in their matrix dimensions.  Since
+\[
+    T\le t(\log_2K+1)^2
+    \qquad\text{and}\qquad
+    t\le N,
+\]
+the total per-opening proof size and cryptographic verifier time are
+\[
+    O(\kappa+\log K).
+\]
+For fixed $\kappa$, both are $O(\log K)$.  The registration proof has the
+same asymptotic size and is verified only once.
+
+If the values $\{u_\tau\}_{\tau\in[t]}$ are supplied explicitly, reading and
+aggregating them adds $O(t)$ verifier time.  When these values are already
+committed, their weighted sum under $\omega$ can instead be verified by one
+MLE opening, preserving the $O(\kappa+\log K)$ verifier bound.
+
+For a non-power-of-two total size, the protocol replaces $N$ by its
+power-of-two BVA cover.  Since this cover is smaller than $2N$, all preceding
+asymptotic bounds remain unchanged.
+
+
+
+
+

@@ -1,0 +1,34 @@
+[package]
+name = "batch"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+rayon = "1.8"
+tempfile = "3.10"
+ark-ff = { version = "0.5", features = ["std"] }
+ark-ec = { version = "0.5", features = ["std"] }
+ark-bls12-381 = { version = "0.5", features = ["std", "curve"] }
+ark-bn254 = { version = "0.5", features = ["std", "curve"] }
+ark-std = { version = "0.5", features = ["std"] }
+crossbeam-channel = "0.5"
+poly-commit = { path = "../poly-commit" }
+ark-serialize = { version = "0.5", features = ["std"] }
+ark-crypto-primitives = { version = "0.5", features = ["std"] }
+mat = { path = "../mat" }
+fs = { path = "../fs" }
+atomic_proof = { path = "../atomic_proof" }
+rand = "0.9"
+sha2 = "0.10.8"
+jolt-crypto = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
+jolt-blindfold = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
+jolt-claims = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
+jolt-dory = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
+jolt-field = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
+jolt-openings = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
+jolt-poly = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
+jolt-sumcheck = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
+jolt-transcript = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
+serde = { version = "1", features = ["derive"] }
+bincode = "1.3"

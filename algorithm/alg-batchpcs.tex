@@ -1,0 +1,92 @@
+% !TEX root = main.tex
+%\colorbox{gray!5!white}{%
+\begin{algorithm}[!t]
+\caption{MLE Claim Conversion Argument}
+\label{alg:mleclaimconversion}
+\small
+
+\KwIn{
+A base PCS $\pc$ over $\Field$ with public parameters $\pp$;
+packed-fold factor $\kappa=2^\tau$\;
+\qquad (\textsf{Register}) matrices
+$\{\bm C_\tau\}_{\tau\in[t]}$\;
+\qquad (\textsf{Open}) public claimed values $\{u_\tau\}_{\tau\in[t]}$
+and prover-private evaluation points
+$\{\bm x_{l,\tau},\bm x_{r,\tau}\}_{\tau\in[t]}$
+}
+\KwOut{
+\qquad (\textsf{Collection object})
+$(C_a,C_\alpha,C_\gamma,C_\Sigma,C_D,\pi_{\mathsf{reg}})$\;
+\qquad (\textsf{Opening proof}) $(C_X,\pi)$\;
+\qquad (verification) $\TRUE/\FALSE$
+}
+
+\BlankLine
+\textbf{Register.}\\
+Apply the deterministic splitting rule of
+Lemma~\ref{lemma:mat-splitting} to $\{\bm C_\tau\}_{\tau\in[t]}$\;
+Obtain the BVA buckets
+$\{\bm a^{(j)}\}_{j\in[T]}$, bucket sizes $\{k_j\}_{j\in[T]}$,
+the logical length $K$, and the BVA $\bm a$ in
+Eq.~\eqref{eq:matrix-bva}\;
+Run \textsf{Encode} of Algorithm~\ref{alg:shapeencoding} on
+$\{(\mu_\tau,\nu_\tau)\}_{\tau\in[t]}$ to obtain
+$\bm\alpha$ and $\bm\gamma$, and derive the shape-only matrices
+$\bm\Sigma$ and $\bm D$\;
+$C_\alpha\leftarrow\pc.\Com(\pp,\bm\alpha)$; \quad
+$C_\gamma\leftarrow\pc.\Com(\pp,\bm\gamma)$; \quad
+$C_\Sigma\leftarrow\pc.\Com(\pp,\bm\Sigma)$; \quad
+$C_D\leftarrow\pc.\Com(\pp,\bm D)$; \quad
+$C_a\leftarrow\pc.\Com(\pp,\bm a)$\;
+Construct the one-time registration proof $\pi_{\mathsf{reg}}$ for
+Eqs.~\eqref{eq:shape-registration}--\eqref{eq:alignment-indexed-zero} and
+the partition consistency of the split submatrices\;
+\Return $(C_a,C_\alpha,C_\gamma,C_\Sigma,C_D,\pi_{\mathsf{reg}})$\;
+
+
+\BlankLine
+\textbf{Open.}\\
+Form the point matrix $\bm X$ in Eq.~\eqref{eq:combined-point-matrix} and
+send only $C_X\leftarrow\pc.\Com(\pp,\bm X)$\;
+$\VtoP$: sample $\omega \gets \Field^*$\;
+$c\leftarrow\sum_{\tau=1}^{t}\omega^{\tau-1}u_\tau$\;
+Construct the auxiliary matrices
+$\bm X',\bm Z,\bm\omega',\bm P^{\mathsf{cmp}},\bm\eta$ using the registered
+$\bm\Sigma,\bm D$, commit to these opening-time witnesses, and form the compact TBV
+$\bm\zeta=(N,T,\{(k_j,\eta_j,\bm z_j)\}_{j\in[T]})$\;
+Construct the point-compilation proof $\pi_{\mathsf{cmp}}$ for
+Eq.~\eqref{eq:complete-point-compilation} using the cached alignment check and
+one batched prefix recurrence from $\bm\omega'$ to $\bm\eta$\;
+$\pi_{\mathsf{ip}}\leftarrow
+\mathsf{PackedEO\text{-}LiteBullet}.\Prove(K,\kappa,c,\bm a,\bm\zeta)$\;
+Parse $\pi_{\mathsf{ip}}$ to obtain $\bm y$ and the hidden terminal claims
+$\bar a=\tensorproj{\bm a}{\bm y^{-1}}$ and
+$\bar b=\tensorproj{\bm\zeta}{\bm y}$\;
+$\pi_a\leftarrow\pc.\Open(\pp,C_a,\bar a,\bm y^{-1},\bm a)$\;
+Derive the public tables
+$\bm\gamma',\bm\alpha',\bm\Sigma',\bm D',\bm\eta'$ and commit only to
+the hidden $\bm Z'$, prefix matrix $\bm P$, and bucket-evaluation vector
+$\bm v$ as in Section~\ref{sec:final-tbv-evaluation}\;
+Construct the final TBV evaluation proof $\pi_{\mathsf{tbv}}$ for
+Eq.~\eqref{eq:final-prefix-recurrence}, including the row-tagged LogUp for
+$\bm Z'$\;
+$\pi\leftarrow(\pi_{\mathsf{cmp}},\pi_{\mathsf{ip}},\pi_a,\pi_{\mathsf{tbv}})$\;
+\Return $(C_X,\pi)$\;
+
+\BlankLine
+\textbf{Verify.}\\
+Check $\pi_{\mathsf{reg}}$ once and cache the result\;
+Parse $\pi$ as
+$(\pi_{\mathsf{cmp}},\pi_{\mathsf{ip}},\pi_a,\pi_{\mathsf{tbv}})$\;
+Verify $\pi_{\mathsf{cmp}}$ against
+$C_\alpha$, $C_\gamma$, $C_\Sigma$, $C_D$, and $C_X$, without receiving
+the entries of $\bm X$\;
+Verify $\pi_{\mathsf{ip}}$ for the claim
+$c=\langle\bm a,\bm\zeta\rangle$ and derive $\bm y$ together with the
+commitments to $\bar a$ and $\bar b$\;
+Verify the BVA opening
+$\pc.\Verify(\pp,C_a,\bar a,\bm y^{-1},\pi_a)$\;
+Verify $\pi_{\mathsf{tbv}}$ for the claim
+$\bar b=\tensorproj{\bm\zeta}{\bm y}$\;
+\Return $\TRUE$ iff all checks accept\;
+\end{algorithm}

@@ -1,0 +1,208 @@
+\section{Preliminaries}
+\label{sec:preliminary}
+
+We work over a prime-order Galois field $\Field$,
+with multiplicative group $\Field^*$.
+(Row) vectors are denoted by bold letters,
+\eg, $\bm{a}, \bm{b}, \bm{c}$,
+and scalars by lowercase letters, \eg, $a, b, c$.
+We write $[n] := \{1, \ldots, n\}$.
+% The inner product operation is denoted by $\langle\cdot,\cdot\rangle$.
+
+Given a point $\bm{x}\in \Field^\mu$,
+we derive a $2^\mu$-dimensional tensor-structured vector
+via the following reverse tensor span.
+
+\begin{definition}[Reverse Tensor Span]
+	\label{def:tensorspan}
+	Given $\mu$ values $\bm{x} \in \Field^\mu$,
+	their \textbf{reverse tensor span} is the vector
+	$\tensorspan{\bm{x}} \in \Field^{2^\mu}$ defined as:
+	\[
+		\tensorspan{\bm{x}}
+		:= (1, x_\mu) \kronecker (1, x_{\mu - 1}) \kronecker \cdots \kronecker (1, x_1).
+	\]
+\end{definition}
+
+Given a vector $\bm{a} \in \Field^n$, let
+$q:=\mathsf{next\_power\_of\_two}(n)$.  For a point
+$\bm{x} \in \Field^{\log_2 q}$, we define the \emph{evaluation} of $\bm{a}$ at
+$\bm{x}$ as an inner product with its conceptual zero extension:
+\begin{equation}
+\label{eq:evaluation}
+    \tensorproj{\bm{a}}{\bm{x}}
+    := \left\langle \bm{a}\| \tensorspan{\bm{x}},\bm{0}^{q-n} \right\rangle.
+\end{equation}
+
+\mysmallskip
+\noindent
+\textbf{MLE and multilinear PCS.}
+There is a one-to-one correspondence between vectors (or matrices)
+and multilinear polynomials.
+The multilinear extension (MLE) of a vector $\bm{a}$
+is denoted by $\psi_{\bm{a}}(\bm{x})$.
+
+\begin{definition}[MLE~\cite{crypto/Thaler13}]
+The MLE $\psi_{\bm{a}}(\bm{x})$ of a vector $\bm{a} \in \Field^{n}$, where
+$q:=\mathsf{next\_power\_of\_two}(n)$, is the unique multilinear polynomial
+$\Field^{\log_2 q} \to \Field$
+such that:
+\[
+	\psi_{\bm{a}} (\bm{i}) =
+    \begin{cases}a_i,&i\le n,\\0,&n<i\le q,\end{cases}
+	\quad \forall\, \bm{i} \in \{0, 1\}^{\log_2 q},
+\]
+where $\bm{i}$ ranges over the Boolean hypercube
+and corresponds to the bit decomposition of the index $i$.
+\end{definition}
+
+Existing work~\cite{tcc/Lee21,asiacrypt/BuenzMMTV21,tcc/BootleCG20,eurocrypt/ChiesaHMVW20,crypto/Setty20}
+shows that MLE evaluation can be expressed as an inner product.
+Using the above definition of $\Eval(\bm{a}, \bm{x})$,
+we have the following relation.
+
+\begin{lemma}
+\label{lemma:mleProjection}
+	The MLE $\psi_{\bm{a}}(\cdot)$ of a vector $\bm{a} \in \Field^{n}$ satisfies,
+    for $q:=\mathsf{next\_power\_of\_two}(n)$:
+	\begin{equation}
+	\label{eq:mleprojection}
+    \psi_{\bm{a}}(\bm{x})
+    =
+    \Bigl[\prod_{i=1}^{\log_2 q}(1-x_i)\Bigr]
+    \cdot \Eval(\bm{a}, \bm{x}).
+	\end{equation}
+\end{lemma}
+
+Throughout the remainder of this paper, we ignore the scaling factor and
+use $\Eval(\bm{a}, \bm{x})$ to indicate vector evaluation, without referring to the MLE $\psi_{\bm{a}}(\cdot)$.
+
+Due to the correspondence between vectors and polynomials,
+a PCS can also be viewed as a vector commitment scheme.
+We define PCS using equivalent vector notation.
+
+\begin{definition}[Multilinear Polynomial Commitment Scheme]
+\label{def:pcs}
+	A multilinear PCS for vector commitments
+	is a tuple of algorithms:
+	\begin{itemize}[leftmargin=*, labelsep = 0.5em]
+	\item $\pp \leftarrow \Setup(1^\lambda, n)$
+	takes as input the vector length $n$
+	and outputs public parameters $\pp$;
+	\item $C \leftarrow \Com(\pp, \bm{a})$
+	(or $\Com(\bm{a})$ for short)
+	takes as input a vector $\bm{a} \in \Field^{n}$
+	and outputs a commitment $C \in \ComSpace$;
+	\item $\mathsf{bit} \leftarrow \Open(\pp, C, v, \bm{x} : \bm{a})$
+	is an interactive protocol between a prover $\Prover$
+	and a verifier $\Verifier$,
+	where $\Prover$ convinces $\Verifier$
+	that $\Eval(\bm{a},\bm{x}) = v$.
+    At the end of $\Open$, $\Verifier$ outputs $\mathsf{bit} \in \{ \TRUE, \FALSE \}$.
+	\end{itemize}
+\end{definition}
+
+For simplicity, we write $\Com(\pp, \bm{a})$ as $\Com(\bm{a})$.
+
+As a matrix can be flattened into a vector,
+a PCS also serves as a matrix commitment scheme.
+
+\mysmallskip
+\noindent
+\textbf{Inner product argument.}
+Given committed vectors, an inner product argument provides proofs for their inner products.
+
+\begin{definition}[Inner Product Argument]
+\label{def:ipa}
+Given a vector commitment scheme $\Com$
+with public parameters $\pp$
+and commitment space $\mathbb{C}$,
+an IPA is a zkSNARK for the relation:
+\begin{align*}
+\mathcal{R}_{\sf ip} = & \left\{ \left( \begin{aligned} & \pp; c \in \Field, C_a, C_b \in \mathbb{C} \\ \end{aligned} \right) \right. : \left( \begin{aligned} & \bm{a}, \bm{b} \in \Field^n \\ \end{aligned} \right) \\
+& \quad\left|~
+\begin{aligned} c = \bm{a} \bullet \bm{b} \wedge C_a = \Com(\vec{\bm{a}}) \wedge C_b = \Com(\bm{b}) \end{aligned} \right\}.
+\end{align*}
+\end{definition}
+
+An IPA can be instantiated by combining
+an inner product proof with a PCS
+(see Appendix~\ref{appx:litebullet}).
+
+\mysmallskip
+\noindent
+\textbf{Collection commitment for heterogeneously sized vectors.}
+Given a collection of heterogeneously sized vectors
+$\{\bm{a}_j\}_{j\in [T]}$, let $n_j$ be the exact length and let $q_j$ be a
+public power-of-two cover satisfying $n_j\le q_j<2n_j$.  We define a
+collection-commitment interface that commits to all vectors jointly and
+supports repeated batched openings at points $\{\bm{z}_j\}_{j\in[T]}$.  The
+packed entries, aligned offsets, and exact matrix dimensions are authenticated
+separately.  Applications may disclose the dimensions, or keep them committed
+and reveal only the cover sizes.  With the hiding base commitment in
+Appendix~\ref{appx:pcs} and zero-knowledge openings, the latter mode hides both
+parameter entries and exact matrix sizes.
+
+Additionally,
+the prover commits to the evaluation values and points
+via commitments $C_V$ and $C_X$,
+so that the verifier only needs these commitments
+to verify the openings.
+
+\begin{definition}[Heterogeneous-Vector Collection Commitment]
+\label{def:collectioncommit}
+A collection commitment with collective MLE openings consists of the following
+algorithms:
+\begin{itemize}[leftmargin=*, labelsep=0.5em]
+\item $\pp \leftarrow \Setup(1^\lambda, K)$
+takes as input the public cover-domain capacity $K$
+and outputs public parameters $\pp$.
+\item $(C_a,C_I,C_D,\pi_{\mathsf{size}}) \leftarrow
+\Com(\pp,\{q_j\}_{j\in[T]};\{r_j,c_j,n_j,\bm{a}_j\}_{j\in[T]})$
+takes as public input the cover sizes and as private input the exact matrix
+dimensions, lengths $n_j=r_jc_j$, and entries
+$\bm{a}_j\in\Field^{n_j}$;
+outputs a commitment $C_a$ that collectively commits to all packed vector
+entries, a commitment $C_I$ to their aligned bucket offsets, a hiding
+commitment $C_D$ to the exact dimensions, and a one-time zero-knowledge proof
+$\pi_{\mathsf{size}}$ of their consistency with the public covers.
+\item $C_X \leftarrow \mathsf{CommPoint}(\pp, \{\bm{x}_j\}_{j\in[T]})$
+(or $\mathsf{CommPoint}(\{\bm{x}_j\}_{j\in[T]})$ for short)
+takes as input the evaluation points $\{\bm{x}_j\}_{j\in[T]}$
+and outputs a commitment $C_X$ that collectively commits to these points.
+\item $C_V \leftarrow \mathsf{CommValue}(\pp, \{v_j\}_{j\in[T]})$
+(or $\mathsf{CommValue}(\{v_j\}_{j\in[T]})$ for short)
+takes as input the claimed evaluation values $\{v_j\}_{j\in[T]}$
+and outputs a commitment $C_V$ that commits to these values.
+\item $\mathsf{bit} \leftarrow
+\Open(\pp, C_a, C_I, C_D, C_V, C_X:
+\{\bm{a}_j\}_{j\in[T]},
+\{v_j\}_{j\in[T]},
+\{\bm{x}_j\}_{j\in[T]})$
+is a protocol between a probabilistic-polynomial-time prover $\Prover$
+and verifier $\Verifier$.
+Both $\Prover$ and $\Verifier$ hold the commitments
+$C_a, C_I, C_D, C_V, C_X$ and the cached proof $\pi_{\mathsf{size}}$.
+The prover additionally knows
+$\{r_j,c_j,n_j,\bm{a}_j\}_{j\in[T]}$, $\{v_j\}_{j\in[T]}$, and
+$\{\bm{x}_j\}_{j\in[T]}$,
+and aims to convince the verifier that
+ $\Eval(\bm{a}_j, \bm{x}_j) = v_j$ for all $j \in [T]$.
+At the end of $\Open$, the verifier outputs
+$\mathsf{bit} \in \{\TRUE, \FALSE\}$.
+\end{itemize}
+\end{definition}
+
+Our goal is to realize this interface so that physical prover work and memory
+track the input entries rather than a materialized padded domain.
+
+\mysmallskip
+\noindent
+\textbf{zkSNARKs and related notions.}
+Standard definitions of arguments of knowledge,
+zkSNARKs,
+perfect completeness,
+knowledge soundness,
+zero knowledge,
+and the Fiat--Shamir transformation
+are recalled in Appendix~\ref{appx:definitions}.

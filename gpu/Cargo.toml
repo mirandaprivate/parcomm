@@ -1,0 +1,36 @@
+[package]
+name = "parcomm-gpu"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+# Kept out of the root workspace so a machine without CUDA can still build the
+# CPU crates.
+[workspace]
+resolver = "2"
+
+[dependencies]
+ark-bls12-381 = { version = "0.5", features = ["std", "curve"] }
+ark-ec = { version = "0.5", features = ["std", "parallel"] }
+ark-ff = { version = "0.5", features = ["std", "parallel"] }
+ark-serialize = { version = "0.5", features = ["std"] }
+ark-std = { version = "0.5", features = ["std", "parallel"] }
+batch = { path = "../batch" }
+poly-commit = { path = "../poly-commit" }
+icicle-bls12-381 = { git = "https://github.com/ingonyama-zk/icicle.git", tag = "v4.0.0", features = ["msm", "g2"] }
+icicle-core = { git = "https://github.com/ingonyama-zk/icicle.git", tag = "v4.0.0" }
+icicle-runtime = { git = "https://github.com/ingonyama-zk/icicle.git", tag = "v4.0.0" }
+# Pulled in only to hold these transitive ICICLE dependencies at the last
+# release that builds with the toolchain pinned in `rust-toolchain.toml`.
+enum-ordinalize = "=4.3.0"
+enum-ordinalize-derive = "=4.3.0"
+rand = "0.8"
+rand_chacha = "0.3"
+rayon = "1"
+sha2 = "0.10"
+thiserror = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+debug = true

@@ -8,16 +8,16 @@ use ark_crypto_primitives::{
 use ark_ff::PrimeField;
 use ark_poly::Polynomial;
 use ark_serialize::{CanonicalSerialize, Compress};
-use ark_std::{rand::Rng, test_rng, UniformRand};
+use ark_std::{test_rng, UniformRand, vec::Vec};
 use rand_chacha::{
-    rand_core::{RngCore, SeedableRng},
+    rand_core::SeedableRng,
     ChaCha20Rng,
 };
 
 use core::time::Duration;
 use std::{borrow::Borrow, marker::PhantomData, time::Instant};
 
-use ark_poly_commit::{to_bytes, LabeledPolynomial, PolynomialCommitment};
+use poly_commit::{to_bytes, LabeledPolynomial, PolynomialCommitment};
 
 pub use criterion::*;
 pub use paste::paste;
@@ -42,10 +42,9 @@ pub fn bench_pcs_method<F: PrimeField, P: Polynomial<F>, PCS: PolynomialCommitme
     rand_point: fn(usize, &mut ChaCha20Rng) -> P::Point,
 ) {
     let mut group = c.benchmark_group(msg);
-    let rng = &mut ChaCha20Rng::from_rng(test_rng()).unwrap();
 
     for num_vars in nv_list {
-        let pp = PCS::setup(num_vars, Some(num_vars), rng).unwrap();
+        let pp = PCS::setup(num_vars, Some(num_vars), &mut test_rng()).unwrap();
         let (ck, vk) = PCS::trim(&pp, num_vars, num_vars, None).unwrap();
 
         group.bench_with_input(
@@ -74,31 +73,37 @@ pub fn commit<F: PrimeField, P: Polynomial<F>, PCS: PolynomialCommitment<F, P>>(
     rand_poly: fn(usize, &mut ChaCha20Rng) -> P,
     _rand_point: fn(usize, &mut ChaCha20Rng) -> P::Point,
 ) -> Duration {
-    let rng = &mut ChaCha20Rng::from_rng(test_rng()).unwrap();
+    let mut rng = ChaCha20Rng::from_seed([0u8; 32]);
 
     let labeled_poly =
-        LabeledPolynomial::new("test".to_string(), rand_poly(num_vars, rng), None, None);
+        LabeledPolynomial::new("test".to_string(), rand_poly(num_vars, &mut rng), None, None);
 
     let start = Instant::now();
-    let (_, _) = PCS::commit(&ck, [&labeled_poly], Some(rng)).unwrap();
+    let (_, _) = PCS::commit(&ck, [&labeled_poly], Some(&mut test_rng())).unwrap();
     start.elapsed()
 }
 
 /// Report the size of a commitment
-pub fn commitment_size<F: PrimeField, P: Polynomial<F>, PCS: PolynomialCommitment<F, P>>(
+pub fn commitment_size<F, P, PCS>(
     num_vars: usize,
     rand_poly: fn(usize, &mut ChaCha20Rng) -> P,
-) -> usize {
-    let rng = &mut ChaCha20Rng::from_rng(test_rng()).unwrap();
+    _rand_point: fn(usize, &mut ChaCha20Rng) -> P::Point,
+) -> usize
+where
+    F: PrimeField,
+    P: Polynomial<F>,
+    PCS: PolynomialCommitment<F, P>,
+{
+    let mut rng = ChaCha20Rng::from_seed([0u8; 32]);
 
-    let pp = PCS::setup(num_vars, Some(num_vars), rng).unwrap();
+    let pp = PCS::setup(num_vars, Some(num_vars), &mut test_rng()).unwrap();
 
     let (ck, _) = PCS::trim(&pp, num_vars, num_vars, None).unwrap();
 
     let labeled_poly =
-        LabeledPolynomial::new("test".to_string(), rand_poly(num_vars, rng), None, None);
+        LabeledPolynomial::new("test".to_string(), rand_poly(num_vars, &mut rng), None, None);
 
-    let (coms, _) = PCS::commit(&ck, [&labeled_poly], Some(rng)).unwrap();
+    let (coms, _) = PCS::commit(&ck, [&labeled_poly], Some(&mut test_rng())).unwrap();
 
     coms[0].commitment().serialized_size(Compress::No)
 }
@@ -116,13 +121,13 @@ where
     P: Polynomial<F>,
     PCS: PolynomialCommitment<F, P>,
 {
-    let rng = &mut ChaCha20Rng::from_rng(test_rng()).unwrap();
+    let mut rng = ChaCha20Rng::from_seed([0u8; 32]);
 
     let labeled_poly =
-        LabeledPolynomial::new("test".to_string(), rand_poly(num_vars, rng), None, None);
+        LabeledPolynomial::new("test".to_string(), rand_poly(num_vars, &mut rng), None, None);
 
-    let (coms, states) = PCS::commit(&ck, [&labeled_poly], Some(rng)).unwrap();
-    let point = rand_point(num_vars, rng);
+    let (coms, states) = PCS::commit(&ck, [&labeled_poly], Some(&mut test_rng())).unwrap();
+    let point = rand_point(num_vars, &mut rng);
 
     let start = Instant::now();
     let _ = PCS::open(
@@ -132,7 +137,7 @@ where
         &point,
         &mut test_sponge::<F>(),
         &states,
-        Some(rng),
+        Some(&mut test_rng()),
     )
     .unwrap();
     start.elapsed()
@@ -146,16 +151,16 @@ where
     PCS: PolynomialCommitment<F, P>,
     P::Point: UniformRand,
 {
-    let rng = &mut ChaCha20Rng::from_rng(test_rng()).unwrap();
+    let mut rng = ChaCha20Rng::from_seed([0u8; 32]);
 
-    let pp = PCS::setup(num_vars, Some(num_vars), rng).unwrap();
+    let pp = PCS::setup(num_vars, Some(num_vars), &mut test_rng()).unwrap();
 
     let (ck, _) = PCS::trim(&pp, num_vars, num_vars, None).unwrap();
     let labeled_poly =
-        LabeledPolynomial::new("test".to_string(), rand_poly(num_vars, rng), None, None);
+        LabeledPolynomial::new("test".to_string(), rand_poly(num_vars, &mut rng), None, None);
 
-    let (coms, states) = PCS::commit(&ck, [&labeled_poly], Some(rng)).unwrap();
-    let point = P::Point::rand(rng);
+    let (coms, states) = PCS::commit(&ck, [&labeled_poly], Some(&mut test_rng())).unwrap();
+    let point = P::Point::rand(&mut test_rng());
 
     let proofs = PCS::open(
         &ck,
@@ -164,7 +169,7 @@ where
         &point,
         &mut test_sponge::<F>(),
         &states,
-        Some(rng),
+        Some(&mut test_rng()),
     )
     .unwrap();
 
@@ -186,13 +191,13 @@ where
     P: Polynomial<F>,
     PCS: PolynomialCommitment<F, P>,
 {
-    let rng = &mut ChaCha20Rng::from_rng(test_rng()).unwrap();
+    let mut rng = ChaCha20Rng::from_seed([0u8; 32]);
 
     let labeled_poly =
-        LabeledPolynomial::new("test".to_string(), rand_poly(num_vars, rng), None, None);
+        LabeledPolynomial::new("test".to_string(), rand_poly(num_vars, &mut rng), None, None);
 
-    let (coms, states) = PCS::commit(&ck, [&labeled_poly], Some(rng)).unwrap();
-    let point = rand_point(num_vars, rng);
+    let (coms, states) = PCS::commit(&ck, [&labeled_poly], Some(&mut test_rng())).unwrap();
+    let point = rand_point(num_vars, &mut rng);
     let claimed_eval = labeled_poly.evaluate(&point);
     let proof = PCS::open(
         &ck,
@@ -201,7 +206,7 @@ where
         &point,
         &mut test_sponge::<F>(),
         &states,
-        Some(rng),
+        Some(&mut test_rng()),
     )
     .unwrap();
 
@@ -230,10 +235,8 @@ where
     PCS: PolynomialCommitment<F, P>,
 {
 
-    let rng = &mut ChaCha20Rng::from_rng(test_rng()).unwrap();
-
     let setup_start = Instant::now();
-    let pp = PCS::setup(num_vars, Some(num_vars), rng).unwrap();
+    let pp = PCS::setup(num_vars, Some(num_vars), &mut test_rng()).unwrap();
     let (ck, vk) = PCS::trim(&pp, num_vars, num_vars, None).unwrap();
 
     let srs_size = ck.serialized_size(Compress::No);
@@ -244,20 +247,21 @@ where
     let setup_time = setup_start.elapsed().as_secs_f32() * 1000.0;
     println!("Setup time: {} ms", setup_time);
 
-    let p = rand_poly(num_vars, rng);
+    let mut rng = ChaCha20Rng::from_seed([0u8; 32]);
+    let p = rand_poly(num_vars, &mut rng);
 
     let labeled_poly =
         LabeledPolynomial::new("test".to_string(), p, None, None);
-    
+
     let start_commit = Instant::now();
-    let (coms, states) = PCS::commit(&ck, [&labeled_poly], Some(rng)).unwrap();
+    let (coms, states) = PCS::commit(&ck, [&labeled_poly], Some(&mut test_rng())).unwrap();
     let commit_time = start_commit.elapsed().as_secs_f32();
     println!("Commit time: {} s", commit_time);
 
     let commit_size = coms[0].commitment().serialized_size(Compress::No);
     println!("Commitment size: {} B", commit_size);
 
-    let point = rand_point(num_vars, rng);
+    let point = rand_point(num_vars, &mut rng);
     let claimed_eval = labeled_poly.evaluate(&point);
 
     let start_open = Instant::now();
@@ -268,7 +272,7 @@ where
         &point,
         &mut test_sponge::<F>(),
         &states,
-        Some(rng),
+        Some(&mut test_rng()),
     )
     .unwrap();
     let open_time = start_open.elapsed().as_secs_f32();
@@ -377,7 +381,7 @@ impl CRHScheme for LeafIdentityHasher {
     type Output = Vec<u8>;
     type Parameters = ();
 
-    fn setup<R: RngCore>(_: &mut R) -> Result<Self::Parameters, ark_crypto_primitives::Error> {
+    fn setup<R: ark_std::rand::Rng>(_: &mut R) -> Result<Self::Parameters, ark_crypto_primitives::Error> {
         Ok(())
     }
 
@@ -407,7 +411,7 @@ where
     type Output = Vec<u8>;
     type Parameters = ();
 
-    fn setup<R: RngCore>(_rng: &mut R) -> Result<Self::Parameters, ark_crypto_primitives::Error> {
+    fn setup<R: ark_std::rand::Rng>(_rng: &mut R) -> Result<Self::Parameters, ark_crypto_primitives::Error> {
         Ok(())
     }
 

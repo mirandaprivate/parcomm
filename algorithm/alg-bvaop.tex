@@ -1,0 +1,90 @@
+\begin{algorithm}[!t]
+\caption{Linear Operations for a Decreasing-Size BVA}
+\label{alg:bva}
+\KwIn{
+$\bm{a}=\left(K,S,T,\{(n_j,\bm{a}_j)\}_{j\in[T]},
+\{k_i\}_{i\in[T]},\phi\right)\in\BVAspace$
+with $K\ge2$ for splitting or folding;\\
+\qquad optional $y\in\Field$ (for folding);\\
+\qquad optional $\bm{\zeta}=\big(K,T,\{(k_i,\eta_i,\bm{z}_i)\}_{i\in[T]}\big)
+\in\TBV(\Field)$ (for inner product)
+}
+\KwOut{
+(\textsf{Even-Odd Split}) $(\bm{a}_O,\bm{a}_E)\in\BVAspace^2$;\\
+\qquad (\textsf{Even-Odd Fold}) $\bm{a}'\in\BVAspace$;\\
+\qquad (\textsf{Inner Product with TBV}) $c=\langle\bm{a},\bm{\zeta}\rangle$
+}
+
+\SetKwFunction{Bucket}{Bucket}
+\SetKwFunction{Assemble}{AssembleBuckets}
+\SetKwFunction{EOFold}{EO-Fold}
+\SetKw{KwSplit}{Even-Odd Split}
+\SetKw{KwFold}{Even-Odd Fold}
+\SetKw{KwIP}{Inner Product}
+
+\BlankLine
+The function $\Assemble$ preserves the order of its real-bucket list, infers
+its active cover length from the bucket sizes, and represents the remainder of
+the specified logical domain by one implicit zero suffix; it stores only the
+effective entries of each result bucket\;
+Let $\widehat{\bm{a}}^{(i)}\leftarrow\Bucket(\bm{a},i)\in\Field^{k_i}$ denote
+the unique real bucket~$i=\phi(j)$, whose conceptual content is
+$\bm{a}_j\|\bm{0}^{k_i-n_j}$; its zero suffix is handled implicitly\;
+Let $T_1\leftarrow|\{i\in[T]:k_i=1\}|$ and $J\leftarrow T-T_1$\;
+\tcp*{the unit buckets are $J+1,\ldots,T$}
+
+\BlankLine
+\textbf{\KwSplit: produce $\bm{a}_O,\bm{a}_E$ of length $K/2$.}\\
+Initialize $\mathsf{listO}\leftarrow[\,]$ and $\mathsf{listE}\leftarrow[\,]$\;
+\For{$i\leftarrow1$ \KwTo $J$}{
+    $\mathsf{listO}.\mathsf{append}\big(\tfrac{k_i}{2},
+      \widehat{\bm{a}}^{(i)}_O\big)$\;
+    $\mathsf{listE}.\mathsf{append}\big(\tfrac{k_i}{2},
+      \widehat{\bm{a}}^{(i)}_E\big)$\;
+}
+\For{$r\leftarrow1$ \KwTo $\lfloor T_1/2\rfloor$}{
+    $p\leftarrow J+2r-1$\;
+    $\mathsf{listO}.\mathsf{append}(1,\widehat{\bm{a}}^{(p)}[0])$\;
+    $\mathsf{listE}.\mathsf{append}(1,\widehat{\bm{a}}^{(p+1)}[0])$\;
+}
+\If{$T_1$ is odd}{
+    $\mathsf{listO}.\mathsf{append}(1,\widehat{\bm{a}}^{(T)}[0])$
+    \tcp*{its odd partner is in the implicit zero suffix}
+}
+$\bm{a}_O\leftarrow\Assemble(K/2,\mathsf{listO})$\;
+$\bm{a}_E\leftarrow\Assemble(K/2,\mathsf{listE})$\;
+\Return $(\bm{a}_O,\bm{a}_E)$\;
+
+\BlankLine
+\textbf{\KwFold: compute $\bm{a}'=\bm{a}_O+y\bm{a}_E$.}\\
+Initialize $\mathsf{listFold}\leftarrow[\,]$\;
+\For{$i\leftarrow1$ \KwTo $J$}{
+    $\mathsf{listFold}.\mathsf{append}\big(\tfrac{k_i}{2},
+      \EOFold(\widehat{\bm{a}}^{(i)},y)\big)$\;
+}
+\For{$r\leftarrow1$ \KwTo $\lfloor T_1/2\rfloor$}{
+    $p\leftarrow J+2r-1$\;
+    $\mathsf{listFold}.\mathsf{append}\big(1,
+      \widehat{\bm{a}}^{(p)}[0]+y\widehat{\bm{a}}^{(p+1)}[0]\big)$\;
+}
+\If{$T_1$ is odd}{
+    $\mathsf{listFold}.\mathsf{append}(1,\widehat{\bm{a}}^{(T)}[0])$
+    \tcp*{$\widehat{\bm a}^{(T)}[0]+y\cdot0$}
+}
+$\bm{a}'\leftarrow\Assemble(K/2,\mathsf{listFold})$\;
+\Return $\bm{a}'$\;
+
+\BlankLine
+\textbf{\KwIP: compute $c=\langle\bm{a},\bm{\zeta}\rangle$.}\\
+$c\leftarrow0$\;
+\For{$j\leftarrow1$ \KwTo $T$}{
+    $i\leftarrow\phi(j)$\;
+    $\bm{v}\leftarrow\bm{a}_j\|\bm{0}^{k_i-n_j}$
+    \tcp*{conceptual padding only}
+    \For{$s\leftarrow1$ \KwTo $\log_2k_i$}{
+        $\bm{v}\leftarrow\EOFold(\bm{v},z_{i,s})$\;
+    }
+    $c\leftarrow c+\eta_i\bm{v}[0]$\;
+}
+\Return $c$\;
+\end{algorithm}

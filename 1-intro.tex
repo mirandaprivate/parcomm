@@ -1,0 +1,127 @@
+% !TEX root = main.tex
+
+% !TEX root = main.tex
+\section{Introduction}
+\label{sec:intro}
+
+Succinct zero-knowledge machine learning (zkML) allows a prover to attest that
+a neural-network (NN) inference or training computation was executed correctly
+without revealing the private model
+~\cite{ccs/Balbas0VRS23,%
+asiacrypt/CongCYY25,%
+nips/GhodsiGG17,%
+iacr/GuoGQZ25,%
+esorics/KeufferMC18,%
+uss/WengYXKW21,%
+ccs/LiuXZ21,%
+iacr/FengQZDC21,%
+corr/KangHSS22,%
+ccs/GargGJMMPW23,%
+tifs/WengWTYL23,%
+tdsc/LeeKKO24,%
+ccs/SunLZ24,%
+ccs/AbbaszadehPK024,%
+popets/WangH23,%
+icml/WaiwitlikhitS0H24,%
+sp/QuGYZ26,%
+ccs/RiasiWBVH25,%
+uss/GuoLHQTZ25,%
+uss/0001SLLGCZ25}.
+A common design follows a commit-and-prove paradigm:
+the prover first commits to the model parameters, reduces the
+NN computation to multilinear-extension (MLE) evaluation claims on the parameter
+matrices, and batch-opens these MLE claims through a polynomial commitment scheme
+(PCS).
+The parameter commitment and opening procedure directly affect the prover time, memory
+footprint, verifier cost, and privacy of the resulting zkML system.
+
+NN parameters present a particularly demanding commitment workload.
+A model may contain tens to thousands of billions of parameters distributed across many
+heterogeneously shaped matrices, while production-grade NNs commonly store
+these parameters as low-precision integers, such as 8-bit or 16-bit values.
+Let \(N\) denote the total number of parameters, \(t\) the number of matrices,
+and \(\beta\) their native bit width.
+Ideally, a PCS should provide one reusable data commitment and collectively open independent MLE claims on all \(t\) matrices, while making prover time and memory scale with the native
+\(N\beta\)-bit representation rather than with a padded array of cryptographic
+field elements.
+
+\mysmallskip
+\noindent\textbf{Limitations of existing batching approaches.}
+Existing zkML systems typically batch parameter-matrix commitment openings in one of two
+ways.
+
+The first approach, which we call \emph{sum-up-open}~\cite{uss/0001SLLGCZ25,sp/QuGYZ26,ccs/SunLZ24}, exploits the homomorphism of elliptic-curve (ECC)-based PCSs, such as Hyrax~\cite{sp/WahbyTSTW18} or Dory~\cite{tcc/Lee21}, to aggregate independent opening claims~\cite{ccs/LiuXZ21,asiacrypt/BootleCGGHJ17}.
+Although this approach preserves the native shape of each matrix, it has two limitations. First, commonly used homomorphic PCSs are instantiated over ECC groups with scalar fields of roughly 255 bits.
+When the zkML arithmetization uses the same field, its field-multiplication-intensive prover computations must also operate at this width, limiting the benefits of low-precision model parameters. In contrast, hash-based PCSs, such as FRI~\cite{icalp/Ben-SassonBHR18}, Ligero~\cite{ccs/AmesHIYM17}, Brakedown~\cite{crypto/GolovnevLSTW21}, BaseFold~\cite{crypto/ZeilbergerCF24}, DeepFold~\cite{usenix/GuoLHQTZ25}, TensorSwitch~\cite{iacr/BunzFRW25}, and WHIR~\cite{eurocrypt/ArnonCFY25}, can operate over smaller $127$-bit prime fields and offer competitive concrete prover performance, but generally lack the homomorphism required by sum-up-open.
+Second, the approach still requires one independent commitment per matrix. For a model containing ($t$) parameter matrices, both the model-commitment size and the commitment-aggregation cost therefore grow linearly with ($t$), which is particularly undesirable when the commitment must be stored or verified on blockchain.
+
+The second approach, which we call
+\emph{pad-flatten-concatenate}~\cite{ccs/LiuXZ21,asiacrypt/CongCYY25},
+zero-pads each matrix to power-of-two dimensions, flattens the matrices, and
+concatenates them into a single committed vector.
+This approach does not require commitment homomorphism and can preserve succinct verification by compressing the remaining $O(t)$ field operations within an outer proof.
+However, it shifts substantial cost to the prover.
+Each independent MLE claim must be aligned with a segment of the concatenated vector, requiring
+power-of-two padding and field-valued representations of both the witness and
+the evaluation query.
+The resulting claims are then combined using either an inner-product proof or a sumcheck-based reduction to an opening of the concatenated vector.
+
+The dominant bottleneck in the second approach is the field-valued folding performed by these
+reductions.
+Although the original parameters are stored as $\beta$-bit integers, the first folding produces half as many full-field elements as the padded input length,
+often becoming the peak memory footprint even when the native model occupies only $N\beta$ bits.
+Recent small-field techniques reduce related arithmetic costs by delaying extension-field binding or packing multiple sumcheck instances~\cite{iacr/BagadDT24,iacr/PackedSumcheck25}. However, they use extension fields of small prime fields and therefore do not directly support folding native low-bit-width vectors embedded in a large prime field.
+
+Power-of-two padding is particularly costly for hash-based PCSs.
+These PCSs encode the padded message into a dense codeword and commit to the resulting codeword using a Merkle tree; consequently, even zero-valued padding contributes to the encoding and hashing costs.
+Unlike ECC PCSs, which can omit zero coefficients during commitment,
+hash-based PCSs incur prover work proportional to the entire padded size.
+Moreover, assigning each matrix to a public segment reveals its dimensions and offsets, conflicting with model-private zkML settings in which parameter-matrix shapes should also remain hidden.
+
+Existing approaches therefore expose the typical
+\emph{memory--succinctness--privacy tradeoff} in zkSNARK protocol design.
+Committing to each matrix separately permits matrix-by-matrix streaming but
+creates \(t\) persistent commitments and \(t\)-dependent verification work.
+Concatenating all matrices yields a single commitment, but opening independent
+MLE claims requires a field-valued, power-of-two-aligned representation whose
+physical size can substantially exceed the native model.
+Moreover, succinctness comes at the cost of revealing the matrix shapes to verifiers.
+
+This paper asks:
+\begin{quote}
+\emph{Can a single reusable commitment support collective, independent
+MLE openings of heterogeneous low-bit-width matrices, while materializing
+neither their full-field representation nor their power-of-two padding, and
+without revealing their exact shapes?}
+\end{quote}
+
+\mysmallskip
+\noindent\textbf{\methodname.}
+We present \methodname, a matrix collection commitment scheme designed for reducing the memory footprint (and also the prover time) for transforming a collection of low-bitwidth matrix commitment to the commitment of a single low-bitwidth dense vector,
+while hiding the shape information.
+
+At its core, \methodname combines a packed inner-product argument whose prover time and memory usage scale with the native input bit width with an MLE-claim aggregation argument that reduces independent MLE claims over a collection of matrices to a single MLE claim on a dense vector compactly storing all matrix entries, without power-of-two padding.
+The aggregation depends on a compact encoding of the matrix shapes; committing to this encoding binds the reduction while hiding the shapes from the verifier.
+
+We instantiate \methodname with both QAFold and Dory~\cite{tcc/Lee21}.
+[TO DO]
+
+\smallskip
+\noindent\textbf{Our contributions.}
+\begin{itemize}[leftmargin=*,labelsep=0.2em,topsep=1pt]
+
+  \item \textbf{A native-width packed inner-product proof.}
+  We introduce Packed EO-LiteBullet proof for proving an inner product between a
+  private low-bit-width $\beta$-bit vector and a public semi-structured field vector over a large prime field.
+  Both the prover memory usage and prover time are $O(N\beta)$.
+  Compared to prior low-bit-width sumcheck protocols, our method has superior asympotic efficiency (compared to~\cite{iacr/BagadDT24}) and soundness error guarantees (compared to~\cite{iacr/PackedSumcheck25}).
+
+  \item \textbf{A commitment scheme that commits to a collection of matrices without padding.}
+  We propose a method to splitting and reorganizing the matrices into a dense vector without any padding between the segments and proposing a MLE-claim-converting protocols between MLE claims on these two representations.
+  The resulting commimtment scheme thus has \(O(\beta N + t\log^3N)\) prover time and $O(\log N + \log t)$ proof size and verifier time.
+
+  \item \textbf{Shape-private commitment and proving.}
+  We give an injective encoding of the matrix shapes such that the MLE-claim-converting argument can rely only on commitments to these encodings to bind the proof.
+  And thus hide the exact matrix shapes
+
+\end{itemize}

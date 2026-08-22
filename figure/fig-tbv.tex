@@ -1,0 +1,76 @@
+% TBV operations for buckets in non-increasing size order.
+\definecolor{tbvlarge}{HTML}{D9E8FC}
+\definecolor{tbvmedium}{HTML}{FFF3CE}
+\definecolor{tbvunit}{HTML}{D6E9D5}
+
+\begin{tikzpicture}[
+  x=0.45cm,
+  y=0.68cm,
+  >=Latex,
+  font=\sffamily\scriptsize,
+  bucket/.style={draw=black!75, line width=0.55pt, minimum height=0.54cm,
+                 inner sep=0pt, align=center},
+  flow/.style={->, draw=black!55, line width=0.65pt}
+]
+\newcommand{\TBVBucket}[5]{%
+  % start, size, fill color, content, vertical coordinate
+  \path[bucket,fill=#3] (#1,#5) rectangle ++(#2,0.78);
+  \node at ({#1+#2/2},{#5+0.39}) {#4};
+}
+
+% Original K=16 TBV: 4,2,2,2,2,2,1,1.
+\node[anchor=east,font=\bfseries] at (-0.35,4.43) {$\bm\zeta$};
+\TBVBucket{0}{4}{tbvlarge}{$\bm\zeta^{(1)}$}{4.04}
+\TBVBucket{4}{2}{tbvmedium}{$\bm\zeta^{(2)}$}{4.04}
+\TBVBucket{6}{2}{tbvmedium}{$\bm\zeta^{(3)}$}{4.04}
+\TBVBucket{8}{2}{tbvmedium}{$\bm\zeta^{(4)}$}{4.04}
+\TBVBucket{10}{2}{tbvmedium}{$\bm\zeta^{(5)}$}{4.04}
+\TBVBucket{12}{2}{tbvmedium}{$\bm\zeta^{(6)}$}{4.04}
+\TBVBucket{14}{1}{tbvunit}{$\bm\zeta^{(7)}$}{4.04}
+\TBVBucket{15}{1}{tbvunit}{$\bm\zeta^{(8)}$}{4.04}
+\foreach \x/\s in {2/4,5/2,7/2,9/2,11/2,13/2,14.5/1,15.5/1}
+  \node[anchor=north,text=black!65] at (\x,3.99) {$\s$};
+
+% EO split.  Non-unit buckets split locally; the two terminal units separate.
+\node[anchor=east,font=\bfseries] at (-0.35,2.75) {$\bm\zeta_O$};
+\TBVBucket{0}{2}{tbvlarge}{$\bm\zeta_O^{(1)}$}{2.36}
+\foreach \x/\i in {2/2,3/3,4/4,5/5,6/6} {%
+  \TBVBucket{\x}{1}{tbvmedium}{$\bm\zeta_O^{(\i)}$}{2.36}%
+}
+\TBVBucket{7}{1}{tbvunit}{$\bm\zeta^{(7)}$}{2.36}
+
+\node[anchor=east,font=\bfseries] at (-0.35,1.63) {$\bm\zeta_E$};
+\TBVBucket{0}{2}{tbvlarge}{$\bm\zeta_E^{(1)}$}{1.24}
+\foreach \x/\i in {2/2,3/3,4/4,5/5,6/6} {%
+  \TBVBucket{\x}{1}{tbvmedium}{$\bm\zeta_E^{(\i)}$}{1.24}%
+}
+\TBVBucket{7}{1}{tbvunit}{$\bm\zeta^{(8)}$}{1.24}
+\draw[flow] (8.45,3.86) -- node[right,fill=white,inner sep=1pt] {EO-split} (8.45,2.00);
+
+% Folded TBV.
+\node[anchor=east,font=\bfseries] at (-0.35,0.27) {$\bm\zeta'$};
+\TBVBucket{0}{2}{tbvlarge}{$\bm\zeta'^{(1)}$}{-0.12}
+\foreach \x/\i in {2/2,3/3,4/4,5/5,6/6} {%
+  \TBVBucket{\x}{1}{tbvmedium}{$\bm\zeta'^{(\i)}$}{-0.12}%
+}
+\TBVBucket{7}{1}{tbvunit}{$\bm\zeta'^{(7)}$}{-0.12}
+\node[anchor=west,text=black!70] at (8.45,0.47)
+  {$i\le6:\ \eta_i'=\eta_i(1+yz_{i,1})$};
+\node[anchor=west,text=black!70] at (8.45,0.03)
+  {$\eta_7'=\eta_7+y\eta_8$};
+\draw[flow] (8.00,1.12) -- node[right,fill=white,inner sep=1pt] {fold} (8.00,0.76);
+
+% Matching partition for a dense-vector inner product.
+\node[anchor=east,font=\bfseries] at (-0.35,-1.13) {$\bm a$};
+\TBVBucket{0}{4}{white}{$\bm a^{(1)}$}{-1.52}
+\TBVBucket{4}{2}{white}{$\bm a^{(2)}$}{-1.52}
+\TBVBucket{6}{2}{white}{$\bm a^{(3)}$}{-1.52}
+\TBVBucket{8}{2}{white}{$\bm a^{(4)}$}{-1.52}
+\TBVBucket{10}{2}{white}{$\bm a^{(5)}$}{-1.52}
+\TBVBucket{12}{2}{white}{$\bm a^{(6)}$}{-1.52}
+\TBVBucket{14}{1}{white}{$\bm a^{(7)}$}{-1.52}
+\TBVBucket{15}{1}{white}{$\bm a^{(8)}$}{-1.52}
+\node[anchor=west,text=black!70] at (0,-2.02)
+  {$\langle\bm a,\bm\zeta\rangle
+    =\sum_{i=1}^{8}\eta_i\,\tensorproj{\bm a^{(i)}}{\bm z_i}$};
+\end{tikzpicture}

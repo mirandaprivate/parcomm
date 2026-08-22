@@ -1,0 +1,130 @@
+% !TEX root = main.tex
+\begin{table*}[!th]
+\resizebox{\textwidth}{!}{
+\begin{threeparttable}
+\caption{Comparison of PCS Performance on $8$-bit $2^{30}$-Vectors}
+\label{table:experimentPCS}
+\begin{tabular}
+	{ >{\arraybackslash}p{2.1cm}
+	>{\centering\arraybackslash}p{1.6cm} 
+	>{\centering\arraybackslash}p{1.6cm} 
+	>{\centering\arraybackslash}p{1.6cm}
+	>{\centering\arraybackslash}p{1.8cm}
+	>
+    %add a line to separate those run out of memory
+    {\centering\arraybackslash}p{1.5cm}
+	>{\centering\arraybackslash}p{1.5cm}
+ >{\centering\arraybackslash}p{2.0cm} 
+	>{\centering\arraybackslash}p{1.5cm} 
+	}
+\hline
+	&	\makecell{KZG10\cite{asiacrypt/KateZG10}} 
+	& \makecell{Sonic\cite{ccs/MallerBKM19}}
+	& \makecell{Marlin\cite{eurocrypt/ChiesaHMVW20}} 
+	& \makecell{BCMS20\cite{tcc/BunzCMS20}}
+	& \makecell{Hyrax\cite{sp/WahbyTSTW18}}
+	& \makecell{Ligero\cite{ccs/AmesHIV17}}
+	% \makecell{Libra on \\ $512 \times 512$ matrices\tnote{c} } 
+	& \makecell{Brakedown\cite{crypto/GolovnevLSTW21}}
+	% \makecell{Spartan with \\ $2^{24}$ constraints\tnote{d} }
+	& \makecell{This Work}
+	% \makecell{HyperPlonk\tnote{d} with \\ $2^{24}$ constraints\tnote{d} } 
+	% & \makecell{Ratio}
+\\
+\hline
+Setup time 
+& $933.38$s 
+& $3,837.30$s
+& $814.80$s 
+& $1,428.84$s
+& $13.35$ms
+& $1.36\mu$s 
+& $2.59$s
+& $1.02$s
+\\
+\hline
+Public pars. size 
+& $103.08$GB 
+& $206.16$GB
+& $206.16$GB 
+& $137.43$GB 
+& $2.10$GB
+& $17$B 
+& $688.85$MB
+& $11.01$GB
+\\
+\hline
+Commit time 
+& $686.34$s
+& $742.78$s
+& $822.22$s  
+& $305.94$s
+& $171.03$s
+& $130.32$s 
+& $127.03$s
+& $192.90$s
+\\
+\hline
+Commit size 
+& $48$B 
+& $96$B
+& $97$B 
+& $65$B
+& $2.10$
+& $64$B
+& $64$B
+& $576$B
+\\
+\hline
+Open time 
+& $967.14$s  
+& $1,019.46$s
+& $1,020.11$s  
+& $4,647.62$s
+& $3.72$s %
+& $98.27$s % 
+& $74.21$s
+& $5.77$s
+\\
+\hline
+Proof size 
+& $81$B
+& $57$B
+& $57$B 
+& $2.07$KB
+& $1.05$MB % 
+& $57.78$MB 
+& $215.59$MB
+& $36.78$KB
+\\ 
+\hline
+Verifier time 
+& $2.98$ms 
+& $1.94$ms 
+& $3.13$ms 
+& $1,897.38$s 
+& $1.21$s %
+& $4.92$s
+& $22.37$s
+& $56.10$ms
+\\
+\hline
+Peak RAM 
+& $789.08$GB  
+& $1,034.21$GB
+& $818.22$GB 
+& $1,154.64$GB
+& $102.12$GB %
+& $202.61$GB % 
+& $187.89$GB
+& $3.46$GB
+\\ 
+\hline
+\end{tabular}
+\begin{tablenotes}[para,flushleft]
+    Parallelized over 64 threads of CPUs.
+    Due to memory overflow on $2^{30}$-vectors, the performance of KZG10, Sonic, Marlin, and BCMS20 was estimated based on results for smaller $2^{29}$- or $2^{28}$-vectors with corresponding scaling factors.
+\end{tablenotes}
+\end{threeparttable}
+}
+\end{table*}

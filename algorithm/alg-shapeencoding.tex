@@ -1,0 +1,64 @@
+% !TEX root = main.tex
+\begin{algorithm}[!t]
+\caption{Shape Encoding and Shape Recovery}
+\label{alg:shapeencoding}
+
+\KwIn{
+(\textsf{Encode}) original matrix shapes
+$\{(\mu_\tau,\nu_\tau)\}_{\tau\in[t]}$;\\
+\qquad the deterministic splitting rule of
+Lemma~\ref{lemma:mat-splitting};\\
+\qquad (\textsf{Recover}) shape encoding
+$\bm\alpha=\concat{\bm\tau,\bm\alpha_l,\bm\alpha_r}\in\Field^{T\times3}$
+and
+$\bm\gamma=\concat{\bm\gamma_l,\bm\gamma_r}\in\Field^{T\times2}$
+}
+\KwOut{
+(\textsf{Encode}) $T$, $\bm\alpha$, $\bm\gamma$, and
+$\{k_j\}_{j\in[T]}$;\\
+\qquad (\textsf{Recover}) recovered shapes
+$\{(\mu_\tau,\nu_\tau)\}_{\tau\in[t]}$
+}
+
+\BlankLine
+\textbf{\textsf{Encode}: compute $(\bm\alpha,\bm\gamma)$ from the original shapes.}\\
+Initialize $\mathsf{records}\leftarrow[\,]$\;
+\For{$\tau\leftarrow1$ \KwTo $t$}{
+    Run the deterministic splitting rule of
+    Lemma~\ref{lemma:mat-splitting} on the
+    $\mu_\tau\times\nu_\tau$ matrix $\bm C_\tau$\;
+    \For{each emitted aligned submatrix}{
+        Read its row offset, row exponent, column offset, and column exponent as
+        $(\alpha_l,\gamma_l,\alpha_r,\gamma_r)$\;
+        $k\leftarrow2^{\gamma_l+\gamma_r}$\;
+        Append
+        $(\tau,\alpha_l,\gamma_l,\alpha_r,\gamma_r,k)$
+        to $\mathsf{records}$\;
+    }
+}
+Sort $\mathsf{records}$ by non-increasing $k$, breaking ties by
+$(\tau,\alpha_l,\alpha_r)$\;
+$T\leftarrow|\mathsf{records}|$\;
+\For{$j\leftarrow1$ \KwTo $T$}{
+    Read the $j$-th record as
+    $(\tau_j,\alpha_{l,j},\gamma_{l,j},
+      \alpha_{r,j},\gamma_{r,j},k_j)$\;
+}
+$\bm\alpha\leftarrow\concat{\bm\tau,\bm\alpha_l,\bm\alpha_r}$; \quad
+$\bm\gamma\leftarrow\concat{\bm\gamma_l,\bm\gamma_r}$\;
+\Return $(T,\bm\alpha,\bm\gamma,\{k_j\}_{j\in[T]})$\;
+
+\BlankLine
+\textbf{\textsf{Recover}: recover the original shapes from $(\bm\alpha,\bm\gamma)$.}\\
+$t\leftarrow\max_{j\in[T]}\tau_j$\;
+\For{$\tau\leftarrow1$ \KwTo $t$}{
+    $\mu_\tau\leftarrow0$; \quad $\nu_\tau\leftarrow0$\;
+}
+\For{$j\leftarrow1$ \KwTo $T$}{
+    $\mu_{\tau_j}\leftarrow
+    \max\{\mu_{\tau_j},\alpha_{l,j}+2^{\gamma_{l,j}}\}$\;
+    $\nu_{\tau_j}\leftarrow
+    \max\{\nu_{\tau_j},\alpha_{r,j}+2^{\gamma_{r,j}}\}$\;
+}
+\Return $\{(\mu_\tau,\nu_\tau)\}_{\tau\in[t]}$\;
+\end{algorithm}
