@@ -1007,121 +1007,58 @@ fn run(arguments: Arguments) -> Result<()> {
         println!("accepted=true");
     }
 
+    let commit_other_seconds = (commit_phase_seconds
+        - commit_profile.bva_commit_seconds
+        - commit_profile.shape_commit_seconds)
+        .max(0.0);
+    let tbv_compilation_evaluation_seconds = point_conversion_seconds + tbv_evaluation_seconds;
+    let opening_other_seconds = (opening_prove_seconds
+        - opening_profile.bva_open_seconds
+        - opening_profile.packed_eo_seconds
+        - tbv_compilation_evaluation_seconds
+        - opening_profile.terminal_open_seconds)
+        .max(0.0);
+    let reported_proof_size_bytes = component_sizes[1]
+        .checked_add(component_sizes[2])
+        .context("reported proof size overflowed")?;
+
     println!();
     println!("ParComm experiment: VERIFIED");
-    println!();
-    print_summary_section("Workload");
-    print_summary_row(
-        "Family",
-        match &arguments.workload {
-            Workload::Homogeneous { .. } => "homogeneous",
-            Workload::Model(_) => "model",
-        },
-    );
-    print_summary_row("Matrices", shapes.len());
-    match &arguments.workload {
-        Workload::Homogeneous { rows, cols, .. } => {
-            print_summary_row("Matrix shape", format!("{rows} x {cols}"));
-        }
-        Workload::Model(preset) => {
-            print_summary_row("Model preset", preset);
-        }
-    }
-    print_summary_row("Physical entries", physical_entries);
-    print_summary_row(
-        "Logical entries",
-        format!("{} (2^{logical_log})", layout.logical_len),
-    );
-    print_summary_row("Buckets", layout.bucket_count);
-    print_summary_row("Rayon threads", threads);
-    print_summary_row("Packing stride", stride);
-    print_summary_row(
-        "Shape validity",
-        if arguments.shape_validity_proof {
-            "verified"
-        } else {
-            "not_requested"
-        },
-    );
-
-    println!();
-    print_summary_section("Timing");
-    print_summary_seconds("Preprocessing", preprocessing_seconds);
-    print_summary_seconds("Dory setup", setup_seconds);
-    print_summary_seconds("Shape commitment", commit_profile.shape_commit_seconds);
-    print_summary_seconds("Dense BVA commitment", commit_profile.bva_commit_seconds);
-    print_summary_seconds("Commitment total", commit_phase_seconds);
-    print_summary_seconds("Point conversion", point_conversion_seconds);
-    print_summary_seconds("Packed EO-LiteBullet", opening_profile.packed_eo_seconds);
-    print_summary_seconds(
-        "  Packed cross terms",
-        opening_profile.packed_eo.timings.packed_cross_terms_seconds,
-    );
-    print_summary_seconds(
-        "  First fold",
-        opening_profile.packed_eo.timings.first_fold_seconds,
-    );
-    print_summary_seconds(
-        "  Reduced check",
-        opening_profile.packed_eo.timings.reduced_check_seconds,
-    );
-    print_summary_seconds(
-        "  Binary cross terms",
-        opening_profile.packed_eo.timings.binary_cross_terms_seconds,
-    );
-    print_summary_seconds(
-        "  Binary challenge",
-        opening_profile.packed_eo.timings.binary_challenge_seconds,
-    );
-    print_summary_seconds(
-        "  Binary fold",
-        opening_profile.packed_eo.timings.binary_fold_seconds,
-    );
-    print_summary_seconds(
-        "  Binary rounds total",
-        opening_profile.packed_eo.timings.binary_rounds_seconds(),
-    );
-    print_summary_seconds("Dense BVA opening", opening_profile.bva_open_seconds);
-    print_summary_seconds("TBV evaluation", tbv_evaluation_seconds);
-    print_summary_seconds("Terminal opening", opening_profile.terminal_open_seconds);
-    print_summary_seconds("Opening total", opening_prove_seconds);
-    print_summary_seconds("Prover total", total_prover_seconds);
-    print_summary_seconds("Verifier total", total_verifier_seconds);
-    print_summary_seconds("Protocol end-to-end", total_seconds);
-
-    println!();
-    print_summary_section("Proof");
-    print_summary_bytes("Proof size", proof_bytes.len());
-    print_summary_bytes("Commit statement", component_sizes[0]);
-    print_summary_bytes("Opening proof", component_sizes[2]);
-    print_summary_bytes("Packed EO proof", packed_eo_size_bytes);
-    print_summary_bytes("Dense BVA opening proof", bva_opening_size_bytes);
-    print_summary_bytes("Terminal opening proof", terminal_opening_size_bytes);
-    print_summary_row(
-        "Physical Dory proofs",
-        opening_proof.physical_dory_proof_count(),
-    );
-    print_summary_row("Proof SHA-256", format!("{proof_sha256:x}"));
-
-    println!();
-    print_summary_section("Verification and memory");
-    print_summary_row("Benchmark status", "VERIFIED");
-    print_summary_row("Decoded proof", true);
-    print_summary_row("Trailing bytes rejected", true);
-    print_summary_row("Accepted", true);
-    print_summary_row(
-        "Aggregated claim nonzero",
-        verification.aggregated_claim != Fr::from(0_u64),
-    );
-    print_summary_row("Final marker", "SECTION6_E2E_VERIFIED");
-    print_summary_row(
-        "Peak RSS",
-        format!(
-            "{peak_rss_kib} KiB ({:.2} GiB)",
-            peak_rss_kib as f64 / (1024.0 * 1024.0)
-        ),
-    );
     println!("verified_marker=SECTION6_E2E_VERIFIED");
+    println!();
+    println!("Final results");
+    println!("| Metric | Value | Breakdown |");
+    println!("| --- | ---: | --- |");
+    println!(
+        "| Commit time | {commit_phase_seconds:.3} s | BVA commitment {:.3} s; Shape commitment {:.3} s; Other {commit_other_seconds:.3} s |",
+        commit_profile.bva_commit_seconds,
+        commit_profile.shape_commit_seconds,
+    );
+    println!(
+        "| Commit size | {} | Persistent commit statement |",
+        format_bytes(component_sizes[0]),
+    );
+    println!(
+        "| Open time | {opening_prove_seconds:.3} s | BVA open {:.3} s; EO-LiteBullet {:.3} s; TBV compilation + evaluation proof {tbv_compilation_evaluation_seconds:.3} s; Terminal open {:.3} s; Other {opening_other_seconds:.3} s |",
+        opening_profile.bva_open_seconds,
+        opening_profile.packed_eo_seconds,
+        opening_profile.terminal_open_seconds,
+    );
+    println!(
+        "| Proof size | {} | Opening proof {}; Shape validity proof {} |",
+        format_bytes(reported_proof_size_bytes),
+        format_bytes(component_sizes[2]),
+        format_bytes(component_sizes[1]),
+    );
+    println!("| Verifier time | {total_verifier_seconds:.3} s | — |");
+    if peak_rss_kib == 0 {
+        println!("| Peak RSS | unavailable | RSS sampling returned no value |");
+    } else {
+        println!(
+            "| Peak RSS | {:.2} GiB | {peak_rss_kib} KiB |",
+            peak_rss_kib as f64 / (1024.0 * 1024.0),
+        );
+    }
     io::stdout().flush().context("flush experiment summary")?;
     Ok(())
 }
@@ -1240,7 +1177,7 @@ fn print_help() {
            --skip-input-hash        Skip only the model BVA SHA-256 pass\n\
            --allow-non-64-threads   Permit a local smoke run\n\
            --shape-validity-proof   Include the optional shape validity proof\n\
-           --summary-only           Print stages and final tables without detailed key=value metrics\n\
+           --summary-only           Print stages and the final table without detailed key=value metrics\n\
            -h, --help               Print this help"
     );
 }
@@ -1400,25 +1337,8 @@ fn report_active_stage(index: usize, name: &str) -> Result<()> {
         .context("flush active experiment stage")
 }
 
-fn print_summary_row(label: &str, value: impl std::fmt::Display) {
-    println!("| {label:<32} | {value:<68} |");
-}
-
-fn print_summary_section(name: &str) {
-    println!("{name}");
-    println!("| {:<32} | {:<68} |", "Metric", "Value");
-    println!("|{:-<34}|{:-<70}|", "", "");
-}
-
-fn print_summary_seconds(label: &str, seconds: f64) {
-    print_summary_row(label, format!("{seconds:.3} s"));
-}
-
-fn print_summary_bytes(label: &str, bytes: usize) {
-    print_summary_row(
-        label,
-        format!("{bytes} B ({:.2} KiB)", bytes as f64 / 1024.0),
-    );
+fn format_bytes(bytes: usize) -> String {
+    format!("{bytes} B ({:.2} KiB)", bytes as f64 / 1024.0)
 }
 
 struct MemoryMonitor {

@@ -40,7 +40,7 @@ RAYON_NUM_THREADS=8 cargo bench --quiet -p batch --bench experiment -- \
 ```
 
 A successful run decodes and verifies the serialized proof, rejects trailing
-bytes, prints four summary tables, and finishes with:
+bytes, prints the final result table, and includes:
 
 ```text
 verified_marker=SECTION6_E2E_VERIFIED
@@ -164,7 +164,7 @@ uses the same command with `llama70b-i8`.
 --skip-input-hash        Skip the model BVA SHA-256 pass
 --allow-non-64-threads   Permit a local smoke run
 --shape-validity-proof   Include the optional shape-validity proof
---summary-only           Print benchmark stages and final tables only
+--summary-only           Print benchmark stages and the final table only
 ```
 
 Print the complete command-line help with:
@@ -175,20 +175,22 @@ cargo bench --quiet -p batch --bench experiment -- --help
 
 ## Benchmark output
 
-The end-to-end benchmark reports four groups of measurements:
+The end-to-end benchmark finishes with one result table:
 
-| Group | Contents |
+| Metric | Reported value |
 | --- | --- |
-| Workload | Matrix count and shape, logical entries, bucket count, threads, packing stride, and shape-validity mode |
-| Timing | Input preparation, Dory setup, commitments, Packed EO sub-stages, BVA and auxiliary openings, prover, verifier, and end-to-end time |
-| Proof | Total and component proof sizes, Dory proof count, and proof SHA-256 |
-| Verification and memory | Exact decoding, trailing-byte rejection, acceptance markers, and peak RSS |
+| Commit time | Total with BVA commitment, shape commitment, and other overhead |
+| Commit size | Serialized persistent commitment statement |
+| Open time | Total with BVA open, EO-LiteBullet, TBV compilation and evaluation proof, terminal open, and other overhead |
+| Proof size | Opening proof plus the optional shape-validity proof |
+| Verifier time | Complete verifier time |
+| Peak RSS | Maximum resident memory observed during the experiment |
 
 The final `VERIFIED` result is printed only after proof serialization,
 independent decoding, and verification have all succeeded.
 
 Omit `--summary-only` when collecting the complete machine-readable
-`key=value` metric stream in addition to the stage messages and final tables.
+`key=value` metric stream in addition to the stage messages and final table.
 
 ## Performance profiling
 
