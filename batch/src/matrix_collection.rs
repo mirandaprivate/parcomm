@@ -1,10 +1,9 @@
 //! Section 6 matrix-claim collection compiled into one dense byte BVA.
 //!
-//! Matrix entries occupy one contiguous `Vec<i8>`. Aligned dyadic rectangles are
-//! represented only by descriptors over that allocation; no bucket or final
-//! padding is materialized. Public matrix MLE claims are deterministically
-//! compiled into a compact TBV after the dense BVA commitment fixes the
-//! collection batching challenge.
+//! Matrix entries and their zero padding occupy one contiguous `Vec<i8>` in
+//! sorted bucket order. Public matrix MLE claims are deterministically compiled
+//! into a compact TBV after the dense BVA commitment fixes the collection
+//! batching challenge.
 
 use std::{
     convert::Infallible,
@@ -21,31 +20,36 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
     bucketed_ip::{
-        BvaError, BvaI8Source, BvaLayout, EoLiteBulletVerification, TbvBucket, TensorBasisVector,
+        BvaError, BvaI16Source, BvaI8Geometry, BvaI8Source, BvaInteger, BvaLayout,
+        EoLiteBulletVerification, TbvBucket, TensorBasisVector,
     },
     fiat_shamir::FiatShamir,
     jolt_dory::{
-        commit_bva_i8_streaming, commit_field_vector_zk, commitment_binding_bytes,
-        evaluate_field_vector_standard, monomial_mle_evaluate_i8, open_field_vectors_batch_zk,
-        packed_i8_parcomm_statement_binding, prove_packed_i8_parcomm_precommitted,
-        verify_field_vectors_batch_zk, verify_packed_i8_bva_opening_as_subprotocol,
-        verify_packed_i8_parcomm_as_subprotocol, verify_packed_i8_tbv_inner_product,
-        CommittedDoryBva, CommittedDoryFieldVector, DenseI8BvaSource, DoryBackendError,
-        DoryCommitProfile, DoryProverParameters, DoryVerifierParameters, FieldVectorDoryProof,
-        PackedI8ParCommProfile, PackedI8ParCommProof, PackedI8ParCommProofDecodeError,
-        PackedI8ParCommProverError, PackedI8ParCommVerificationError, TerminalDoryVerification,
+        commit_bva_i16_streaming, commit_bva_i8_streaming, commit_field_vector_zk,
+        commitment_binding_bytes, evaluate_field_vector_standard, open_field_vectors_batch_zk,
+        packed_i8_parcomm_statement_binding, prove_packed_i16_parcomm_precommitted,
+        prove_packed_i8_parcomm_precommitted, verify_field_vectors_batch_zk,
+        verify_packed_i16_bva_opening_as_subprotocol, verify_packed_i16_parcomm_as_subprotocol,
+        verify_packed_i8_tbv_inner_product, CommittedDoryBva, CommittedDoryFieldVector,
+        DenseI16BvaSource, DenseI8BvaSource, DoryBackendError, DoryCommitProfile,
+        DoryProverParameters, DoryVerifierParameters, FieldVectorDoryProof, PackedI8ParCommProfile,
+        PackedI8ParCommProof, PackedI8ParCommProofDecodeError, PackedI8ParCommProverError,
+        PackedI8ParCommVerificationError, TerminalDoryVerification,
     },
 };
 
-/// A dense column-major byte matrix.
+/// A dense column-major matrix backed by one short-integer type.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DenseI8Matrix {
+pub struct DenseShortIntMatrix<Integer: BvaInteger> {
     shape: (usize, usize),
-    values: Vec<i8>,
+    values: Vec<Integer>,
 }
 
-impl DenseI8Matrix {
-    pub fn new(shape: (usize, usize), values: Vec<i8>) -> Result<Self, MatrixCollectionError> {
+pub type DenseI8Matrix = DenseShortIntMatrix<i8>;
+pub type DenseI16Matrix = DenseShortIntMatrix<i16>;
+
+impl<Integer: BvaInteger> DenseShortIntMatrix<Integer> {
+    pub fn new(shape: (usize, usize), values: Vec<Integer>) -> Result<Self, MatrixCollectionError> {
         validate_shape(0, shape)?;
         let expected = shape
             .0
@@ -65,7 +69,7 @@ impl DenseI8Matrix {
         self.shape
     }
 
-    pub fn values(&self) -> &[i8] {
+    pub fn values(&self) -> &[Integer] {
         &self.values
     }
 }
@@ -105,9 +109,12 @@ pub struct MatrixBucketDescriptor {
     matrix: usize,
     row_offset: usize,
     row_len: usize,
+    physical_row_len: usize,
     col_offset: usize,
     col_len: usize,
+    physical_col_len: usize,
     dense_offset: usize,
+    source_offset: usize,
 }
 
 impl MatrixBucketDescriptor {
@@ -131,12 +138,28 @@ impl MatrixBucketDescriptor {
         self.col_len
     }
 
+    pub fn physical_row_len(&self) -> usize {
+        self.physical_row_len
+    }
+
+    pub fn physical_col_len(&self) -> usize {
+        self.physical_col_len
+    }
+
     pub fn dense_offset(&self) -> usize {
         self.dense_offset
     }
 
+    pub fn source_offset(&self) -> usize {
+        self.source_offset
+    }
+
     pub fn entry_count(&self) -> usize {
         self.row_len * self.col_len
+    }
+
+    pub fn physical_entry_count(&self) -> usize {
+        self.physical_row_len * self.physical_col_len
     }
 
     fn row_log(&self) -> usize {
@@ -158,6 +181,8 @@ pub struct DenseBvaDescriptor {
 }
 
 impl DenseBvaDescriptor {
+    pub const SPLITTING_BUDGET: usize = 4;
+
     pub fn from_shapes(shapes: &[(usize, usize)]) -> Result<Self, MatrixCollectionError> {
         if shapes.is_empty() {
             return Err(MatrixCollectionError::EmptyCollection);
@@ -166,17 +191,20 @@ impl DenseBvaDescriptor {
         let mut buckets = Vec::new();
         for (matrix, &shape) in shapes.iter().enumerate() {
             validate_shape(matrix, shape)?;
-            let row_intervals = aligned_dyadic_intervals(shape.0);
-            let col_intervals = aligned_dyadic_intervals(shape.1);
+            let row_intervals = capped_aligned_dyadic_intervals(shape.0, Self::SPLITTING_BUDGET);
+            let col_intervals = capped_aligned_dyadic_intervals(shape.1, Self::SPLITTING_BUDGET);
             for &(row_offset, row_len) in &row_intervals {
                 for &(col_offset, col_len) in &col_intervals {
                     buckets.push(MatrixBucketDescriptor {
                         matrix,
                         row_offset,
                         row_len,
+                        physical_row_len: (shape.0 - row_offset).min(row_len),
                         col_offset,
                         col_len,
+                        physical_col_len: (shape.1 - col_offset).min(col_len),
                         dense_offset: 0,
+                        source_offset: 0,
                     });
                 }
             }
@@ -191,11 +219,16 @@ impl DenseBvaDescriptor {
                 .then_with(|| left.col_offset.cmp(&right.col_offset))
         });
 
+        let mut active_len = 0_usize;
         let mut physical_len = 0_usize;
         for bucket in &mut buckets {
-            bucket.dense_offset = physical_len;
-            physical_len = physical_len
+            bucket.dense_offset = active_len;
+            bucket.source_offset = physical_len;
+            active_len = active_len
                 .checked_add(bucket.entry_count())
+                .ok_or(MatrixCollectionError::LengthOverflow)?;
+            physical_len = physical_len
+                .checked_add(bucket.physical_entry_count())
                 .ok_or(MatrixCollectionError::LengthOverflow)?;
         }
         let lengths = buckets
@@ -203,7 +236,7 @@ impl DenseBvaDescriptor {
             .map(MatrixBucketDescriptor::entry_count)
             .collect::<Vec<_>>();
         let layout = BvaLayout::from_lengths(&lengths)?;
-        if layout.active_len() != physical_len
+        if layout.active_len() != active_len
             || layout.vector_lengths() != lengths
             || layout
                 .vector_to_bucket()
@@ -247,11 +280,19 @@ impl DenseBvaDescriptor {
     }
 
     pub fn conceptual_final_zeros(&self) -> usize {
+        self.logical_len() - self.layout.active_len()
+    }
+
+    pub fn conceptual_boundary_zeros(&self) -> usize {
+        self.layout.active_len() - self.physical_len
+    }
+
+    pub fn conceptual_zero_entries(&self) -> usize {
         self.logical_len() - self.physical_len
     }
 
     pub fn materialized_padding_entries(&self) -> usize {
-        0
+        self.conceptual_zero_entries()
     }
 
     pub fn layout(&self) -> &BvaLayout {
@@ -271,17 +312,24 @@ impl DenseBvaDescriptor {
     }
 
     pub fn bucket_ranges_are_a_partition(&self) -> bool {
-        let mut expected = 0_usize;
+        let mut expected_logical = 0_usize;
+        let mut expected_physical = 0_usize;
         for bucket in &self.buckets {
-            if bucket.dense_offset != expected {
+            if bucket.dense_offset != expected_logical || bucket.source_offset != expected_physical
+            {
                 return false;
             }
-            let Some(next) = expected.checked_add(bucket.entry_count()) else {
+            let Some(next_logical) = expected_logical.checked_add(bucket.entry_count()) else {
                 return false;
             };
-            expected = next;
+            let Some(next_physical) = expected_physical.checked_add(bucket.physical_entry_count())
+            else {
+                return false;
+            };
+            expected_logical = next_logical;
+            expected_physical = next_physical;
         }
-        expected == self.physical_len
+        expected_logical == self.layout.active_len() && expected_physical == self.physical_len
     }
 
     fn validate_canonical(&self) -> Result<(), MatrixCollectionError> {
@@ -589,14 +637,70 @@ impl RegisteredMatrixCollectionVerification {
     }
 }
 
-/// The one-allocation prover witness with conceptual dyadic buckets.
-pub struct DenseMatrixBva {
+/// The one-allocation prover witness with materialized dyadic-bucket padding.
+pub struct DenseMatrixBva<Integer: BvaInteger = i8> {
     descriptor: DenseBvaDescriptor,
-    values: Vec<i8>,
+    values: Vec<Integer>,
 }
 
-impl DenseMatrixBva {
-    pub fn from_matrices(matrices: &[DenseI8Matrix]) -> Result<Self, MatrixCollectionError> {
+impl<Integer: BvaInteger> DenseMatrixBva<Integer> {
+    /// Adopt an already converted dense BVA without widening its entries.
+    ///
+    /// The converter materializes boundary padding and the final suffix, so
+    /// every padded entry is checked before the witness is accepted.
+    pub fn from_dense_values(
+        descriptor: DenseBvaDescriptor,
+        values: Vec<Integer>,
+    ) -> Result<Self, MatrixCollectionError> {
+        descriptor.validate_canonical()?;
+        let expected = descriptor.logical_len();
+        if values.len() != expected {
+            return Err(MatrixCollectionError::PackedBvaLength {
+                expected,
+                actual: values.len(),
+            });
+        }
+        let invalid_boundary = descriptor.buckets.par_iter().find_map_any(|bucket| {
+            let start = bucket.dense_offset;
+            let bucket_values = &values[start..start + bucket.entry_count()];
+            for local_row in 0..bucket.row_len {
+                let row =
+                    &bucket_values[local_row * bucket.col_len..(local_row + 1) * bucket.col_len];
+                let physical_cols = if local_row < bucket.physical_row_len {
+                    bucket.physical_col_len
+                } else {
+                    0
+                };
+                if let Some(local_col) = row[physical_cols..]
+                    .iter()
+                    .position(|value| !value.is_zero())
+                {
+                    return Some(start + local_row * bucket.col_len + physical_cols + local_col);
+                }
+            }
+            None
+        });
+        let invalid_suffix = values[descriptor.layout.active_len()..]
+            .par_iter()
+            .position_any(|value| !value.is_zero())
+            .map(|offset| descriptor.layout.active_len() + offset);
+        if let Some(index) = invalid_boundary.or(invalid_suffix) {
+            return Err(MatrixCollectionError::NonZeroPackedPadding { index });
+        }
+        Ok(Self { descriptor, values })
+    }
+
+    /// Adopt a converted BVA in canonical dense-bucket order.
+    pub fn from_prepacked(
+        shapes: &[(usize, usize)],
+        values: Vec<Integer>,
+    ) -> Result<Self, MatrixCollectionError> {
+        Self::from_dense_values(DenseBvaDescriptor::from_shapes(shapes)?, values)
+    }
+
+    pub fn from_matrices(
+        matrices: &[DenseShortIntMatrix<Integer>],
+    ) -> Result<Self, MatrixCollectionError> {
         if matrices.is_empty() {
             return Err(MatrixCollectionError::EmptyCollection);
         }
@@ -617,29 +721,33 @@ impl DenseMatrixBva {
         }
         let shapes = matrices
             .iter()
-            .map(DenseI8Matrix::shape)
+            .map(DenseShortIntMatrix::shape)
             .collect::<Vec<_>>();
-        Self::from_fn(&shapes, |matrix, row, col| {
+        Self::from_short_fn(&shapes, |matrix, row, col| {
             let dense = &matrices[matrix];
             dense.values[col * dense.shape.0 + row]
         })
     }
 
-    /// Build the final dense BVA directly from conceptual matrix entries.
+    /// Build the final dense BVA directly from matrix entries.
     ///
-    /// This path allocates exactly one `physical_len` byte vector and fills each
-    /// conceptual bucket in parallel, so large generated matrices never coexist
-    /// with a second matrix-shaped allocation.
-    pub fn from_fn<ValueAt>(
+    /// This path allocates exactly one `logical_len` short-integer vector. Every sorted
+    /// bucket occupies its full padded rectangle and the final BVA suffix is
+    /// stored as zero in the same allocation.
+    pub fn from_short_fn<ValueAt>(
         shapes: &[(usize, usize)],
         value_at: ValueAt,
     ) -> Result<Self, MatrixCollectionError>
     where
-        ValueAt: Fn(usize, usize, usize) -> i8 + Sync,
+        ValueAt: Fn(usize, usize, usize) -> Integer + Sync,
     {
         let descriptor = DenseBvaDescriptor::from_shapes(shapes)?;
-        let mut values = vec![0_i8; descriptor.physical_len];
-        fill_bucket_range(&mut values, &descriptor.buckets, &value_at);
+        let mut values = vec![Integer::from(false); descriptor.logical_len()];
+        fill_bucket_range(
+            &mut values[..descriptor.layout.active_len()],
+            &descriptor.buckets,
+            &value_at,
+        );
         Ok(Self { descriptor, values })
     }
 
@@ -647,18 +755,93 @@ impl DenseMatrixBva {
         &self.descriptor
     }
 
-    pub fn values(&self) -> &[i8] {
+    pub fn values(&self) -> &[Integer] {
         &self.values
     }
 
-    pub fn values_mut(&mut self) -> &mut [i8] {
+    pub fn values_mut(&mut self) -> &mut [Integer] {
         &mut self.values
     }
 
-    /// Independently evaluate the contiguous dense BVA at one global MLE point.
+    /// Evaluate one original matrix directly from the prepacked BVA.
+    pub fn matrix_mle_evaluate<F: PrimeField>(
+        &self,
+        matrix: usize,
+        left_point: &[F],
+        right_point: &[F],
+    ) -> Result<F, MatrixCollectionError> {
+        let &shape = self.descriptor.matrix_shapes.get(matrix).ok_or(
+            MatrixCollectionError::MatrixIndex {
+                matrix,
+                count: self.descriptor.matrix_count(),
+            },
+        )?;
+        validate_point_lengths(matrix, shape, left_point.len(), right_point.len())?;
+        let left = tensor_weights(left_point);
+        let right = tensor_weights(right_point);
+        Ok(self
+            .descriptor
+            .buckets
+            .par_iter()
+            .filter(|bucket| bucket.matrix == matrix)
+            .map(|bucket| {
+                let start = bucket.dense_offset;
+                let bucket_values = &self.values[start..start + bucket.entry_count()];
+                bucket_values[..bucket.physical_row_len * bucket.col_len]
+                    .par_chunks(bucket.col_len)
+                    .enumerate()
+                    .map(|(local_row, row)| {
+                        let row_weight = left[bucket.row_offset + local_row];
+                        row[..bucket.physical_col_len]
+                            .iter()
+                            .enumerate()
+                            .map(|(local_col, &value)| {
+                                value.to_field::<F>()
+                                    * right[bucket.col_offset + local_col]
+                                    * row_weight
+                            })
+                            .sum::<F>()
+                    })
+                    .sum::<F>()
+            })
+            .sum())
+    }
+
+    /// Independently evaluate the padded BVA at one global MLE point.
     pub fn evaluate_dense_at(&self, point: &[Fr]) -> Result<Fr, MatrixCollectionError> {
-        monomial_mle_evaluate_i8(&self.values, self.descriptor.logical_len(), point)
-            .map_err(|error| MatrixCollectionError::DenseEvaluation(error.to_string()))
+        if point.len() != self.descriptor.required_dory_log() {
+            return Err(MatrixCollectionError::DenseEvaluation(format!(
+                "point length {} does not match BVA log {}",
+                point.len(),
+                self.descriptor.required_dory_log()
+            )));
+        }
+        Ok(self
+            .descriptor
+            .buckets
+            .par_iter()
+            .map(|bucket| {
+                let bucket_log = bucket.row_log() + bucket.col_log();
+                let fixed = fixed_offset_factor(bucket.dense_offset, bucket_log, point);
+                let col_weights = tensor_weights(&point[..bucket.col_log()]);
+                let row_weights = tensor_weights(&point[bucket.col_log()..bucket_log]);
+                let start = bucket.dense_offset;
+                let end = start + bucket.entry_count();
+                self.values[start..end]
+                    .par_chunks(bucket.col_len)
+                    .zip(&row_weights)
+                    .map(|(row, row_weight)| {
+                        let row_sum = row
+                            .iter()
+                            .zip(&col_weights)
+                            .map(|(&value, col_weight)| value.to_field::<Fr>() * col_weight)
+                            .sum::<Fr>();
+                        row_sum * row_weight
+                    })
+                    .sum::<Fr>()
+                    * fixed
+            })
+            .sum())
     }
 
     /// Independently check a derived BVA claim against the dense witness.
@@ -673,11 +856,76 @@ impl DenseMatrixBva {
     }
 }
 
-impl BvaI8Source for DenseMatrixBva {
+impl DenseMatrixBva<i8> {
+    pub fn from_prepacked_i8(
+        shapes: &[(usize, usize)],
+        values: Vec<i8>,
+    ) -> Result<Self, MatrixCollectionError> {
+        Self::from_prepacked(shapes, values)
+    }
+
+    pub fn from_fn<ValueAt>(
+        shapes: &[(usize, usize)],
+        value_at: ValueAt,
+    ) -> Result<Self, MatrixCollectionError>
+    where
+        ValueAt: Fn(usize, usize, usize) -> i8 + Sync,
+    {
+        Self::from_short_fn(shapes, value_at)
+    }
+}
+
+impl DenseMatrixBva<i16> {
+    pub fn from_prepacked_i16(
+        shapes: &[(usize, usize)],
+        values: Vec<i16>,
+    ) -> Result<Self, MatrixCollectionError> {
+        Self::from_prepacked(shapes, values)
+    }
+
+    pub fn from_i16_fn<ValueAt>(
+        shapes: &[(usize, usize)],
+        value_at: ValueAt,
+    ) -> Result<Self, MatrixCollectionError>
+    where
+        ValueAt: Fn(usize, usize, usize) -> i16 + Sync,
+    {
+        Self::from_short_fn(shapes, value_at)
+    }
+}
+
+impl BvaI8Source for DenseMatrixBva<i8> {
     type Error = Infallible;
 
     fn layout(&self) -> &BvaLayout {
         &self.descriptor.layout
+    }
+
+    fn vector_geometry(&self, vector_index: usize) -> Option<BvaI8Geometry> {
+        let bucket = self.descriptor.buckets.get(vector_index)?;
+        BvaI8Geometry::rectangle(
+            bucket.row_len,
+            bucket.col_len,
+            bucket.row_len,
+            bucket.col_len,
+        )
+    }
+
+    fn materialized_padding_entries(&self) -> usize {
+        self.descriptor.materialized_padding_entries()
+    }
+
+    fn indexed_vectors(&self) -> Option<Vec<&[i8]>> {
+        Some(
+            self.descriptor
+                .buckets
+                .iter()
+                .map(|bucket| {
+                    let start = bucket.dense_offset;
+                    &self.values[start..start + bucket.entry_count()]
+                })
+                .collect(),
+        )
     }
 
     fn for_each_vector(&mut self, visit: &mut dyn FnMut(usize, &[i8])) -> Result<(), Self::Error> {
@@ -690,9 +938,142 @@ impl BvaI8Source for DenseMatrixBva {
     }
 }
 
-impl DenseI8BvaSource for DenseMatrixBva {
+impl DenseI8BvaSource for DenseMatrixBva<i8> {
     fn dense_values(&self) -> &[i8] {
         &self.values
+    }
+}
+
+impl BvaI16Source for DenseMatrixBva<i16> {
+    type Error = Infallible;
+
+    fn layout(&self) -> &BvaLayout {
+        &self.descriptor.layout
+    }
+
+    fn vector_geometry(&self, vector_index: usize) -> Option<BvaI8Geometry> {
+        let bucket = self.descriptor.buckets.get(vector_index)?;
+        BvaI8Geometry::rectangle(
+            bucket.row_len,
+            bucket.col_len,
+            bucket.row_len,
+            bucket.col_len,
+        )
+    }
+
+    fn materialized_padding_entries(&self) -> usize {
+        self.descriptor.materialized_padding_entries()
+    }
+
+    fn indexed_vectors(&self) -> Option<Vec<&[i16]>> {
+        Some(
+            self.descriptor
+                .buckets
+                .iter()
+                .map(|bucket| {
+                    let start = bucket.dense_offset;
+                    &self.values[start..start + bucket.entry_count()]
+                })
+                .collect(),
+        )
+    }
+
+    fn for_each_vector(&mut self, visit: &mut dyn FnMut(usize, &[i16])) -> Result<(), Self::Error> {
+        for (vector, bucket) in self.descriptor.buckets.iter().enumerate() {
+            let start = bucket.dense_offset;
+            let end = start + bucket.entry_count();
+            visit(vector, &self.values[start..end]);
+        }
+        Ok(())
+    }
+}
+
+impl DenseI16BvaSource for DenseMatrixBva<i16> {
+    fn dense_values(&self) -> &[i16] {
+        &self.values
+    }
+}
+
+/// Short-integer types supported by the matrix-collection Dory pipeline.
+pub trait MatrixBvaInteger: BvaInteger {
+    fn commit_bva(
+        prover_parameters: &DoryProverParameters,
+        source: &DenseMatrixBva<Self>,
+        bit_width: usize,
+    ) -> Result<CommittedDoryBva, DoryBackendError>;
+
+    fn prove_precommitted(
+        prover_parameters: &DoryProverParameters,
+        source: &mut DenseMatrixBva<Self>,
+        tbv: &TensorBasisVector<Fr>,
+        claimed: Fr,
+        bit_width: usize,
+        committed: CommittedDoryBva,
+    ) -> Result<
+        (PackedI8ParCommProof, PackedI8ParCommProfile),
+        PackedI8ParCommProverError<Infallible>,
+    >;
+}
+
+impl MatrixBvaInteger for i8 {
+    fn commit_bva(
+        prover_parameters: &DoryProverParameters,
+        source: &DenseMatrixBva<Self>,
+        bit_width: usize,
+    ) -> Result<CommittedDoryBva, DoryBackendError> {
+        commit_bva_i8_streaming(prover_parameters, source, bit_width)
+    }
+
+    fn prove_precommitted(
+        prover_parameters: &DoryProverParameters,
+        source: &mut DenseMatrixBva<Self>,
+        tbv: &TensorBasisVector<Fr>,
+        claimed: Fr,
+        bit_width: usize,
+        committed: CommittedDoryBva,
+    ) -> Result<
+        (PackedI8ParCommProof, PackedI8ParCommProfile),
+        PackedI8ParCommProverError<Infallible>,
+    > {
+        prove_packed_i8_parcomm_precommitted(
+            prover_parameters,
+            source,
+            tbv,
+            claimed,
+            bit_width,
+            committed,
+        )
+    }
+}
+
+impl MatrixBvaInteger for i16 {
+    fn commit_bva(
+        prover_parameters: &DoryProverParameters,
+        source: &DenseMatrixBva<Self>,
+        bit_width: usize,
+    ) -> Result<CommittedDoryBva, DoryBackendError> {
+        commit_bva_i16_streaming(prover_parameters, source, bit_width)
+    }
+
+    fn prove_precommitted(
+        prover_parameters: &DoryProverParameters,
+        source: &mut DenseMatrixBva<Self>,
+        tbv: &TensorBasisVector<Fr>,
+        claimed: Fr,
+        bit_width: usize,
+        committed: CommittedDoryBva,
+    ) -> Result<
+        (PackedI8ParCommProof, PackedI8ParCommProfile),
+        PackedI8ParCommProverError<Infallible>,
+    > {
+        prove_packed_i16_parcomm_precommitted(
+            prover_parameters,
+            source,
+            tbv,
+            claimed,
+            bit_width,
+            committed,
+        )
     }
 }
 
@@ -763,17 +1144,17 @@ pub fn commit_matrix_shapes(
     })
 }
 
-/// Commit the contiguous i8 BVA after the shape commitments have been fixed.
-pub fn commit_registered_dense_bva(
+/// Commit the contiguous short-integer BVA after fixing the shape commitments.
+pub fn commit_registered_dense_bva<Integer: MatrixBvaInteger>(
     prover_parameters: &DoryProverParameters,
-    source: &DenseMatrixBva,
+    source: &DenseMatrixBva<Integer>,
     bit_width: usize,
     shape: CommittedMatrixShapes,
 ) -> Result<RegisteredMatrixCollection, MatrixCollectionProverError> {
     if source.descriptor != shape.descriptor {
         return Err(MatrixCollectionError::RegistrationMismatch.into());
     }
-    let bva = commit_bva_i8_streaming(prover_parameters, source, bit_width)
+    let bva = Integer::commit_bva(prover_parameters, source, bit_width)
         .map_err(matrix_collection_backend_error)?;
     let commitments = MatrixCollectionCommitments {
         shape: shape.commitments(),
@@ -797,9 +1178,9 @@ pub fn commit_registered_dense_bva(
 }
 
 /// Convenience wrapper for the ordered shape-then-BVA registration phase.
-pub fn commit_matrix_collection(
+pub fn commit_matrix_collection<Integer: MatrixBvaInteger>(
     prover_parameters: &DoryProverParameters,
-    source: &DenseMatrixBva,
+    source: &DenseMatrixBva<Integer>,
     bit_width: usize,
 ) -> Result<RegisteredMatrixCollection, MatrixCollectionProverError> {
     let shape = commit_matrix_shapes(prover_parameters, source.descriptor())?;
@@ -808,9 +1189,9 @@ pub fn commit_matrix_collection(
 
 /// Open a previously registered collection and append the final shape/point
 /// consistency openings after Packed EO and the dense BVA opening.
-pub fn prove_registered_matrix_claim_collection(
+pub fn prove_registered_matrix_claim_collection<Integer: MatrixBvaInteger>(
     prover_parameters: &DoryProverParameters,
-    source: &mut DenseMatrixBva,
+    source: &mut DenseMatrixBva<Integer>,
     claims: &[MatrixMleClaim<Fr>],
     registration: &RegisteredMatrixCollection,
 ) -> Result<(RegisteredMatrixCollectionProof, PackedI8ParCommProfile), MatrixCollectionProverError>
@@ -823,7 +1204,7 @@ pub fn prove_registered_matrix_claim_collection(
         claims,
         registration.bit_width,
     )?;
-    let (packed, profile) = prove_packed_i8_parcomm_precommitted(
+    let (packed, profile) = Integer::prove_precommitted(
         prover_parameters,
         source,
         &compiled.tbv,
@@ -876,7 +1257,7 @@ pub fn verify_registered_bva_opening(
         return Err(MatrixCollectionError::RegistrationMismatch.into());
     }
     let compiled = descriptor.compile_for_registered_proof(commitments, claims, bit_width)?;
-    let eo = verify_packed_i8_bva_opening_as_subprotocol(
+    let eo = verify_packed_i16_bva_opening_as_subprotocol(
         verifier_parameters,
         &compiled.tbv,
         compiled.claimed,
@@ -980,21 +1361,20 @@ pub fn verify_registered_matrix_claim_collection(
 
 /// Commit the dense BVA, derive `omega`, compile the public claims, and run the
 /// commitment-bound Packed EO plus Jolt Dory opening pipeline.
-pub fn prove_matrix_claim_collection(
+pub fn prove_matrix_claim_collection<Integer: MatrixBvaInteger>(
     prover_parameters: &DoryProverParameters,
-    source: &mut DenseMatrixBva,
+    source: &mut DenseMatrixBva<Integer>,
     claims: &[MatrixMleClaim<Fr>],
     bit_width: usize,
 ) -> Result<(PackedI8ParCommProof, PackedI8ParCommProfile), MatrixCollectionProverError> {
     source.descriptor.validate_claims(claims)?;
-    let committed =
-        commit_bva_i8_streaming(prover_parameters, source, bit_width).map_err(|error| {
-            MatrixCollectionProverError::Packed(PackedI8ParCommProverError::Backend(error))
-        })?;
+    let committed = Integer::commit_bva(prover_parameters, source, bit_width).map_err(|error| {
+        MatrixCollectionProverError::Packed(PackedI8ParCommProverError::Backend(error))
+    })?;
     let compiled = source
         .descriptor
         .compile_for_proof(&committed.commitment, claims, bit_width)?;
-    prove_packed_i8_parcomm_precommitted(
+    Integer::prove_precommitted(
         prover_parameters,
         source,
         &compiled.tbv,
@@ -1014,7 +1394,7 @@ pub fn verify_matrix_claim_collection_as_subprotocol(
     proof: &PackedI8ParCommProof,
 ) -> Result<TerminalDoryVerification, MatrixCollectionVerificationError> {
     let compiled = descriptor.compile_for_proof(&proof.matrix_commitment, claims, bit_width)?;
-    verify_packed_i8_parcomm_as_subprotocol(
+    verify_packed_i16_parcomm_as_subprotocol(
         verifier_parameters,
         &compiled.tbv,
         compiled.claimed,
@@ -1043,7 +1423,7 @@ pub fn verify_matrix_claim_collection(
 
 /// Direct column-major matrix evaluation in Section 6 reverse-tensor order.
 pub fn matrix_mle_evaluate<F: PrimeField>(
-    matrix: &DenseI8Matrix,
+    matrix: &DenseShortIntMatrix<impl BvaInteger>,
     left_point: &[F],
     right_point: &[F],
 ) -> Result<F, MatrixCollectionError> {
@@ -1059,7 +1439,7 @@ pub fn matrix_mle_evaluate<F: PrimeField>(
             let column_sum = values
                 .iter()
                 .zip(&left)
-                .map(|(&value, row_coefficient)| i8_to_field::<F>(value) * row_coefficient)
+                .map(|(&value, row_coefficient)| value.to_field::<F>() * row_coefficient)
                 .sum::<F>();
             *column_coefficient * column_sum
         })
@@ -1117,6 +1497,17 @@ pub enum MatrixCollectionError {
         expected: usize,
         actual: usize,
     },
+    MatrixIndex {
+        matrix: usize,
+        count: usize,
+    },
+    PackedBvaLength {
+        expected: usize,
+        actual: usize,
+    },
+    NonZeroPackedPadding {
+        index: usize,
+    },
     PointLength {
         matrix: usize,
         side: &'static str,
@@ -1157,6 +1548,18 @@ impl Display for MatrixCollectionError {
             } => write!(
                 formatter,
                 "matrix {matrix} length mismatch: expected {expected}, got {actual}"
+            ),
+            Self::MatrixIndex { matrix, count } => write!(
+                formatter,
+                "matrix index {matrix} is outside collection of size {count}"
+            ),
+            Self::PackedBvaLength { expected, actual } => write!(
+                formatter,
+                "prepacked BVA length mismatch: expected {expected}, got {actual}"
+            ),
+            Self::NonZeroPackedPadding { index } => write!(
+                formatter,
+                "prepacked BVA padding is nonzero at dense index {index}"
             ),
             Self::PointLength {
                 matrix,
@@ -1470,22 +1873,31 @@ fn previous_power_of_two(value: usize) -> usize {
     1_usize << (usize::BITS - 1 - value.leading_zeros())
 }
 
-fn aligned_dyadic_intervals(length: usize) -> Vec<(usize, usize)> {
-    let mut intervals = Vec::new();
-    let mut offset = 0_usize;
-    while offset < length {
-        let remaining = length - offset;
-        let fitting = previous_power_of_two(remaining);
-        let aligned = if offset == 0 {
-            fitting
-        } else {
-            1_usize << offset.trailing_zeros()
-        };
-        let size = fitting.min(aligned);
-        intervals.push((offset, size));
-        offset += size;
+fn capped_aligned_dyadic_intervals(length: usize, budget: usize) -> Vec<(usize, usize)> {
+    debug_assert!(length > 0);
+    debug_assert!(budget >= 2);
+    let mut sizes = Vec::with_capacity(budget);
+    let mut remaining = length;
+    while remaining != 0 && sizes.len() < budget {
+        let size = previous_power_of_two(remaining);
+        sizes.push(size);
+        remaining -= size;
     }
-    intervals
+    if remaining != 0 {
+        let last = sizes
+            .last_mut()
+            .expect("a positive length emits a first dyadic interval");
+        *last *= 2;
+    }
+    let mut offset = 0_usize;
+    sizes
+        .into_iter()
+        .map(|size| {
+            let interval = (offset, size);
+            offset += size;
+            interval
+        })
+        .collect()
 }
 
 fn omega_powers<F: PrimeField>(omega: F, count: usize) -> Vec<F> {
@@ -1546,12 +1958,13 @@ fn i8_to_field<F: PrimeField>(value: i8) -> F {
 
 const PARALLEL_FILL_THRESHOLD: usize = 1 << 18;
 
-fn fill_bucket_range<ValueAt>(
-    values: &mut [i8],
+fn fill_bucket_range<Integer, ValueAt>(
+    values: &mut [Integer],
     buckets: &[MatrixBucketDescriptor],
     value_at: &ValueAt,
 ) where
-    ValueAt: Fn(usize, usize, usize) -> i8 + Sync,
+    Integer: BvaInteger,
+    ValueAt: Fn(usize, usize, usize) -> Integer + Sync,
 {
     if buckets.is_empty() {
         debug_assert!(values.is_empty());
@@ -1561,15 +1974,27 @@ fn fill_bucket_range<ValueAt>(
         let bucket = &buckets[0];
         if values.len() >= PARALLEL_FILL_THRESHOLD {
             values.par_iter_mut().enumerate().for_each(|(flat, slot)| {
-                let row = bucket.row_offset + flat / bucket.col_len;
-                let col = bucket.col_offset + flat % bucket.col_len;
-                *slot = value_at(bucket.matrix, row, col);
+                let local_row = flat / bucket.col_len;
+                let local_col = flat % bucket.col_len;
+                if local_row < bucket.physical_row_len && local_col < bucket.physical_col_len {
+                    *slot = value_at(
+                        bucket.matrix,
+                        bucket.row_offset + local_row,
+                        bucket.col_offset + local_col,
+                    );
+                }
             });
         } else {
             for (flat, slot) in values.iter_mut().enumerate() {
-                let row = bucket.row_offset + flat / bucket.col_len;
-                let col = bucket.col_offset + flat % bucket.col_len;
-                *slot = value_at(bucket.matrix, row, col);
+                let local_row = flat / bucket.col_len;
+                let local_col = flat % bucket.col_len;
+                if local_row < bucket.physical_row_len && local_col < bucket.physical_col_len {
+                    *slot = value_at(
+                        bucket.matrix,
+                        bucket.row_offset + local_row,
+                        bucket.col_offset + local_col,
+                    );
+                }
             }
         }
         return;

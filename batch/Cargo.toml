@@ -31,4 +31,22 @@ jolt-poly = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba
 jolt-sumcheck = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
 jolt-transcript = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 bincode = "1.3"
+bytemuck = "1.23"
+
+[[bench]]
+name = "experiment"
+harness = false
+
+[[bench]]
+name = "experiment_llama"
+harness = false
+
+[[bench]]
+name = "packed_eo_ab"
+harness = false
+
+[[bench]]
+name = "short_field_mul"
+harness = false

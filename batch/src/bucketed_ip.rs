@@ -1,30 +1,317 @@
-//! Decreasing-size BVA metadata and packed EO-LiteBullet for byte witnesses.
+//! Decreasing-size BVA metadata and packed EO-LiteBullet for signed integers.
 //!
-//! Physical witness entries remain in `i8` storage. The first packed EO step
+//! Physical witness entries remain in `i8` or `i16` storage. The first packed EO step
 //! converts only one field element per packing stride, after which all binary
 //! folds reuse that reduced field allocation in place.
 
 use std::{
     fmt::{Display, Formatter},
     io::Cursor,
+    mem::size_of,
     time::Instant,
 };
 
 use ark_crypto_primitives::sponge::Absorb;
 use ark_ff::{Field, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError};
+use mat::ShortInt;
 use rayon::prelude::*;
 
 use crate::fiat_shamir::FiatShamir;
 
-/// A rewindable source backed by exactly one signed byte per witness entry.
+/// Primitive [`ShortInt`] storage accepted by the packed BVA path.
+///
+/// The entry type is the only width selector used by Packed EO: choose `i8`
+/// for native 8-bit storage or `i16` for native 16-bit storage. Both choices
+/// execute the same generic projection, compression, and folding code.
+pub trait BvaInteger: ShortInt + 'static {
+    const BITS: usize;
+
+    fn is_zero(self) -> bool;
+
+    fn unsigned_abs_u64(self) -> u64;
+
+    fn to_i32(self) -> i32;
+
+    fn to_field<F: PrimeField>(self) -> F;
+}
+
+impl BvaInteger for i8 {
+    const BITS: usize = 8;
+
+    fn is_zero(self) -> bool {
+        self == 0
+    }
+
+    fn unsigned_abs_u64(self) -> u64 {
+        u64::from(self.unsigned_abs())
+    }
+
+    fn to_i32(self) -> i32 {
+        i32::from(self)
+    }
+
+    fn to_field<F: PrimeField>(self) -> F {
+        i8_to_field(self)
+    }
+}
+
+impl BvaInteger for i16 {
+    const BITS: usize = 16;
+
+    fn is_zero(self) -> bool {
+        self == 0
+    }
+
+    fn unsigned_abs_u64(self) -> u64 {
+        u64::from(self.unsigned_abs())
+    }
+
+    fn to_i32(self) -> i32 {
+        i32::from(self)
+    }
+
+    fn to_field<F: PrimeField>(self) -> F {
+        if self >= 0 {
+            F::from(self as u64)
+        } else {
+            -F::from((-(self as i32)) as u64)
+        }
+    }
+}
+
+/// A rewindable source backed by one contiguous signed-byte BVA.
 pub trait BvaI8Source {
     type Error;
 
     fn layout(&self) -> &BvaLayout;
 
+    /// Describe how the stored entries sit inside one logical bucket.
+    ///
+    /// Ordinary vectors occupy a prefix. Matrix boundary buckets override this
+    /// with a row-major rectangle whose missing row and column suffixes are
+    /// conceptual zeros.
+    fn vector_geometry(&self, vector_index: usize) -> Option<BvaI8Geometry> {
+        let layout = self.layout();
+        let bucket_index = *layout.vector_to_bucket().get(vector_index)?;
+        BvaI8Geometry::prefix(
+            *layout.bucket_sizes().get(bucket_index)?,
+            *layout.vector_lengths().get(vector_index)?,
+        )
+    }
+
+    /// Number of stored zero-extension bytes in the complete BVA allocation.
+    fn materialized_padding_entries(&self) -> usize {
+        0
+    }
+
+    /// Return all physical vectors in canonical vector-index order when the
+    /// source supports zero-copy indexed access.
+    ///
+    /// Packed EO uses this snapshot to schedule size-ordered buckets in
+    /// strided worker lanes. Rewind-only sources may keep the default and use
+    /// the serial compatibility path.
+    fn indexed_vectors(&self) -> Option<Vec<&[i8]>> {
+        None
+    }
+
     fn for_each_vector(&mut self, visit: &mut dyn FnMut(usize, &[i8])) -> Result<(), Self::Error>;
 }
+
+/// A rewindable source backed by one contiguous signed-16-bit BVA.
+pub trait BvaI16Source {
+    type Error;
+
+    fn layout(&self) -> &BvaLayout;
+
+    fn vector_geometry(&self, vector_index: usize) -> Option<BvaI8Geometry> {
+        let layout = self.layout();
+        let bucket_index = *layout.vector_to_bucket().get(vector_index)?;
+        BvaI8Geometry::prefix(
+            *layout.bucket_sizes().get(bucket_index)?,
+            *layout.vector_lengths().get(vector_index)?,
+        )
+    }
+
+    fn materialized_padding_entries(&self) -> usize {
+        0
+    }
+
+    fn indexed_vectors(&self) -> Option<Vec<&[i16]>> {
+        None
+    }
+
+    fn for_each_vector(&mut self, visit: &mut dyn FnMut(usize, &[i16])) -> Result<(), Self::Error>;
+}
+
+/// A rewindable BVA source selected by its native [`ShortInt`] entry type.
+///
+/// Implement this interface when the source itself is generic over `i8` and
+/// `i16`. [`BvaI8Source`] and [`BvaI16Source`] remain compatibility adapters
+/// for existing sources.
+pub trait BvaSource<Entry: BvaInteger> {
+    type Error;
+
+    fn layout(&self) -> &BvaLayout;
+
+    fn vector_geometry(&self, vector_index: usize) -> Option<BvaGeometry> {
+        let layout = self.layout();
+        let bucket_index = *layout.vector_to_bucket().get(vector_index)?;
+        BvaGeometry::prefix(
+            *layout.bucket_sizes().get(bucket_index)?,
+            *layout.vector_lengths().get(vector_index)?,
+        )
+    }
+
+    fn materialized_padding_entries(&self) -> usize {
+        0
+    }
+
+    fn indexed_vectors(&self) -> Option<Vec<&[Entry]>> {
+        None
+    }
+
+    fn for_each_vector(
+        &mut self,
+        visit: &mut dyn FnMut(usize, &[Entry]),
+    ) -> Result<(), Self::Error>;
+}
+
+impl<Source: BvaI8Source> BvaSource<i8> for Source {
+    type Error = Source::Error;
+
+    fn layout(&self) -> &BvaLayout {
+        BvaI8Source::layout(self)
+    }
+
+    fn vector_geometry(&self, vector_index: usize) -> Option<BvaI8Geometry> {
+        BvaI8Source::vector_geometry(self, vector_index)
+    }
+
+    fn materialized_padding_entries(&self) -> usize {
+        BvaI8Source::materialized_padding_entries(self)
+    }
+
+    fn indexed_vectors(&self) -> Option<Vec<&[i8]>> {
+        BvaI8Source::indexed_vectors(self)
+    }
+
+    fn for_each_vector(&mut self, visit: &mut dyn FnMut(usize, &[i8])) -> Result<(), Self::Error> {
+        BvaI8Source::for_each_vector(self, visit)
+    }
+}
+
+impl<Source: BvaI16Source> BvaSource<i16> for Source {
+    type Error = Source::Error;
+
+    fn layout(&self) -> &BvaLayout {
+        BvaI16Source::layout(self)
+    }
+
+    fn vector_geometry(&self, vector_index: usize) -> Option<BvaI8Geometry> {
+        BvaI16Source::vector_geometry(self, vector_index)
+    }
+
+    fn materialized_padding_entries(&self) -> usize {
+        BvaI16Source::materialized_padding_entries(self)
+    }
+
+    fn indexed_vectors(&self) -> Option<Vec<&[i16]>> {
+        BvaI16Source::indexed_vectors(self)
+    }
+
+    fn for_each_vector(&mut self, visit: &mut dyn FnMut(usize, &[i16])) -> Result<(), Self::Error> {
+        BvaI16Source::for_each_vector(self, visit)
+    }
+}
+
+/// Placement of one stored short-integer slice in a logical power-of-two bucket.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BvaGeometry {
+    logical_rows: usize,
+    logical_cols: usize,
+    physical_rows: usize,
+    physical_cols: usize,
+    logical_col_log: usize,
+}
+
+impl BvaGeometry {
+    pub fn prefix(logical_len: usize, physical_len: usize) -> Option<Self> {
+        Self::rectangle(1, logical_len, 1, physical_len)
+    }
+
+    pub fn rectangle(
+        logical_rows: usize,
+        logical_cols: usize,
+        physical_rows: usize,
+        physical_cols: usize,
+    ) -> Option<Self> {
+        if logical_rows == 0
+            || logical_cols == 0
+            || !logical_rows.is_power_of_two()
+            || !logical_cols.is_power_of_two()
+            || physical_rows == 0
+            || physical_cols == 0
+            || physical_rows > logical_rows
+            || physical_cols > logical_cols
+        {
+            return None;
+        }
+        Some(Self {
+            logical_rows,
+            logical_cols,
+            physical_rows,
+            physical_cols,
+            logical_col_log: logical_cols.ilog2() as usize,
+        })
+    }
+
+    pub fn logical_len(self) -> usize {
+        self.logical_rows * self.logical_cols
+    }
+
+    pub fn physical_len(self) -> usize {
+        self.physical_rows * self.physical_cols
+    }
+
+    pub fn logical_rows(self) -> usize {
+        self.logical_rows
+    }
+
+    pub fn logical_cols(self) -> usize {
+        self.logical_cols
+    }
+
+    pub fn physical_rows(self) -> usize {
+        self.physical_rows
+    }
+
+    pub fn physical_cols(self) -> usize {
+        self.physical_cols
+    }
+
+    pub fn logical_index(self, physical_index: usize) -> Option<usize> {
+        if physical_index >= self.physical_len() {
+            return None;
+        }
+        let row = physical_index / self.physical_cols;
+        let col = physical_index % self.physical_cols;
+        Some(row * self.logical_cols + col)
+    }
+
+    pub fn physical_index(self, logical_index: usize) -> Option<usize> {
+        if logical_index >= self.logical_len() {
+            return None;
+        }
+        let row = logical_index >> self.logical_col_log;
+        let col = logical_index & (self.logical_cols - 1);
+        (row < self.physical_rows && col < self.physical_cols)
+            .then_some(row * self.physical_cols + col)
+    }
+}
+
+/// Compatibility name for the geometry type used by the original i8 API.
+pub type BvaI8Geometry = BvaGeometry;
 
 /// Metadata for a decreasing-size bucketed vector assembly.
 ///
@@ -500,15 +787,90 @@ impl<F: Clone> TensorBasisVector<F> {
 }
 
 impl<F: PrimeField> TensorBasisVector<F> {
+    /// Computes the witness inner product using the native [`ShortInt`] entry
+    /// type selected by `Entry`.
+    pub fn inner_product_streaming<Entry, S>(
+        &self,
+        source: &mut S,
+    ) -> Result<F, StreamingEoError<S::Error>>
+    where
+        Entry: BvaInteger,
+        S: BvaSource<Entry>,
+    {
+        self.inner_product_integer_streaming::<Entry, S>(source)
+    }
+
     /// Computes the physical i8 witness inner product without expanding cover
     /// zeros or evaluating one tensor coefficient at a time.
     pub fn inner_product_i8_streaming<S: BvaI8Source>(
         &self,
         source: &mut S,
     ) -> Result<F, StreamingEoError<S::Error>> {
+        self.inner_product_streaming::<i8, S>(source)
+    }
+
+    /// Computes the physical i16 witness inner product without widening the
+    /// stored BVA to a field vector.
+    pub fn inner_product_i16_streaming<S: BvaI16Source>(
+        &self,
+        source: &mut S,
+    ) -> Result<F, StreamingEoError<S::Error>> {
+        self.inner_product_streaming::<i16, S>(source)
+    }
+
+    fn inner_product_integer_streaming<Entry, S>(
+        &self,
+        source: &mut S,
+    ) -> Result<F, StreamingEoError<S::Error>>
+    where
+        Entry: BvaInteger,
+        S: BvaSource<Entry>,
+    {
         let layout = source.layout().clone();
         if self.layout != layout {
             return Err(BvaError::LayoutMismatch.into());
+        }
+        let geometries = source_geometries::<Entry, S>(source)?;
+        if let Some(vectors) = source.indexed_vectors() {
+            if vectors.len() != layout.vector_lengths.len() {
+                return Err(BvaError::MissingVector.into());
+            }
+            let mut bucket_to_vector = vec![usize::MAX; layout.bucket_sizes.len()];
+            for (vector_index, &bucket_index) in layout.vector_to_bucket.iter().enumerate() {
+                if bucket_index >= bucket_to_vector.len()
+                    || bucket_to_vector[bucket_index] != usize::MAX
+                {
+                    return Err(BvaError::VectorIndex.into());
+                }
+                if vectors[vector_index].len() != geometries[vector_index].physical_len() {
+                    return Err(BvaError::VectorLength.into());
+                }
+                bucket_to_vector[bucket_index] = vector_index;
+            }
+            if bucket_to_vector.contains(&usize::MAX) {
+                return Err(BvaError::MissingVector.into());
+            }
+            let task_count = eo_strided_task_count(layout.bucket_sizes.len());
+            return Ok((0..task_count)
+                .into_par_iter()
+                .map(|task| {
+                    let mut result = F::zero();
+                    for bucket_index in (task..layout.bucket_sizes.len()).step_by(task_count) {
+                        let vector_index = bucket_to_vector[bucket_index];
+                        for term in &self.buckets[bucket_index].terms {
+                            let (projected, _) = tensor_project_integer_geometry(
+                                vectors[vector_index],
+                                geometries[vector_index],
+                                &term.factors,
+                            );
+                            result += term.eta * projected;
+                        }
+                    }
+                    result
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .sum());
         }
         let mut visited = vec![false; layout.vector_lengths.len()];
         let mut result = F::zero();
@@ -527,13 +889,14 @@ impl<F: PrimeField> TensorBasisVector<F> {
                     return;
                 }
                 visited[vector_index] = true;
-                if values.len() != layout.vector_lengths[vector_index] {
+                let geometry = geometries[vector_index];
+                if values.len() != geometry.physical_len() {
                     bva_error = Some(BvaError::VectorLength);
                     return;
                 }
                 for term in &self.buckets[bucket_index].terms {
                     let (projected, _) =
-                        tensor_project_i8_prefix_strided(values, 0, 1, values.len(), &term.factors);
+                        tensor_project_integer_geometry(values, geometry, &term.factors);
                     result += term.eta * projected;
                 }
             })
@@ -600,13 +963,32 @@ pub struct StreamingEoProfile {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StreamingEoTimings {
     /// First witness pass, producing the packed cross terms.
-    pub cross_terms_seconds: f64,
+    pub packed_cross_terms_seconds: f64,
     /// Second witness pass, folding `stride` bytes into one field element.
-    pub fold_seconds: f64,
+    pub first_fold_seconds: f64,
     /// Consistency check on the reduced vector.
     pub reduced_check_seconds: f64,
-    /// LiteBullet rounds over the reduced vector.
-    pub binary_rounds_seconds: f64,
+    /// Cross terms computed by the later binary LiteBullet rounds.
+    pub binary_cross_terms_seconds: f64,
+    /// Fiat--Shamir challenge derivation in the later binary rounds.
+    pub binary_challenge_seconds: f64,
+    /// In-place witness and basis folds in the later binary rounds.
+    pub binary_fold_seconds: f64,
+}
+
+impl StreamingEoTimings {
+    /// Aggregate time for all work inside the later binary rounds.
+    pub fn binary_rounds_seconds(&self) -> f64 {
+        self.binary_cross_terms_seconds + self.binary_challenge_seconds + self.binary_fold_seconds
+    }
+
+    /// Sum of the mutually exclusive timed Packed EO stages.
+    pub fn accounted_seconds(&self) -> f64 {
+        self.packed_cross_terms_seconds
+            + self.first_fold_seconds
+            + self.reduced_check_seconds
+            + self.binary_rounds_seconds()
+    }
 }
 
 // Timings vary run to run, so equality compares only the deterministic
@@ -701,8 +1083,7 @@ impl From<SerializationError> for EoProofDecodeError {
     }
 }
 
-/// Returns the largest power-of-two packing stride supported by the field
-/// storage width and the physical entry width.
+/// Returns twice the largest power-of-two packing ratio supported by the field.
 pub fn packing_stride_for_bit_width<F: PrimeField>(
     logical_len: usize,
     bit_width: usize,
@@ -721,7 +1102,10 @@ pub fn packing_stride_for_bit_width<F: PrimeField>(
     if ratio < 2 {
         return Err(BvaError::InvalidBitWidth(bit_width));
     }
-    let stride = 1_usize << ratio.ilog2();
+    let base_stride = 1_usize << ratio.ilog2();
+    let stride = base_stride
+        .checked_mul(2)
+        .ok_or(BvaError::InvalidBitWidth(bit_width))?;
     Ok(stride.min(logical_len))
 }
 
@@ -763,8 +1147,334 @@ fn tensor_coefficients<F: Field>(factors: &[(F, F)]) -> Vec<F> {
     coefficients
 }
 
-fn tensor_project_i8_prefix_strided<F: PrimeField>(
-    values: &[i8],
+const SHORT_INTEGER_WINDOW_BITS: usize = 4;
+const SHORT_INTEGER_WINDOW_SIZE: usize = 1 << SHORT_INTEGER_WINDOW_BITS;
+const MAX_SHORT_INTEGER_WINDOWS: usize = 4;
+const SHORT_INTEGER_LAZY_MIN_ROWS: usize = 32;
+const SHORT_INTEGER_LAZY_BLOCK_ROWS: usize = 1 << 20;
+
+/// Precomputes signed-short-integer multiples of one field coefficient.
+///
+/// The packed projection reuses one row coefficient across every lane. Four-bit
+/// windows replace one field conversion and one full-width field multiplication
+/// per non-zero lane with a small number of field additions.
+fn short_integer_window_multiples<F: Field, Entry: BvaInteger>(
+    coefficient: F,
+) -> (
+    [[F; SHORT_INTEGER_WINDOW_SIZE]; MAX_SHORT_INTEGER_WINDOWS],
+    u64,
+) {
+    debug_assert!(Entry::BITS <= SHORT_INTEGER_WINDOW_BITS * MAX_SHORT_INTEGER_WINDOWS);
+    let window_count = Entry::BITS.div_ceil(SHORT_INTEGER_WINDOW_BITS);
+    let mut multiples = [[F::zero(); SHORT_INTEGER_WINDOW_SIZE]; MAX_SHORT_INTEGER_WINDOWS];
+    let mut window_unit = coefficient;
+    let mut operations = 0_u64;
+    for (window, values) in multiples.iter_mut().enumerate().take(window_count) {
+        values[1] = window_unit;
+        for digit in 2..SHORT_INTEGER_WINDOW_SIZE {
+            values[digit] = values[digit - 1] + window_unit;
+            operations += 1;
+        }
+        if window + 1 < window_count {
+            for _ in 0..SHORT_INTEGER_WINDOW_BITS {
+                window_unit.double_in_place();
+                operations += 1;
+            }
+        }
+    }
+    (multiples, operations)
+}
+
+#[inline]
+fn add_short_integer_product<F: Field, Entry: BvaInteger>(
+    accumulator: &mut F,
+    value: Entry,
+    multiples: &[[F; SHORT_INTEGER_WINDOW_SIZE]; MAX_SHORT_INTEGER_WINDOWS],
+) -> u64 {
+    let subtract = value.to_i32() < 0;
+    let mut magnitude = value.unsigned_abs_u64();
+    let mut window = 0_usize;
+    let mut operations = 0_u64;
+    while magnitude != 0 {
+        let digit = (magnitude & (SHORT_INTEGER_WINDOW_SIZE as u64 - 1)) as usize;
+        if digit != 0 {
+            if subtract {
+                *accumulator -= multiples[window][digit];
+            } else {
+                *accumulator += multiples[window][digit];
+            }
+            operations += 1;
+        }
+        magnitude >>= SHORT_INTEGER_WINDOW_BITS;
+        window += 1;
+    }
+    operations
+}
+
+fn project_short_integer_rows_window<F: Field, Entry: BvaInteger>(
+    values: &[Entry],
+    geometry: BvaI8Geometry,
+    row_coefficients: &[F],
+    stride: usize,
+) -> (Vec<F>, u64) {
+    let mut computed = vec![F::zero(); stride];
+    let mut operations = 0_u64;
+    for (row, &coefficient) in row_coefficients.iter().enumerate() {
+        let mut multiples = None;
+        for (lane, projection) in computed.iter_mut().enumerate() {
+            let logical_index = row * stride + lane;
+            let Some(physical_index) = geometry.physical_index(logical_index) else {
+                continue;
+            };
+            let value = values[physical_index];
+            if value.is_zero() {
+                continue;
+            }
+            if multiples.is_none() {
+                let (row_multiples, row_operations) =
+                    short_integer_window_multiples::<F, Entry>(coefficient);
+                multiples = Some(row_multiples);
+                operations += row_operations;
+            }
+            operations += add_short_integer_product(
+                projection,
+                value,
+                multiples
+                    .as_ref()
+                    .expect("a non-zero row initializes short multiples"),
+            );
+        }
+    }
+    (computed, operations)
+}
+
+fn project_short_integer_rows_lazy<F: PrimeField, Entry: BvaInteger>(
+    values: &[Entry],
+    geometry: BvaI8Geometry,
+    row_coefficients: &[F],
+    stride: usize,
+) -> (Vec<F>, u64) {
+    let limb_count = F::zero().into_bigint().as_ref().len();
+    let mut computed = vec![F::zero(); stride];
+    let mut accumulated = vec![0_i128; stride * limb_count];
+    let mut bytes = Vec::with_capacity((limb_count + 1) * 8);
+    let mut normalized = Vec::with_capacity(limb_count + 1);
+    let mut operations = 0_u64;
+    let reduction_radix = short_integer_reduction_radix::<F>();
+
+    for block_start in (0..row_coefficients.len()).step_by(SHORT_INTEGER_LAZY_BLOCK_ROWS) {
+        let block_end = block_start
+            .saturating_add(SHORT_INTEGER_LAZY_BLOCK_ROWS)
+            .min(row_coefficients.len());
+        accumulated.fill(0);
+        for (local_row, &coefficient) in row_coefficients[block_start..block_end].iter().enumerate()
+        {
+            let row = block_start + local_row;
+            let coefficient = coefficient.into_bigint();
+            let coefficient_limbs = coefficient.as_ref();
+            operations += 1;
+            for lane in 0..stride {
+                let logical_index = row * stride + lane;
+                let Some(physical_index) = geometry.physical_index(logical_index) else {
+                    continue;
+                };
+                let value = values[physical_index];
+                if value.is_zero() {
+                    continue;
+                }
+                let start = lane * limb_count;
+                accumulate_signed_short_integer_limbs(
+                    &mut accumulated[start..start + limb_count],
+                    coefficient_limbs,
+                    value.to_i32(),
+                );
+            }
+        }
+        for lane in 0..stride {
+            let start = lane * limb_count;
+            let end = start + limb_count;
+            computed[lane] += signed_accumulated_limbs_to_field::<F>(
+                &accumulated[start..end],
+                &mut normalized,
+                &mut bytes,
+                reduction_radix,
+            );
+            operations += 2;
+        }
+    }
+    (computed, operations)
+}
+
+#[inline]
+fn accumulate_signed_short_integer_limbs(
+    accumulator: &mut [i128],
+    coefficient_limbs: &[u64],
+    value: i32,
+) {
+    let negative = value < 0;
+    let magnitude = u128::from(value.unsigned_abs());
+    for (accumulator, &limb) in accumulator.iter_mut().zip(coefficient_limbs) {
+        let product = (u128::from(limb) * magnitude) as i128;
+        if negative {
+            *accumulator -= product;
+        } else {
+            *accumulator += product;
+        }
+    }
+}
+
+fn normalize_signed_accumulated_limbs(accumulated: &[i128], normalized: &mut Vec<u64>) -> bool {
+    normalized.clear();
+    let radix = 1_i128 << 64;
+    let mut carry = 0_i128;
+    for &limb in accumulated {
+        let value = limb
+            .checked_add(carry)
+            .expect("lazy short-integer accumulator stays within its block bound");
+        normalized.push(value.rem_euclid(radix) as u64);
+        carry = value.div_euclid(radix);
+    }
+    let negative = carry < 0;
+    if negative {
+        let mut add_one = true;
+        for limb in normalized.iter_mut() {
+            let (value, carry_out) = (!*limb).overflowing_add(u64::from(add_one));
+            *limb = value;
+            add_one = carry_out;
+        }
+        let mut high = carry
+            .checked_neg()
+            .expect("lazy short-integer carry is not i128::MIN")
+            - 1
+            + i128::from(add_one);
+        while high != 0 {
+            normalized.push(high as u64);
+            high >>= 64;
+        }
+    } else {
+        while carry != 0 {
+            normalized.push(carry as u64);
+            carry >>= 64;
+        }
+    }
+    while normalized.last() == Some(&0) {
+        normalized.pop();
+    }
+    negative
+}
+
+fn signed_accumulated_limbs_to_field<F: PrimeField>(
+    accumulated: &[i128],
+    normalized: &mut Vec<u64>,
+    bytes: &mut Vec<u8>,
+    reduction_radix: F,
+) -> F {
+    let negative = normalize_signed_accumulated_limbs(accumulated, normalized);
+    if normalized.is_empty() {
+        return F::zero();
+    }
+    bytes.clear();
+    for &limb in normalized.iter() {
+        bytes.extend_from_slice(&limb.to_le_bytes());
+    }
+    let magnitude = short_integer_bytes_to_field(bytes, reduction_radix);
+    if negative {
+        -magnitude
+    } else {
+        magnitude
+    }
+}
+
+#[inline]
+fn short_integer_reduction_direct_bytes<F: PrimeField>() -> usize {
+    (((F::MODULUS_BIT_SIZE + 7) / 8) as usize).saturating_sub(1)
+}
+
+fn short_integer_reduction_radix<F: PrimeField>() -> F {
+    let direct_bytes = short_integer_reduction_direct_bytes::<F>();
+    F::from(2_u64).pow([(8 * direct_bytes) as u64])
+}
+
+/// Reduce a short-integer accumulation using one high-word field multiply.
+///
+/// Arkworks' generic byte reduction consumes every byte above the directly
+/// convertible prefix with a separate field multiplication. Packed EO
+/// accumulators have at most one extra `u64` above that prefix, so parsing the
+/// entire high word at once avoids repeated full-width multiplication.
+fn short_integer_bytes_to_field<F: PrimeField>(bytes: &[u8], reduction_radix: F) -> F {
+    let direct_bytes = short_integer_reduction_direct_bytes::<F>();
+    if bytes.len() <= direct_bytes {
+        return F::from_le_bytes_mod_order(bytes);
+    }
+    let (low_bytes, high_bytes) = bytes.split_at(direct_bytes);
+    if high_bytes.len() > size_of::<u64>() {
+        return F::from_le_bytes_mod_order(bytes);
+    }
+    let mut high_word_bytes = [0_u8; size_of::<u64>()];
+    high_word_bytes[..high_bytes.len()].copy_from_slice(high_bytes);
+    let high_word = u64::from_le_bytes(high_word_bytes);
+    F::from_le_bytes_mod_order(low_bytes) + F::from(high_word) * reduction_radix
+}
+
+fn source_geometries<Entry, Source>(source: &Source) -> Result<Vec<BvaI8Geometry>, BvaError>
+where
+    Entry: BvaInteger,
+    Source: BvaSource<Entry>,
+{
+    let layout = source.layout();
+    (0..layout.vector_lengths.len())
+        .map(|vector_index| {
+            let geometry = source
+                .vector_geometry(vector_index)
+                .ok_or(BvaError::VectorGeometry)?;
+            let bucket_index = *layout
+                .vector_to_bucket
+                .get(vector_index)
+                .ok_or(BvaError::VectorIndex)?;
+            if geometry.logical_len() != layout.bucket_sizes[bucket_index] {
+                return Err(BvaError::VectorGeometry);
+            }
+            Ok(geometry)
+        })
+        .collect()
+}
+
+fn tensor_project_integer_geometry<F: PrimeField, Entry: BvaInteger>(
+    values: &[Entry],
+    geometry: BvaI8Geometry,
+    factors: &[(F, F)],
+) -> (F, u64) {
+    debug_assert_eq!(values.len(), geometry.physical_len());
+    debug_assert_eq!(1_usize << factors.len(), geometry.logical_len());
+    if geometry.logical_rows() == 1 {
+        return tensor_project_integer_prefix_strided(values, 0, 1, values.len(), factors);
+    }
+
+    let col_log = geometry.logical_cols().ilog2() as usize;
+    let col_coefficients = tensor_coefficients(&factors[..col_log]);
+    let row_coefficients = tensor_coefficients(&factors[col_log..]);
+    values
+        .chunks(geometry.physical_cols())
+        .zip(&row_coefficients)
+        .map(|(row, &row_coefficient)| {
+            let mut projected = F::zero();
+            let mut operations = 0_u64;
+            for (&value, &col_coefficient) in row.iter().zip(&col_coefficients) {
+                if value.is_zero() {
+                    continue;
+                }
+                projected += value.to_field::<F>() * col_coefficient;
+                operations += 2;
+            }
+            (projected * row_coefficient, operations + 1)
+        })
+        .fold((F::zero(), 0_u64), |left, right| {
+            (left.0 + right.0, left.1 + right.1 + 1)
+        })
+}
+
+fn tensor_project_integer_prefix_strided<F: PrimeField, Entry: BvaInteger>(
+    values: &[Entry],
     start: usize,
     stride: usize,
     physical_len: usize,
@@ -775,30 +1485,27 @@ fn tensor_project_i8_prefix_strided<F: PrimeField>(
     }
     if factors.is_empty() {
         debug_assert_eq!(physical_len, 1);
-        return (i8_to_field(values[start]), 0);
+        return (values[start].to_field(), 0);
     }
 
     let high_bit = factors.len() - 1;
     let half = 1_usize << high_bit;
     let left_len = physical_len.min(half);
     let right_len = physical_len.saturating_sub(half);
-    let recurse_left =
-        || tensor_project_i8_prefix_strided(values, start, stride, left_len, &factors[..high_bit]);
-    let recurse_right = || {
-        tensor_project_i8_prefix_strided(
-            values,
-            start + half * stride,
-            stride,
-            right_len,
-            &factors[..high_bit],
-        )
-    };
-    let ((left, left_operations), (right, right_operations)) =
-        if physical_len >= (1 << 14) && right_len != 0 {
-            rayon::join(recurse_left, recurse_right)
-        } else {
-            (recurse_left(), recurse_right())
-        };
+    let (left, left_operations) = tensor_project_integer_prefix_strided(
+        values,
+        start,
+        stride,
+        left_len,
+        &factors[..high_bit],
+    );
+    let (right, right_operations) = tensor_project_integer_prefix_strided(
+        values,
+        start + half * stride,
+        stride,
+        right_len,
+        &factors[..high_bit],
+    );
     let (left_factor, right_factor) = factors[high_bit];
     if right_len == 0 {
         (left * left_factor, left_operations + 1)
@@ -810,8 +1517,9 @@ fn tensor_project_i8_prefix_strided<F: PrimeField>(
     }
 }
 
-fn packed_i8_cross_terms<F: PrimeField>(
-    values: &[i8],
+fn packed_integer_cross_terms<F: PrimeField, Entry: BvaInteger>(
+    values: &[Entry],
+    geometry: BvaI8Geometry,
     bucket_index: usize,
     logical_offset: usize,
     offsets: &[usize],
@@ -835,28 +1543,21 @@ fn packed_i8_cross_terms<F: PrimeField>(
             let lane_projections = match supplied_lanes {
                 Some(lanes) => lanes[term_index].clone(),
                 None => {
-                    let computed = (0..stride)
-                        .into_par_iter()
-                        .map(|lane| {
-                            let physical_len = if lane < values.len() {
-                                1 + (values.len() - 1 - lane) / stride
-                            } else {
-                                0
-                            };
-                            tensor_project_i8_prefix_strided(
-                                values,
-                                lane,
-                                stride,
-                                physical_len,
-                                row_factors,
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    operations += computed
-                        .iter()
-                        .map(|(_, term_operations)| *term_operations)
-                        .sum::<u64>();
-                    computed.into_iter().map(|(value, _)| value).collect()
+                    let row_coefficients = tensor_coefficients(row_factors);
+                    let (computed, projection_operations) = if row_coefficients.len()
+                        >= SHORT_INTEGER_LAZY_MIN_ROWS
+                    {
+                        project_short_integer_rows_lazy(values, geometry, &row_coefficients, stride)
+                    } else {
+                        project_short_integer_rows_window(
+                            values,
+                            geometry,
+                            &row_coefficients,
+                            stride,
+                        )
+                    };
+                    operations += projection_operations;
+                    computed
                 }
             };
 
@@ -882,76 +1583,47 @@ fn packed_i8_cross_terms<F: PrimeField>(
 
     // Buckets smaller than one packed row may share that row. This exact
     // fallback includes cross-bucket terms while remaining O(I * stride^2).
-    let vector_end = logical_offset + values.len();
+    let vector_end = logical_offset + geometry.logical_len();
     let first_row = logical_offset / stride;
     let row_count = vector_end.div_ceil(stride) - first_row;
-    let (positive, negative, trace, operations, _) = (0..row_count)
-        .into_par_iter()
-        .with_min_len(1 << 12)
-        .fold(
-            || {
-                (
-                    vec![F::zero(); stride - 1],
-                    vec![F::zero(); stride - 1],
-                    F::zero(),
-                    0_u64,
-                    vec![F::zero(); stride],
-                )
-            },
-            |mut state, row_index| {
-                let row_start = (first_row + row_index) * stride;
-                for (lane, coefficient) in state.4.iter_mut().enumerate() {
-                    *coefficient = tbv.logical_coefficient_at(offsets, row_start + lane);
+    let mut positive = vec![F::zero(); stride - 1];
+    let mut negative = vec![F::zero(); stride - 1];
+    let mut trace = F::zero();
+    let mut operations = 0_u64;
+    let mut coefficients = vec![F::zero(); stride];
+    for row_index in 0..row_count {
+        let row_start = (first_row + row_index) * stride;
+        for (lane, coefficient) in coefficients.iter_mut().enumerate() {
+            *coefficient = tbv.logical_coefficient_at(offsets, row_start + lane);
+        }
+        let entry_start = row_start.max(logical_offset);
+        let entry_end = (row_start + stride).min(vector_end);
+        for flat_index in entry_start..entry_end {
+            let Some(physical_index) = geometry.physical_index(flat_index - logical_offset) else {
+                continue;
+            };
+            let value = values[physical_index];
+            if value.is_zero() {
+                continue;
+            }
+            let left_value = value.to_field::<F>();
+            let left_lane = flat_index - row_start;
+            for (right_lane, &right_value) in coefficients.iter().enumerate() {
+                if right_value.is_zero() {
+                    continue;
                 }
-                let entry_start = row_start.max(logical_offset);
-                let entry_end = (row_start + stride).min(vector_end);
-                for flat_index in entry_start..entry_end {
-                    let value = values[flat_index - logical_offset];
-                    if value == 0 {
-                        continue;
-                    }
-                    let left_value = i8_to_field::<F>(value);
-                    let left_lane = flat_index - row_start;
-                    for (right_lane, &right_value) in state.4.iter().enumerate() {
-                        if right_value.is_zero() {
-                            continue;
-                        }
-                        let product = left_value * right_value;
-                        state.3 += 1;
-                        if right_lane == left_lane {
-                            state.2 += product;
-                        } else if right_lane > left_lane {
-                            state.0[right_lane - left_lane - 1] += product;
-                        } else {
-                            state.1[left_lane - right_lane - 1] += product;
-                        }
-                    }
+                let product = left_value * right_value;
+                operations += 1;
+                if right_lane == left_lane {
+                    trace += product;
+                } else if right_lane > left_lane {
+                    positive[right_lane - left_lane - 1] += product;
+                } else {
+                    negative[left_lane - right_lane - 1] += product;
                 }
-                state
-            },
-        )
-        .reduce(
-            || {
-                (
-                    vec![F::zero(); stride - 1],
-                    vec![F::zero(); stride - 1],
-                    F::zero(),
-                    0_u64,
-                    vec![F::zero(); stride],
-                )
-            },
-            |mut left, right| {
-                for (left_value, right_value) in left.0.iter_mut().zip(right.0) {
-                    *left_value += right_value;
-                }
-                for (left_value, right_value) in left.1.iter_mut().zip(right.1) {
-                    *left_value += right_value;
-                }
-                left.2 += right.2;
-                left.3 += right.3;
-                left
-            },
-        );
+            }
+        }
+    }
     (positive, negative, trace, operations)
 }
 
@@ -992,30 +1664,20 @@ fn tensor_project_prefix_strided_allocation_free<F: Field>(
     let half = 1_usize << high_bit;
     let left_len = physical_len.min(half);
     let right_len = physical_len.saturating_sub(half);
-    let recurse_left = || {
-        tensor_project_prefix_strided_allocation_free(
-            values,
-            start,
-            stride,
-            left_len,
-            &factors[..high_bit],
-        )
-    };
-    let recurse_right = || {
-        tensor_project_prefix_strided_allocation_free(
-            values,
-            start + half * stride,
-            stride,
-            right_len,
-            &factors[..high_bit],
-        )
-    };
-    let ((left, left_operations), (right, right_operations)) =
-        if physical_len >= (1 << 14) && right_len != 0 {
-            rayon::join(recurse_left, recurse_right)
-        } else {
-            (recurse_left(), recurse_right())
-        };
+    let (left, left_operations) = tensor_project_prefix_strided_allocation_free(
+        values,
+        start,
+        stride,
+        left_len,
+        &factors[..high_bit],
+    );
+    let (right, right_operations) = tensor_project_prefix_strided_allocation_free(
+        values,
+        start + half * stride,
+        stride,
+        right_len,
+        &factors[..high_bit],
+    );
     let (left_factor, right_factor) = factors[high_bit];
     if right_len == 0 {
         (left * left_factor, left_operations + 1)
@@ -1113,6 +1775,7 @@ struct PackedReducedBucket<F> {
 /// an accelerator will own are never allocated here in the first place.
 fn build_packed_reduced_buckets<F: PrimeField>(
     tbv: &TensorBasisVector<F>,
+    geometries: &[BvaI8Geometry],
     packed_challenge: F,
     stride: usize,
     unallocated_from: usize,
@@ -1152,7 +1815,12 @@ fn build_packed_reduced_buckets<F: PrimeField>(
                 basis = basis.fold_interior_owned(challenge);
             }
             let reduced_index = reduced.len();
-            let entries = layout.vector_lengths[vector_index].div_ceil(stride);
+            let geometry = geometries[vector_index];
+            let entries = geometry
+                .logical_index(geometry.physical_len() - 1)
+                .expect("validated geometry maps every physical entry")
+                / stride
+                + 1;
             reduced.push(PackedReducedBucket {
                 cover_size: bucket_size / stride,
                 values: if entries >= unallocated_from {
@@ -1209,55 +1877,128 @@ fn build_packed_reduced_buckets<F: PrimeField>(
     (reduced, destinations)
 }
 
-fn packed_reduced_inner_product<F: PrimeField>(buckets: &[PackedReducedBucket<F>]) -> (F, u64) {
-    buckets
-        .iter()
-        .map(|bucket| {
-            bucket
-                .basis
-                .terms
-                .iter()
-                .fold((F::zero(), 0_u64), |(sum, operations), term| {
-                    let (projected, projection_operations) = tensor_project_strided_allocation_free(
-                        &bucket.values,
-                        0,
-                        1,
-                        bucket.values.len(),
-                        &term.factors,
-                    );
-                    (
-                        sum + term.eta * projected,
-                        operations + projection_operations + 2,
-                    )
+fn eo_strided_task_count(item_count: usize) -> usize {
+    item_count.min(rayon::current_num_threads().max(1))
+}
+
+/// Move size-ordered items into round-robin task lanes, process each lane
+/// serially, then restore canonical order without cloning item payloads.
+fn map_owned_strided<T, U>(
+    items: Vec<T>,
+    map: impl Fn(usize, T) -> (U, u64) + Sync,
+) -> (Vec<U>, u64)
+where
+    T: Send,
+    U: Send,
+{
+    let item_count = items.len();
+    if item_count == 0 {
+        return (Vec::new(), 0);
+    }
+    let task_count = eo_strided_task_count(item_count);
+    let mut lanes = (0..task_count)
+        .map(|_| Vec::<(usize, T)>::new())
+        .collect::<Vec<_>>();
+    for (index, item) in items.into_iter().enumerate() {
+        lanes[index % task_count].push((index, item));
+    }
+    let completed = lanes
+        .into_par_iter()
+        .map(|lane| {
+            let mut operations = 0_u64;
+            let mapped = lane
+                .into_iter()
+                .map(|(index, item)| {
+                    let (item, item_operations) = map(index, item);
+                    operations += item_operations;
+                    (index, item)
                 })
+                .collect::<Vec<_>>();
+            (mapped, operations)
         })
-        .fold((F::zero(), 0_u64), |(sum, operations), contribution| {
-            (sum + contribution.0, operations + contribution.1 + 1)
+        .collect::<Vec<_>>();
+
+    let mut restored = (0..item_count).map(|_| None).collect::<Vec<Option<U>>>();
+    let mut operations = 0_u64;
+    for (lane, lane_operations) in completed {
+        operations += lane_operations;
+        for (index, item) in lane {
+            restored[index] = Some(item);
+        }
+    }
+    (
+        restored
+            .into_iter()
+            .map(|item| item.expect("every strided item is restored"))
+            .collect(),
+        operations,
+    )
+}
+
+fn packed_reduced_inner_product<F: PrimeField>(buckets: &[PackedReducedBucket<F>]) -> (F, u64) {
+    if buckets.is_empty() {
+        return (F::zero(), 0);
+    }
+    let task_count = eo_strided_task_count(buckets.len());
+    (0..task_count)
+        .into_par_iter()
+        .map(|task| {
+            let mut sum = F::zero();
+            let mut operations = 0_u64;
+            for bucket_index in (task..buckets.len()).step_by(task_count) {
+                let bucket = &buckets[bucket_index];
+                let (contribution, contribution_operations) = bucket.basis.terms.iter().fold(
+                    (F::zero(), 0_u64),
+                    |(sum, operations), term| {
+                        let (projected, projection_operations) =
+                            tensor_project_strided_allocation_free(
+                                &bucket.values,
+                                0,
+                                1,
+                                bucket.values.len(),
+                                &term.factors,
+                            );
+                        (
+                            sum + term.eta * projected,
+                            operations + projection_operations + 2,
+                        )
+                    },
+                );
+                sum += contribution;
+                operations += contribution_operations + 1;
+            }
+            (sum, operations)
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .fold((F::zero(), 0_u64), |left, right| {
+            (left.0 + right.0, left.1 + right.1)
         })
 }
 
 fn packed_eo_cross_inner_products_allocation_free<F: PrimeField>(
     values: &[F],
     basis: &TbvBucket<F>,
-    counters: &mut PaddingWorkCounters,
-) -> (F, F) {
+) -> (F, F, u64, u64) {
     let mut iota = F::zero();
     let mut rho = F::zero();
+    let mut fold_operations = 0_u64;
+    let mut ip_operations = 0_u64;
     let even_len = values.len().div_ceil(2);
     let odd_len = values.len() / 2;
     for term in &basis.terms {
         let ((left_factor, right_factor), tail) =
             term.factors.split_first().expect("non-terminal EO round");
-        let ((even, even_operations), (odd, odd_operations)) = rayon::join(
-            || tensor_project_strided_allocation_free(values, 0, 2, even_len, tail),
-            || tensor_project_strided_allocation_free(values, 1, 2, odd_len, tail),
-        );
+        let (even, even_operations) =
+            tensor_project_strided_allocation_free(values, 0, 2, even_len, tail);
+        let (odd, odd_operations) =
+            tensor_project_strided_allocation_free(values, 1, 2, odd_len, tail);
         iota += even * term.eta * right_factor;
         rho += odd * term.eta * left_factor;
-        counters.real_fold_field_ops += even_operations + odd_operations;
-        counters.real_ip_field_ops += 5;
+        fold_operations += even_operations + odd_operations;
+        ip_operations += 5;
     }
-    (iota, rho)
+    (iota, rho, fold_operations, ip_operations)
 }
 
 fn packed_eo_bucketed_cross_inner_products<F: PrimeField>(
@@ -1268,62 +2009,71 @@ fn packed_eo_bucketed_cross_inner_products<F: PrimeField>(
         .iter()
         .position(|bucket| bucket.cover_size == 1)
         .unwrap_or(buckets.len());
+    let singleton_pairs = (buckets.len() - singleton_start) / 2;
+    let job_count = singleton_start + singleton_pairs;
+    if job_count == 0 {
+        return (F::zero(), F::zero());
+    }
+    let task_count = eo_strided_task_count(job_count);
+    let contributions = (0..task_count)
+        .into_par_iter()
+        .map(|task| {
+            let mut iota = F::zero();
+            let mut rho = F::zero();
+            let mut fold_operations = 0_u64;
+            let mut ip_operations = 0_u64;
+            for job in (task..job_count).step_by(task_count) {
+                if job < singleton_start {
+                    let bucket = &buckets[job];
+                    let (bucket_iota, bucket_rho, bucket_fold_ops, bucket_ip_ops) =
+                        packed_eo_cross_inner_products_allocation_free(
+                            &bucket.values,
+                            &bucket.basis,
+                        );
+                    iota += bucket_iota;
+                    rho += bucket_rho;
+                    fold_operations += bucket_fold_ops;
+                    ip_operations += bucket_ip_ops;
+                    continue;
+                }
+                let pair_index = job - singleton_start;
+                let left = &buckets[singleton_start + 2 * pair_index];
+                let right = &buckets[singleton_start + 2 * pair_index + 1];
+                iota += left.values[0] * right.basis.reduced_scalar();
+                rho += right.values[0] * left.basis.reduced_scalar();
+                ip_operations += 4;
+            }
+            (iota, rho, fold_operations, ip_operations)
+        })
+        .collect::<Vec<_>>();
     let mut iota = F::zero();
     let mut rho = F::zero();
-    for bucket in &buckets[..singleton_start] {
-        let (bucket_iota, bucket_rho) =
-            packed_eo_cross_inner_products_allocation_free(&bucket.values, &bucket.basis, counters);
-        iota += bucket_iota;
-        rho += bucket_rho;
-    }
-    for pair in buckets[singleton_start..].chunks(2) {
-        if pair.len() == 1 {
-            continue;
-        }
-        let left_value = pair[0].values[0];
-        let right_value = pair[1].values[0];
-        let left_basis = pair[0].basis.reduced_scalar();
-        let right_basis = pair[1].basis.reduced_scalar();
-        iota += left_value * right_basis;
-        rho += right_value * left_basis;
-        counters.real_ip_field_ops += 4;
+    for (task_iota, task_rho, fold_operations, ip_operations) in contributions {
+        iota += task_iota;
+        rho += task_rho;
+        counters.real_fold_field_ops += fold_operations;
+        counters.real_ip_field_ops += ip_operations;
     }
     (iota, rho)
 }
 
-fn packed_eo_fold_prefix_in_place_parallel<F: Field>(
-    values: &mut Vec<F>,
-    challenge: F,
-    counters: &mut PaddingWorkCounters,
-) {
+fn packed_eo_fold_prefix_in_place<F: Field>(values: &mut Vec<F>, challenge: F) -> u64 {
     let old_len = values.len();
     if old_len <= 1 {
-        return;
+        return 0;
     }
-    values[0] = values[0] + challenge * values[1];
     let next_len = old_len.div_ceil(2);
-    let mut start = 1_usize;
-    while start < next_len {
-        let end = (start * 2).min(next_len);
-        let source_start = start * 2;
-        let (prefix, source) = values.split_at_mut(source_start);
-        let source: &[F] = source;
-        prefix[start..end]
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(offset, output)| {
-                let input = offset * 2;
-                let left = source[input];
-                *output = if input + 1 < source.len() {
-                    left + challenge * source[input + 1]
-                } else {
-                    left
-                };
-            });
-        start = end;
+    for output in 0..next_len {
+        let input = 2 * output;
+        let left = values[input];
+        values[output] = if input + 1 < old_len {
+            left + challenge * values[input + 1]
+        } else {
+            left
+        };
     }
-    counters.real_fold_field_ops += 2 * (old_len / 2) as u64;
     values.truncate(next_len);
+    2 * (old_len / 2) as u64
 }
 
 fn packed_eo_fold_buckets_in_place<F: PrimeField>(
@@ -1336,26 +2086,354 @@ fn packed_eo_fold_buckets_in_place<F: PrimeField>(
         .iter()
         .position(|bucket| bucket.cover_size == 1)
         .unwrap_or(buckets.len());
-    let mut singletons = buckets.split_off(singleton_start);
-    for bucket in &mut buckets {
-        packed_eo_fold_prefix_in_place_parallel(&mut bucket.values, challenge_inv, counters);
+    let singletons = buckets.split_off(singleton_start);
+    let (mut buckets, bucket_operations) = map_owned_strided(buckets, |_, mut bucket| {
+        let operations = packed_eo_fold_prefix_in_place(&mut bucket.values, challenge_inv);
         bucket.cover_size /= 2;
         let basis = std::mem::replace(&mut bucket.basis, TbvBucket { terms: Vec::new() });
         bucket.basis = basis.fold_interior_owned(challenge);
+        (bucket, operations)
+    });
+    counters.real_fold_field_ops += bucket_operations;
+
+    let mut singleton_pairs = Vec::with_capacity(singletons.len().div_ceil(2));
+    let mut singleton_iter = singletons.into_iter();
+    while let Some(left) = singleton_iter.next() {
+        singleton_pairs.push((left, singleton_iter.next()));
+    }
+    let (folded_singletons, singleton_operations) =
+        map_owned_strided(singleton_pairs, |_, (mut left, right)| {
+            let operations = if let Some(right) = right {
+                left.values[0] += challenge_inv * right.values[0];
+                let folded_basis =
+                    left.basis.reduced_scalar() + challenge * right.basis.reduced_scalar();
+                left.basis = TbvBucket::from_factor_terms(vec![(folded_basis, Vec::new())]);
+                4
+            } else {
+                0
+            };
+            (left, operations)
+        });
+    counters.real_fold_field_ops += singleton_operations;
+    buckets.extend(folded_singletons);
+    buckets
+}
+
+struct FlatCompressionTask<'a, F> {
+    witness: &'a mut [F],
+    basis: &'a mut [F],
+    compact_basis: TbvBucket<F>,
+    source_indices: Vec<usize>,
+}
+
+fn accumulate_compact_tensor_term<F: Field>(output: &mut [F], scale: F, factors: &[(F, F)]) -> u64 {
+    debug_assert_eq!(output.len(), 1_usize << factors.len());
+    let Some(((left, right), prefix)) = factors.split_last() else {
+        output[0] += scale;
+        return 1;
+    };
+    let half = output.len() / 2;
+    let (left_output, right_output) = output.split_at_mut(half);
+    2 + accumulate_compact_tensor_term(left_output, scale * left, prefix)
+        + accumulate_compact_tensor_term(right_output, scale * right, prefix)
+}
+
+/// Expand one tensor term from a scalar to its complete bucket slice.
+///
+/// Each round doubles the initialized prefix in place. The bucket owns a
+/// disjoint output slice, so different buckets still expand concurrently in
+/// the outer strided Rayon schedule.
+fn expand_compact_tensor_term_in_place<F: Field>(
+    output: &mut [F],
+    scale: F,
+    factors: &[(F, F)],
+) -> u64 {
+    debug_assert_eq!(output.len(), 1_usize << factors.len());
+    output[0] = scale;
+    let mut initialized = 1_usize;
+    let mut operations = 0_u64;
+    for &(left, right) in factors {
+        for index in 0..initialized {
+            let value = output[index];
+            output[index] = value * left;
+            output[index + initialized] = value * right;
+        }
+        operations += 2 * initialized as u64;
+        initialized *= 2;
+    }
+    debug_assert_eq!(initialized, output.len());
+    operations
+}
+
+fn compress_single_indexed_integer_source<F: PrimeField, Entry: BvaInteger>(
+    output: &mut [F],
+    values: &[Entry],
+    geometry: BvaI8Geometry,
+    lane_offset: usize,
+    inverse_power_limbs: &[F::BigInt],
+    stride: usize,
+    reduction_radix: F,
+) -> u64 {
+    let limb_count = inverse_power_limbs[0].as_ref().len();
+    let mut accumulated = vec![0_i128; limb_count];
+    let mut normalized = Vec::with_capacity(limb_count + 1);
+    let mut bytes = Vec::with_capacity((limb_count + 1) * 8);
+    let mut operations = 0_u64;
+
+    if lane_offset == 0
+        && geometry.logical_rows == geometry.physical_rows
+        && geometry.logical_cols == geometry.physical_cols
+    {
+        for (output_index, row) in values.chunks(stride).enumerate() {
+            accumulated.fill(0);
+            for (lane, &value) in row.iter().enumerate() {
+                if value.is_zero() {
+                    continue;
+                }
+                accumulate_signed_short_integer_limbs(
+                    &mut accumulated,
+                    inverse_power_limbs[lane].as_ref(),
+                    value.to_i32(),
+                );
+            }
+            output[output_index] = signed_accumulated_limbs_to_field::<F>(
+                &accumulated,
+                &mut normalized,
+                &mut bytes,
+                reduction_radix,
+            );
+            operations += 1;
+        }
+        return operations;
     }
 
-    let mut singleton_iter = singletons.drain(..);
-    while let Some(mut left) = singleton_iter.next() {
-        if let Some(right) = singleton_iter.next() {
-            left.values[0] += challenge_inv * right.values[0];
-            let folded_basis =
-                left.basis.reduced_scalar() + challenge * right.basis.reduced_scalar();
-            left.basis = TbvBucket::from_factor_terms(vec![(folded_basis, Vec::new())]);
-            counters.real_fold_field_ops += 4;
+    let mut current_output = None;
+    for (physical_index, &value) in values.iter().enumerate() {
+        let local_index = geometry
+            .logical_index(physical_index)
+            .expect("validated geometry maps every physical entry");
+        let packed_index = lane_offset + local_index;
+        let output_index = packed_index / stride;
+        if current_output != Some(output_index) {
+            if let Some(previous_output) = current_output {
+                output[previous_output] = signed_accumulated_limbs_to_field::<F>(
+                    &accumulated,
+                    &mut normalized,
+                    &mut bytes,
+                    reduction_radix,
+                );
+                operations += 1;
+            }
+            accumulated.fill(0);
+            current_output = Some(output_index);
         }
-        buckets.push(left);
+        if value.is_zero() {
+            continue;
+        }
+        accumulate_signed_short_integer_limbs(
+            &mut accumulated,
+            inverse_power_limbs[packed_index % stride].as_ref(),
+            value.to_i32(),
+        );
     }
-    buckets
+    if let Some(output_index) = current_output {
+        output[output_index] = signed_accumulated_limbs_to_field::<F>(
+            &accumulated,
+            &mut normalized,
+            &mut bytes,
+            reduction_radix,
+        );
+        operations += 1;
+    }
+    operations
+}
+
+/// Compress the integer witness and compact TBV into two global flat vectors.
+///
+/// The transient bucket metadata only partitions disjoint output slices. It is
+/// dropped before the full-width EO rounds, which operate exclusively on the
+/// two contiguous vectors.
+fn compress_indexed_integer_and_tbv_flat<F: PrimeField, Entry: BvaInteger>(
+    layout: &BvaLayout,
+    tbv: &TensorBasisVector<F>,
+    geometries: &[BvaI8Geometry],
+    vectors: &[&[Entry]],
+    packed_challenge: F,
+    inverse_powers: &[F],
+    stride: usize,
+) -> (Vec<F>, Vec<F>, u64) {
+    let (reduced_buckets, destinations) =
+        build_packed_reduced_buckets(tbv, geometries, packed_challenge, stride, 0);
+    let mut destination_sources = vec![Vec::<usize>::new(); reduced_buckets.len()];
+    for vector_index in 0..vectors.len() {
+        destination_sources[destinations[vector_index].bucket_index].push(vector_index);
+    }
+
+    let flat_len = layout.logical_len / stride;
+    let mut witness = vec![F::zero(); flat_len];
+    let mut basis = vec![F::zero(); flat_len];
+    let mut witness_tail = witness.as_mut_slice();
+    let mut basis_tail = basis.as_mut_slice();
+    let mut output_cursor = 0_usize;
+    let mut tasks = Vec::with_capacity(reduced_buckets.len());
+    for (bucket_index, bucket) in reduced_buckets.into_iter().enumerate() {
+        let output_start = bucket.logical_offset / stride;
+        debug_assert!(output_start >= output_cursor);
+        let gap = output_start - output_cursor;
+        let (_, witness_after_gap) = witness_tail.split_at_mut(gap);
+        let (_, basis_after_gap) = basis_tail.split_at_mut(gap);
+        let (witness_output, witness_next) = witness_after_gap.split_at_mut(bucket.cover_size);
+        let (basis_output, basis_next) = basis_after_gap.split_at_mut(bucket.cover_size);
+        witness_tail = witness_next;
+        basis_tail = basis_next;
+        output_cursor = output_start + bucket.cover_size;
+        tasks.push(FlatCompressionTask {
+            witness: witness_output,
+            basis: basis_output,
+            compact_basis: bucket.basis,
+            source_indices: std::mem::take(&mut destination_sources[bucket_index]),
+        });
+    }
+
+    let inverse_power_limbs = inverse_powers
+        .iter()
+        .map(|value| value.into_bigint())
+        .collect::<Vec<_>>();
+    let limb_count = inverse_power_limbs[0].as_ref().len();
+    let reduction_radix = short_integer_reduction_radix::<F>();
+
+    let (_, operations) = map_owned_strided(tasks, |_, task| {
+        let FlatCompressionTask {
+            witness,
+            basis,
+            compact_basis,
+            source_indices,
+        } = task;
+        let mut operations = 0_u64;
+        if source_indices.len() == 1 {
+            let vector_index = source_indices[0];
+            let destination = destinations[vector_index];
+            operations += compress_single_indexed_integer_source(
+                witness,
+                vectors[vector_index],
+                geometries[vector_index],
+                destination.lane_offset,
+                &inverse_power_limbs,
+                stride,
+                reduction_radix,
+            );
+        } else {
+            let mut accumulated = vec![0_i128; witness.len() * limb_count];
+            for vector_index in source_indices {
+                let destination = destinations[vector_index];
+                let geometry = geometries[vector_index];
+                for (physical_index, &value) in vectors[vector_index].iter().enumerate() {
+                    if value.is_zero() {
+                        continue;
+                    }
+                    let local_index = geometry
+                        .logical_index(physical_index)
+                        .expect("validated geometry maps every physical entry");
+                    let packed_index = destination.lane_offset + local_index;
+                    let output_index = packed_index / stride;
+                    let start = output_index * limb_count;
+                    accumulate_signed_short_integer_limbs(
+                        &mut accumulated[start..start + limb_count],
+                        inverse_power_limbs[packed_index % stride].as_ref(),
+                        value.to_i32(),
+                    );
+                }
+            }
+            let mut normalized = Vec::with_capacity(limb_count + 1);
+            let mut bytes = Vec::with_capacity((limb_count + 1) * 8);
+            for (output_index, output) in witness.iter_mut().enumerate() {
+                let start = output_index * limb_count;
+                let end = start + limb_count;
+                *output = signed_accumulated_limbs_to_field::<F>(
+                    &accumulated[start..end],
+                    &mut normalized,
+                    &mut bytes,
+                    reduction_radix,
+                );
+                operations += 1;
+            }
+        }
+        let mut tensor_terms = compact_basis.terms.into_iter();
+        if let Some(term) = tensor_terms.next() {
+            operations += expand_compact_tensor_term_in_place(basis, term.eta, &term.factors);
+        }
+        for term in tensor_terms {
+            operations += accumulate_compact_tensor_term(basis, term.eta, &term.factors);
+        }
+        ((), operations)
+    });
+    (witness, basis, operations)
+}
+
+fn flat_inner_product<F: PrimeField>(left: &[F], right: &[F]) -> (F, u64) {
+    debug_assert_eq!(left.len(), right.len());
+    let value = left
+        .par_iter()
+        .zip(right.par_iter())
+        .map(|(&left, &right)| left * right)
+        .reduce(F::zero, |left, right| left + right);
+    (value, 2 * left.len() as u64)
+}
+
+fn flat_eo_cross_inner_products<F: PrimeField>(witness: &[F], basis: &[F]) -> (F, F, u64) {
+    debug_assert_eq!(witness.len(), basis.len());
+    debug_assert_eq!(witness.len() % 2, 0);
+    let (iota, rho) = witness
+        .par_chunks_exact(2)
+        .zip(basis.par_chunks_exact(2))
+        .map(|(witness, basis)| (witness[0] * basis[1], witness[1] * basis[0]))
+        .reduce(
+            || (F::zero(), F::zero()),
+            |left, right| (left.0 + right.0, left.1 + right.1),
+        );
+    (iota, rho, 4 * (witness.len() / 2) as u64)
+}
+
+/// Fold two flat vectors in place without an auxiliary field buffer.
+///
+/// Output index `i` depends on input indices `2i` and `2i+1`. Processing
+/// breadth-first index bands keeps each parallel band disjoint from all of its
+/// unread inputs, then truncates the completed prefix.
+fn flat_eo_fold_pair_in_place<F: PrimeField>(
+    witness: &mut Vec<F>,
+    basis: &mut Vec<F>,
+    challenge: F,
+    challenge_inv: F,
+) -> u64 {
+    debug_assert_eq!(witness.len(), basis.len());
+    debug_assert!(witness.len().is_power_of_two());
+    let old_len = witness.len();
+    if old_len <= 1 {
+        return 0;
+    }
+    let next_len = old_len / 2;
+    witness[0] = witness[0] + challenge_inv * witness[1];
+    basis[0] = basis[0] + challenge * basis[1];
+
+    let mut start = 1_usize;
+    while start < next_len {
+        let end = (2 * start).min(next_len);
+        let (witness_prefix, witness_inputs) = witness.split_at_mut(2 * start);
+        let (basis_prefix, basis_inputs) = basis.split_at_mut(2 * start);
+        witness_prefix[start..end]
+            .par_iter_mut()
+            .zip(basis_prefix[start..end].par_iter_mut())
+            .enumerate()
+            .for_each(|(offset, (witness_output, basis_output))| {
+                let input = 2 * offset;
+                *witness_output = witness_inputs[input] + challenge_inv * witness_inputs[input + 1];
+                *basis_output = basis_inputs[input] + challenge * basis_inputs[input + 1];
+            });
+        start = end;
+    }
+    witness.truncate(next_len);
+    basis.truncate(next_len);
+    4 * next_len as u64
 }
 
 impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
@@ -1401,16 +2479,78 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
         self.packed_positive.len() + self.packed_negative.len() + 2 * self.binary_rounds.len() + 2
     }
 
+    /// Proves Packed EO over the native [`ShortInt`] type selected by `Entry`.
+    pub fn prove_streaming<Entry, S>(
+        source: &mut S,
+        tbv: &TensorBasisVector<F>,
+        claimed: F,
+        bit_width: usize,
+    ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>>
+    where
+        Entry: BvaInteger,
+        S: BvaSource<Entry>,
+    {
+        let logical_len = <S as BvaSource<Entry>>::layout(source).logical_len();
+        let stride = packing_stride_for_bit_width::<F>(logical_len, bit_width)?;
+        Self::prove_integer_streaming_inner::<Entry, S>(
+            source, tbv, claimed, bit_width, stride, true, None, None, None, None,
+        )
+    }
+
+    /// Proves transcript-bound Packed EO over the native [`ShortInt`] type
+    /// selected by `Entry`.
+    pub fn prove_streaming_bound<Entry, S>(
+        source: &mut S,
+        tbv: &TensorBasisVector<F>,
+        claimed: F,
+        bit_width: usize,
+        binding: F,
+    ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>>
+    where
+        Entry: BvaInteger,
+        S: BvaSource<Entry>,
+    {
+        let logical_len = <S as BvaSource<Entry>>::layout(source).logical_len();
+        let stride = packing_stride_for_bit_width::<F>(logical_len, bit_width)?;
+        Self::prove_integer_streaming_inner::<Entry, S>(
+            source,
+            tbv,
+            claimed,
+            bit_width,
+            stride,
+            true,
+            Some(binding),
+            None,
+            None,
+            None,
+        )
+    }
+
+    /// Proves Packed EO with an explicit packing stride for tests and
+    /// controlled performance measurements.
+    pub fn prove_streaming_with_stride<Entry, S>(
+        source: &mut S,
+        tbv: &TensorBasisVector<F>,
+        claimed: F,
+        bit_width: usize,
+        stride: usize,
+    ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>>
+    where
+        Entry: BvaInteger,
+        S: BvaSource<Entry>,
+    {
+        Self::prove_integer_streaming_inner::<Entry, S>(
+            source, tbv, claimed, bit_width, stride, true, None, None, None, None,
+        )
+    }
+
     pub fn prove_i8_streaming<S: BvaI8Source>(
         source: &mut S,
         tbv: &TensorBasisVector<F>,
         claimed: F,
         bit_width: usize,
     ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>> {
-        let stride = packing_stride_for_bit_width::<F>(source.layout().logical_len, bit_width)?;
-        Self::prove_i8_streaming_inner(
-            source, tbv, claimed, bit_width, stride, None, None, None, None,
-        )
+        Self::prove_streaming::<i8, S>(source, tbv, claimed, bit_width)
     }
 
     pub fn prove_i8_streaming_bound<S: BvaI8Source>(
@@ -1420,18 +2560,26 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
         bit_width: usize,
         binding: F,
     ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>> {
-        let stride = packing_stride_for_bit_width::<F>(source.layout().logical_len, bit_width)?;
-        Self::prove_i8_streaming_inner(
-            source,
-            tbv,
-            claimed,
-            bit_width,
-            stride,
-            Some(binding),
-            None,
-            None,
-            None,
-        )
+        Self::prove_streaming_bound::<i8, S>(source, tbv, claimed, bit_width, binding)
+    }
+
+    pub fn prove_i16_streaming<S: BvaI16Source>(
+        source: &mut S,
+        tbv: &TensorBasisVector<F>,
+        claimed: F,
+        bit_width: usize,
+    ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>> {
+        Self::prove_streaming::<i16, S>(source, tbv, claimed, bit_width)
+    }
+
+    pub fn prove_i16_streaming_bound<S: BvaI16Source>(
+        source: &mut S,
+        tbv: &TensorBasisVector<F>,
+        claimed: F,
+        bit_width: usize,
+        binding: F,
+    ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>> {
+        Self::prove_streaming_bound::<i16, S>(source, tbv, claimed, bit_width, binding)
     }
 
     /// Same as [`Self::prove_i8_streaming_bound`], but takes the cross-term lane
@@ -1448,13 +2596,15 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
         binding: F,
         lane_projections: &PackedLaneProjections<F>,
     ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>> {
-        let stride = packing_stride_for_bit_width::<F>(source.layout().logical_len, bit_width)?;
-        Self::prove_i8_streaming_inner(
+        let stride =
+            packing_stride_for_bit_width::<F>(BvaI8Source::layout(source).logical_len, bit_width)?;
+        Self::prove_integer_streaming_inner::<i8, S>(
             source,
             tbv,
             claimed,
             bit_width,
             stride,
+            true,
             Some(binding),
             Some(lane_projections),
             None,
@@ -1478,13 +2628,15 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
         lane_projections: &PackedLaneProjections<F>,
         accelerator: &mut dyn PackedEoReducedVectors<F, Error = String>,
     ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>> {
-        let stride = packing_stride_for_bit_width::<F>(source.layout().logical_len, bit_width)?;
-        Self::prove_i8_streaming_inner(
+        let stride =
+            packing_stride_for_bit_width::<F>(BvaI8Source::layout(source).logical_len, bit_width)?;
+        Self::prove_integer_streaming_inner::<i8, S>(
             source,
             tbv,
             claimed,
             bit_width,
             stride,
+            true,
             Some(binding),
             Some(lane_projections),
             Some(accelerator),
@@ -1499,8 +2651,21 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
         bit_width: usize,
         stride: usize,
     ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>> {
-        Self::prove_i8_streaming_inner(
-            source, tbv, claimed, bit_width, stride, None, None, None, None,
+        Self::prove_streaming_with_stride::<i8, S>(source, tbv, claimed, bit_width, stride)
+    }
+
+    /// Retained only for controlled A/B measurements against the previous
+    /// per-bucket full-width rounds.
+    #[doc(hidden)]
+    pub fn prove_i8_streaming_with_stride_bucketed_reference<S: BvaI8Source>(
+        source: &mut S,
+        tbv: &TensorBasisVector<F>,
+        claimed: F,
+        bit_width: usize,
+        stride: usize,
+    ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>> {
+        Self::prove_integer_streaming_inner::<i8, S>(
+            source, tbv, claimed, bit_width, stride, false, None, None, None, None,
         )
     }
 
@@ -1515,13 +2680,15 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
         bit_width: usize,
         transcript: &mut dyn PackedEoChallengeTranscript<F>,
     ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>> {
-        let stride = packing_stride_for_bit_width::<F>(source.layout().logical_len, bit_width)?;
-        Self::prove_i8_streaming_inner(
+        let stride =
+            packing_stride_for_bit_width::<F>(BvaI8Source::layout(source).logical_len, bit_width)?;
+        Self::prove_integer_streaming_inner::<i8, S>(
             source,
             tbv,
             claimed,
             bit_width,
             stride,
+            true,
             None,
             None,
             None,
@@ -1529,18 +2696,23 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
         )
     }
 
-    fn prove_i8_streaming_inner<S: BvaI8Source>(
+    fn prove_integer_streaming_inner<Entry, S>(
         source: &mut S,
         tbv: &TensorBasisVector<F>,
         claimed: F,
         bit_width: usize,
         stride: usize,
+        use_flat_cpu: bool,
         binding: Option<F>,
         lane_projections: Option<&PackedLaneProjections<F>>,
         mut accelerator: Option<&mut dyn PackedEoReducedVectors<F, Error = String>>,
         mut commitment_transcript: Option<&mut dyn PackedEoChallengeTranscript<F>>,
-    ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>> {
-        if bit_width == 0 || bit_width > 8 {
+    ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>>
+    where
+        Entry: BvaInteger,
+        S: BvaSource<Entry>,
+    {
+        if bit_width == 0 || bit_width > Entry::BITS {
             return Err(BvaError::InvalidBitWidth(bit_width).into());
         }
         let layout = source.layout().clone();
@@ -1548,67 +2720,111 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
             return Err(BvaError::LayoutMismatch.into());
         }
         validate_packing_stride(layout.logical_len, stride)?;
+        let geometries = source_geometries::<Entry, S>(source)?;
         let offsets = layout.bucket_offsets();
+        let mut bucket_to_vector = vec![usize::MAX; layout.bucket_sizes.len()];
+        for (vector_index, &bucket_index) in layout.vector_to_bucket.iter().enumerate() {
+            if bucket_index >= bucket_to_vector.len()
+                || bucket_to_vector[bucket_index] != usize::MAX
+            {
+                return Err(BvaError::VectorIndex.into());
+            }
+            bucket_to_vector[bucket_index] = vector_index;
+        }
+        if bucket_to_vector.contains(&usize::MAX) {
+            return Err(BvaError::MissingVector.into());
+        }
         let mut packed_positive = vec![F::zero(); stride - 1];
         let mut packed_negative = vec![F::zero(); stride - 1];
         let mut trace = F::zero();
         let mut visited = vec![false; layout.vector_lengths.len()];
-        let mut counters = PaddingWorkCounters::default();
+        let materialized_padding_entries = source.materialized_padding_entries();
+        let mut counters = PaddingWorkCounters {
+            materialized_padding_entries: materialized_padding_entries as u64,
+            ..Default::default()
+        };
         let mut profile = StreamingEoProfile {
             source_passes: 1,
+            materialized_padding_entries,
             ..Default::default()
         };
         let mut bva_error = None;
         let cross_terms_started = Instant::now();
-        source
-            .for_each_vector(&mut |vector_index, values| {
-                if bva_error.is_some() {
-                    return;
+        if let Some(vectors) = source.indexed_vectors() {
+            if vectors.len() != layout.vector_lengths.len() {
+                return Err(BvaError::MissingVector.into());
+            }
+            for (vector_index, values) in vectors.iter().enumerate() {
+                if values.len() != geometries[vector_index].physical_len() {
+                    return Err(BvaError::VectorLength.into());
                 }
-                let Some(&bucket_index) = layout.vector_to_bucket.get(vector_index) else {
-                    bva_error = Some(BvaError::VectorIndex);
-                    return;
-                };
-                if visited[vector_index] {
-                    bva_error = Some(BvaError::DuplicateVector);
-                    return;
-                }
-                visited[vector_index] = true;
-                if values.len() != layout.vector_lengths[vector_index] {
-                    bva_error = Some(BvaError::VectorLength);
-                    return;
-                }
-                profile.physical_entries_per_pass += values.len();
-                profile.total_visited_entries += values.len();
-                if bit_width < 8
-                    && values
-                        .par_iter()
-                        .any(|value| value.unsigned_abs() >= (1_u8 << bit_width))
-                {
-                    let value = values
-                        .iter()
-                        .copied()
-                        .find(|value| value.unsigned_abs() >= (1_u8 << bit_width))
-                        .expect("parallel range check found a value");
-                    bva_error = Some(BvaError::ValueOutOfRange {
-                        value: i32::from(value),
+            }
+            let task_count = eo_strided_task_count(layout.bucket_sizes.len());
+            if bit_width < Entry::BITS {
+                let bound = 1_u64 << bit_width;
+                let invalid = (0..task_count)
+                    .into_par_iter()
+                    .map(|task| {
+                        for bucket_index in (task..layout.bucket_sizes.len()).step_by(task_count) {
+                            let vector_index = bucket_to_vector[bucket_index];
+                            if let Some((entry_index, &value)) = vectors[vector_index]
+                                .iter()
+                                .enumerate()
+                                .find(|(_, value)| value.unsigned_abs_u64() >= bound)
+                            {
+                                return Some((bucket_index, entry_index, value));
+                            }
+                        }
+                        None
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .flatten()
+                    .min_by_key(|(bucket_index, entry_index, _)| (*bucket_index, *entry_index));
+                if let Some((_, _, value)) = invalid {
+                    return Err(BvaError::ValueOutOfRange {
+                        value: value.to_i32(),
                         bit_width,
-                    });
-                    return;
+                    }
+                    .into());
                 }
-                let logical_offset = offsets[bucket_index];
-                let supplied = lane_projections
-                    .and_then(|lanes| lanes.get(bucket_index))
-                    .and_then(|lanes| lanes.as_deref());
-                let (positive, negative, local_trace, operations) = packed_i8_cross_terms(
-                    values,
-                    bucket_index,
-                    logical_offset,
-                    &offsets,
-                    tbv,
-                    stride,
-                    supplied,
-                );
+            }
+            let contributions = (0..task_count)
+                .into_par_iter()
+                .map(|task| {
+                    let mut positive = vec![F::zero(); stride - 1];
+                    let mut negative = vec![F::zero(); stride - 1];
+                    let mut trace = F::zero();
+                    let mut operations = 0_u64;
+                    for bucket_index in (task..layout.bucket_sizes.len()).step_by(task_count) {
+                        let vector_index = bucket_to_vector[bucket_index];
+                        let supplied = lane_projections
+                            .and_then(|lanes| lanes.get(bucket_index))
+                            .and_then(|lanes| lanes.as_deref());
+                        let (local_positive, local_negative, local_trace, local_operations) =
+                            packed_integer_cross_terms(
+                                vectors[vector_index],
+                                geometries[vector_index],
+                                bucket_index,
+                                offsets[bucket_index],
+                                &offsets,
+                                tbv,
+                                stride,
+                                supplied,
+                            );
+                        for (total, contribution) in positive.iter_mut().zip(local_positive) {
+                            *total += contribution;
+                        }
+                        for (total, contribution) in negative.iter_mut().zip(local_negative) {
+                            *total += contribution;
+                        }
+                        trace += local_trace;
+                        operations += local_operations;
+                    }
+                    (positive, negative, trace, operations)
+                })
+                .collect::<Vec<_>>();
+            for (positive, negative, local_trace, operations) in contributions {
                 for (total, contribution) in packed_positive.iter_mut().zip(positive) {
                     *total += contribution;
                 }
@@ -1617,9 +2833,70 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
                 }
                 trace += local_trace;
                 counters.real_ip_field_ops += operations;
-            })
-            .map_err(StreamingEoError::Source)?;
-        profile.timings.cross_terms_seconds = cross_terms_started.elapsed().as_secs_f64();
+            }
+            profile.physical_entries_per_pass = vectors.iter().map(|values| values.len()).sum();
+            profile.total_visited_entries = profile.physical_entries_per_pass;
+            visited.fill(true);
+        } else {
+            source
+                .for_each_vector(&mut |vector_index, values| {
+                    if bva_error.is_some() {
+                        return;
+                    }
+                    let Some(&bucket_index) = layout.vector_to_bucket.get(vector_index) else {
+                        bva_error = Some(BvaError::VectorIndex);
+                        return;
+                    };
+                    if visited[vector_index] {
+                        bva_error = Some(BvaError::DuplicateVector);
+                        return;
+                    }
+                    visited[vector_index] = true;
+                    let geometry = geometries[vector_index];
+                    if values.len() != geometry.physical_len() {
+                        bva_error = Some(BvaError::VectorLength);
+                        return;
+                    }
+                    profile.physical_entries_per_pass += values.len();
+                    profile.total_visited_entries += values.len();
+                    if bit_width < Entry::BITS {
+                        if let Some(&value) = values
+                            .iter()
+                            .find(|value| value.unsigned_abs_u64() >= (1_u64 << bit_width))
+                        {
+                            bva_error = Some(BvaError::ValueOutOfRange {
+                                value: value.to_i32(),
+                                bit_width,
+                            });
+                            return;
+                        }
+                    }
+                    let logical_offset = offsets[bucket_index];
+                    let supplied = lane_projections
+                        .and_then(|lanes| lanes.get(bucket_index))
+                        .and_then(|lanes| lanes.as_deref());
+                    let (positive, negative, local_trace, operations) = packed_integer_cross_terms(
+                        values,
+                        geometry,
+                        bucket_index,
+                        logical_offset,
+                        &offsets,
+                        tbv,
+                        stride,
+                        supplied,
+                    );
+                    for (total, contribution) in packed_positive.iter_mut().zip(positive) {
+                        *total += contribution;
+                    }
+                    for (total, contribution) in packed_negative.iter_mut().zip(negative) {
+                        *total += contribution;
+                    }
+                    trace += local_trace;
+                    counters.real_ip_field_ops += operations;
+                })
+                .map_err(StreamingEoError::Source)?;
+        }
+        profile.timings.packed_cross_terms_seconds = cross_terms_started.elapsed().as_secs_f64();
         if let Some(error) = bva_error {
             return Err(error.into());
         }
@@ -1655,13 +2932,124 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
             inverse_power *= packed_challenge_inv;
         }
 
+        // The CPU indexed path materializes both packed vectors once, then
+        // runs ordinary full-width EO rounds over their contiguous storage.
+        // At the doubled stride the two vectors together occupy the same
+        // number of field entries as the old one-sided packed witness.
+        if use_flat_cpu && accelerator.is_none() {
+            if let Some(vectors) = source.indexed_vectors() {
+                let fold_started = Instant::now();
+                let (mut flat_witness, mut flat_basis, compression_operations) =
+                    compress_indexed_integer_and_tbv_flat(
+                        &layout,
+                        tbv,
+                        &geometries,
+                        &vectors,
+                        packed_challenge,
+                        &inverse_powers,
+                        stride,
+                    );
+                profile.timings.first_fold_seconds = fold_started.elapsed().as_secs_f64();
+                profile.source_passes += 1;
+                profile.total_visited_entries +=
+                    vectors.iter().map(|values| values.len()).sum::<usize>();
+                profile.maximum_live_vector_entries = flat_witness
+                    .len()
+                    .checked_add(flat_basis.len())
+                    .ok_or(BvaError::LengthOverflow)?;
+                counters.real_fold_field_ops += compression_operations;
+
+                let reduced_check_started = Instant::now();
+                let mut reduced_claim = claimed;
+                let mut positive_power = packed_challenge;
+                let mut negative_power = packed_challenge_inv;
+                for (&positive, &negative) in packed_positive.iter().zip(&packed_negative) {
+                    reduced_claim += positive * positive_power + negative * negative_power;
+                    positive_power *= packed_challenge;
+                    negative_power *= packed_challenge_inv;
+                }
+                let (reduced_actual, reduced_operations) =
+                    flat_inner_product(&flat_witness, &flat_basis);
+                counters.real_ip_field_ops += reduced_operations;
+                if reduced_actual != reduced_claim {
+                    return Err(BvaError::ClaimMismatch.into());
+                }
+                profile.timings.reduced_check_seconds =
+                    reduced_check_started.elapsed().as_secs_f64();
+
+                let binary_round_count = (layout.logical_len / stride).ilog2() as usize;
+                let mut binary_rounds = Vec::with_capacity(binary_round_count);
+                for round in 0..binary_round_count {
+                    let binary_cross_terms_started = Instant::now();
+                    let (iota, rho, ip_operations) =
+                        flat_eo_cross_inner_products(&flat_witness, &flat_basis);
+                    profile.timings.binary_cross_terms_seconds +=
+                        binary_cross_terms_started.elapsed().as_secs_f64();
+                    counters.real_ip_field_ops += ip_operations;
+
+                    let binary_challenge_started = Instant::now();
+                    binary_rounds.push((iota, rho));
+                    let challenge = if let Some(transcript) = commitment_transcript.as_deref_mut() {
+                        transcript
+                            .binary_challenge(round, iota, rho)
+                            .map_err(StreamingEoError::ChallengeTranscript)?
+                    } else {
+                        let fs = fs.as_mut().expect("public transcript is initialized");
+                        fs.push(&iota);
+                        fs.push(&rho);
+                        fs.gen_challenge()
+                    };
+                    let challenge_inv = challenge.inverse().ok_or(BvaError::ZeroChallenge)?;
+                    profile.timings.binary_challenge_seconds +=
+                        binary_challenge_started.elapsed().as_secs_f64();
+
+                    let binary_fold_started = Instant::now();
+                    counters.real_fold_field_ops += flat_eo_fold_pair_in_place(
+                        &mut flat_witness,
+                        &mut flat_basis,
+                        challenge,
+                        challenge_inv,
+                    );
+                    profile.timings.binary_fold_seconds +=
+                        binary_fold_started.elapsed().as_secs_f64();
+                }
+                if flat_witness.len() != 1 || flat_basis.len() != 1 {
+                    return Err(BvaError::MissingFinalValue.into());
+                }
+                let a_reduced = flat_witness[0];
+                let b_reduced = flat_basis[0];
+                if let Some(transcript) = commitment_transcript.as_deref_mut() {
+                    transcript
+                        .bind_reduced(a_reduced, b_reduced)
+                        .map_err(StreamingEoError::ChallengeTranscript)?;
+                }
+                return Ok((
+                    Self {
+                        packing_stride: stride,
+                        packed_positive,
+                        packed_negative,
+                        binary_rounds,
+                        a_reduced,
+                        b_reduced,
+                    },
+                    counters,
+                    profile,
+                ));
+            }
+        }
+
         let unallocated_from = if accelerator.is_some() {
             ACCELERATED_MINIMUM_ENTRIES
         } else {
             usize::MAX
         };
-        let (mut reduced_buckets, destinations) =
-            build_packed_reduced_buckets(tbv, packed_challenge, stride, unallocated_from);
+        let (mut reduced_buckets, destinations) = build_packed_reduced_buckets(
+            tbv,
+            &geometries,
+            packed_challenge,
+            stride,
+            unallocated_from,
+        );
         profile.maximum_live_vector_entries =
             reduced_buckets.iter().map(|bucket| bucket.entries).sum();
 
@@ -1698,70 +3086,132 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
         visited.fill(false);
         bva_error = None;
         let fold_started = Instant::now();
-        source
-            .for_each_vector(&mut |vector_index, values| {
-                if bva_error.is_some() {
-                    return;
+        if let Some(vectors) = source.indexed_vectors() {
+            if vectors.len() != layout.vector_lengths.len() {
+                return Err(BvaError::MissingVector.into());
+            }
+            let mut destination_sources = vec![Vec::<usize>::new(); reduced_buckets.len()];
+            for (vector_index, values) in vectors.iter().enumerate() {
+                if values.len() != geometries[vector_index].physical_len() {
+                    return Err(BvaError::VectorLength.into());
                 }
-                let Some(&bucket_index) = layout.vector_to_bucket.get(vector_index) else {
-                    bva_error = Some(BvaError::VectorIndex);
-                    return;
+                let destination = destinations[vector_index].bucket_index;
+                let Some(sources) = destination_sources.get_mut(destination) else {
+                    return Err(BvaError::VectorIndex.into());
                 };
-                if visited[vector_index] {
-                    bva_error = Some(BvaError::DuplicateVector);
-                    return;
-                }
-                visited[vector_index] = true;
-                if values.len() != layout.vector_lengths[vector_index] {
-                    bva_error = Some(BvaError::VectorLength);
-                    return;
-                }
-                profile.total_visited_entries += values.len();
-                let destination = destinations[vector_index];
-                if layout.bucket_sizes[bucket_index] >= stride {
-                    counters.real_fold_field_ops += reduced_buckets[destination.bucket_index]
-                        .values
-                        .par_iter_mut()
-                        .zip(values.par_chunks(stride))
-                        .map(|(output, row)| {
+                sources.push(vector_index);
+            }
+            let (filled_buckets, operations) =
+                map_owned_strided(reduced_buckets, |destination_index, mut bucket| {
+                    let mut operations = 0_u64;
+                    for &vector_index in &destination_sources[destination_index] {
+                        let values = vectors[vector_index];
+                        let geometry = geometries[vector_index];
+                        let bucket_index = layout.vector_to_bucket[vector_index];
+                        let destination = destinations[vector_index];
+                        if layout.bucket_sizes[bucket_index] >= stride {
+                            for (packed_index, output) in bucket.values.iter_mut().enumerate() {
+                                let mut sum = F::zero();
+                                let logical_start = packed_index * stride;
+                                for (lane, &inverse_power) in inverse_powers.iter().enumerate() {
+                                    let Some(physical_index) =
+                                        geometry.physical_index(logical_start + lane)
+                                    else {
+                                        continue;
+                                    };
+                                    let value = values[physical_index];
+                                    if value.is_zero() {
+                                        continue;
+                                    }
+                                    sum += value.to_field::<F>() * inverse_power;
+                                    operations += 2;
+                                }
+                                *output = sum;
+                            }
+                            continue;
+                        }
+                        for (physical_index, &value) in values.iter().enumerate() {
+                            if value.is_zero() {
+                                continue;
+                            }
+                            let local_index = geometry
+                                .logical_index(physical_index)
+                                .expect("validated geometry maps every physical entry");
+                            bucket.values[0] += value.to_field::<F>()
+                                * inverse_powers[destination.lane_offset + local_index];
+                            operations += 2;
+                        }
+                    }
+                    (bucket, operations)
+                });
+            reduced_buckets = filled_buckets;
+            counters.real_fold_field_ops += operations;
+            profile.total_visited_entries +=
+                vectors.iter().map(|values| values.len()).sum::<usize>();
+            visited.fill(true);
+        } else {
+            source
+                .for_each_vector(&mut |vector_index, values| {
+                    if bva_error.is_some() {
+                        return;
+                    }
+                    let Some(&bucket_index) = layout.vector_to_bucket.get(vector_index) else {
+                        bva_error = Some(BvaError::VectorIndex);
+                        return;
+                    };
+                    if visited[vector_index] {
+                        bva_error = Some(BvaError::DuplicateVector);
+                        return;
+                    }
+                    visited[vector_index] = true;
+                    let geometry = geometries[vector_index];
+                    if values.len() != geometry.physical_len() {
+                        bva_error = Some(BvaError::VectorLength);
+                        return;
+                    }
+                    profile.total_visited_entries += values.len();
+                    let destination = destinations[vector_index];
+                    if layout.bucket_sizes[bucket_index] >= stride {
+                        for (packed_index, output) in reduced_buckets[destination.bucket_index]
+                            .values
+                            .iter_mut()
+                            .enumerate()
+                        {
                             let mut sum = F::zero();
-                            let mut operations = 0_u64;
-                            for (&value, &inverse_power) in row.iter().zip(&inverse_powers) {
-                                if value == 0 {
+                            let logical_start = packed_index * stride;
+                            for (lane, &inverse_power) in inverse_powers.iter().enumerate() {
+                                let Some(physical_index) =
+                                    geometry.physical_index(logical_start + lane)
+                                else {
+                                    continue;
+                                };
+                                let value = values[physical_index];
+                                if value.is_zero() {
                                     continue;
                                 }
-                                sum += i8_to_field::<F>(value) * inverse_power;
-                                operations += 2;
+                                sum += value.to_field::<F>() * inverse_power;
+                                counters.real_fold_field_ops += 2;
                             }
                             *output = sum;
-                            operations
-                        })
-                        .sum::<u64>();
-                } else {
-                    let (contribution, operations) = values
-                        .par_iter()
-                        .enumerate()
-                        .map(|(local_index, &value)| {
-                            if value == 0 {
-                                (F::zero(), 0_u64)
-                            } else {
-                                (
-                                    i8_to_field::<F>(value)
-                                        * inverse_powers[destination.lane_offset + local_index],
-                                    2,
-                                )
+                        }
+                    } else {
+                        for (physical_index, &value) in values.iter().enumerate() {
+                            if value.is_zero() {
+                                continue;
                             }
-                        })
-                        .reduce(
-                            || (F::zero(), 0_u64),
-                            |left, right| (left.0 + right.0, left.1 + right.1),
-                        );
-                    reduced_buckets[destination.bucket_index].values[0] += contribution;
-                    counters.real_fold_field_ops += operations;
-                }
-            })
-            .map_err(StreamingEoError::Source)?;
-        profile.timings.fold_seconds = fold_started.elapsed().as_secs_f64();
+                            let local_index = geometry
+                                .logical_index(physical_index)
+                                .expect("validated geometry maps every physical entry");
+                            reduced_buckets[destination.bucket_index].values[0] += value
+                                .to_field::<F>()
+                                * inverse_powers[destination.lane_offset + local_index];
+                            counters.real_fold_field_ops += 2;
+                        }
+                    }
+                })
+                .map_err(StreamingEoError::Source)?;
+        }
+        profile.timings.first_fold_seconds = fold_started.elapsed().as_secs_f64();
         profile.source_passes += 1;
         if let Some(error) = bva_error {
             return Err(error.into());
@@ -1805,10 +3255,10 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
         }
         profile.timings.reduced_check_seconds = reduced_check_started.elapsed().as_secs_f64();
 
-        let binary_rounds_started = Instant::now();
         let binary_round_count = (layout.logical_len / stride).ilog2() as usize;
         let mut binary_rounds = Vec::with_capacity(binary_round_count);
         for round in 0..binary_round_count {
+            let binary_cross_terms_started = Instant::now();
             let (mut iota, mut rho) =
                 packed_eo_bucketed_cross_inner_products(&reduced_buckets, &mut counters);
             if let Some(accelerator) = accelerator.as_deref_mut() {
@@ -1836,6 +3286,10 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
                     }
                 }
             }
+            profile.timings.binary_cross_terms_seconds +=
+                binary_cross_terms_started.elapsed().as_secs_f64();
+
+            let binary_challenge_started = Instant::now();
             binary_rounds.push((iota, rho));
             let challenge = if let Some(transcript) = commitment_transcript.as_deref_mut() {
                 transcript
@@ -1848,6 +3302,10 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
                 fs.gen_challenge()
             };
             let challenge_inv = challenge.inverse().ok_or(BvaError::ZeroChallenge)?;
+            profile.timings.binary_challenge_seconds +=
+                binary_challenge_started.elapsed().as_secs_f64();
+
+            let binary_fold_started = Instant::now();
             reduced_buckets = packed_eo_fold_buckets_in_place(
                 reduced_buckets,
                 challenge,
@@ -1875,8 +3333,8 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
                     }
                 }
             }
+            profile.timings.binary_fold_seconds += binary_fold_started.elapsed().as_secs_f64();
         }
-        profile.timings.binary_rounds_seconds = binary_rounds_started.elapsed().as_secs_f64();
         if reduced_buckets.len() != 1
             || reduced_buckets[0].cover_size != 1
             || reduced_buckets[0].values.len() != 1
@@ -2079,6 +3537,7 @@ pub enum BvaError {
     DuplicateVector,
     MissingVector,
     VectorLength,
+    VectorGeometry,
     InvalidBitWidth(usize),
     InvalidPackingStride {
         stride: usize,
@@ -2122,6 +3581,12 @@ impl Display for BvaError {
             Self::DuplicateVector => write!(formatter, "BVA source emitted a vector twice"),
             Self::MissingVector => write!(formatter, "BVA source omitted a physical vector"),
             Self::VectorLength => write!(formatter, "BVA source emitted an invalid vector length"),
+            Self::VectorGeometry => {
+                write!(
+                    formatter,
+                    "BVA source emitted an invalid compact vector geometry"
+                )
+            }
             Self::InvalidBitWidth(bit_width) => {
                 write!(formatter, "invalid packed BVA bit width {bit_width}")
             }
@@ -2154,9 +3619,11 @@ mod tests {
     use rayon::ThreadPoolBuilder;
 
     use super::{
-        i8_to_field, packed_eo_fold_prefix_in_place_parallel, packed_eo_litebullet_fiat_shamir,
-        packing_stride_for_bit_width, BvaI8Source, BvaLayout, EoProofDecodeError,
-        PackedEoLiteBulletProof, PaddingWorkCounters, TensorBasisVector,
+        add_short_integer_product, i8_to_field, packed_eo_fold_prefix_in_place,
+        packed_eo_litebullet_fiat_shamir, packing_stride_for_bit_width,
+        project_short_integer_rows_lazy, short_integer_bytes_to_field,
+        short_integer_reduction_radix, short_integer_window_multiples, BvaI8Geometry, BvaI8Source,
+        BvaInteger, BvaLayout, EoProofDecodeError, PackedEoLiteBulletProof, TensorBasisVector,
     };
 
     #[derive(Clone)]
@@ -2172,6 +3639,10 @@ mod tests {
             &self.layout
         }
 
+        fn indexed_vectors(&self) -> Option<Vec<&[i8]>> {
+            Some(self.vectors.iter().map(Vec::as_slice).collect())
+        }
+
         fn for_each_vector(
             &mut self,
             visit: &mut dyn FnMut(usize, &[i8]),
@@ -2179,6 +3650,157 @@ mod tests {
             for (index, vector) in self.vectors.iter().enumerate() {
                 visit(index, vector);
             }
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct StreamingOnlyI8Source {
+        layout: BvaLayout,
+        vectors: Vec<Vec<i8>>,
+    }
+
+    impl BvaI8Source for StreamingOnlyI8Source {
+        type Error = Infallible;
+
+        fn layout(&self) -> &BvaLayout {
+            &self.layout
+        }
+
+        fn for_each_vector(
+            &mut self,
+            visit: &mut dyn FnMut(usize, &[i8]),
+        ) -> Result<(), Self::Error> {
+            for (index, vector) in self.vectors.iter().enumerate() {
+                visit(index, vector);
+            }
+            Ok(())
+        }
+    }
+
+    struct CompactRectangleI8Source {
+        layout: BvaLayout,
+        values: Vec<i8>,
+    }
+
+    #[test]
+    fn direct_short_integer_field_products_match_full_width_products() {
+        let coefficients = [Fr::from(1_u64), Fr::from(17_u64), Fr::from(1_000_003_u64)];
+        for coefficient in coefficients {
+            let (i8_multiples, _) = short_integer_window_multiples::<Fr, i8>(coefficient);
+            for value in i8::MIN..=i8::MAX {
+                let initial = Fr::from(23_u64);
+                let mut direct = initial;
+                add_short_integer_product(&mut direct, value, &i8_multiples);
+                assert_eq!(direct, initial + i8_to_field::<Fr>(value) * coefficient);
+            }
+
+            let (i16_multiples, _) = short_integer_window_multiples::<Fr, i16>(coefficient);
+            for value in [
+                i16::MIN,
+                -32_767,
+                -1_001,
+                -128,
+                -1,
+                0,
+                1,
+                127,
+                1_001,
+                32_767,
+                i16::MAX,
+            ] {
+                let initial = Fr::from(29_u64);
+                let expected_value = if value >= 0 {
+                    Fr::from(value as u64)
+                } else {
+                    -Fr::from((-(value as i32)) as u64)
+                };
+                let mut direct = initial;
+                add_short_integer_product(&mut direct, value, &i16_multiples);
+                assert_eq!(direct, initial + expected_value * coefficient);
+            }
+        }
+    }
+
+    #[test]
+    fn short_integer_word_reduction_matches_generic_byte_reduction() {
+        let radix = short_integer_reduction_radix::<Fr>();
+        for byte_len in [0, 1, 30, 31, 32, 33, 35, 37, 40] {
+            let bytes = (0..byte_len)
+                .map(|index| (index as u8).wrapping_mul(73).wrapping_add(19))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                short_integer_bytes_to_field::<Fr>(&bytes, radix),
+                Fr::from_le_bytes_mod_order(&bytes)
+            );
+        }
+    }
+
+    #[test]
+    fn lazy_short_integer_projection_matches_full_width_with_implicit_zeros() {
+        let stride = 64;
+        let geometry = BvaI8Geometry::rectangle(64, 64, 63, 60).unwrap();
+        let values = (0..geometry.physical_len())
+            .map(|index| ((index % 256) as i16 - 128) as i8)
+            .collect::<Vec<_>>();
+        let coefficients = (0..64)
+            .map(|row| Fr::from((row * 17 + 3) as u64))
+            .collect::<Vec<_>>();
+        let (actual, _) = project_short_integer_rows_lazy(&values, geometry, &coefficients, stride);
+        let mut expected = vec![Fr::zero(); stride];
+        for (row, &coefficient) in coefficients.iter().enumerate() {
+            for (lane, projection) in expected.iter_mut().enumerate() {
+                let Some(physical_index) = geometry.physical_index(row * stride + lane) else {
+                    continue;
+                };
+                *projection += values[physical_index].to_field::<Fr>() * coefficient;
+            }
+        }
+        assert_eq!(actual, expected);
+
+        let stride = 32;
+        let geometry = BvaI8Geometry::prefix(64 * stride, 64 * stride).unwrap();
+        let values = (0..geometry.physical_len())
+            .map(|index| match index % 6 {
+                0 => i16::MIN,
+                1 => i16::MAX,
+                2 => -30_001,
+                3 => 17_003,
+                4 => -1,
+                _ => 0,
+            })
+            .collect::<Vec<_>>();
+        let (actual, _) = project_short_integer_rows_lazy(&values, geometry, &coefficients, stride);
+        let mut expected = vec![Fr::zero(); stride];
+        for (row, &coefficient) in coefficients.iter().enumerate() {
+            for (lane, projection) in expected.iter_mut().enumerate() {
+                *projection += values[row * stride + lane].to_field::<Fr>() * coefficient;
+            }
+        }
+        assert_eq!(actual, expected);
+    }
+
+    impl BvaI8Source for CompactRectangleI8Source {
+        type Error = Infallible;
+
+        fn layout(&self) -> &BvaLayout {
+            &self.layout
+        }
+
+        fn vector_geometry(&self, vector_index: usize) -> Option<BvaI8Geometry> {
+            (vector_index == 0)
+                .then(|| BvaI8Geometry::rectangle(8, 8, 8, 4).expect("valid rectangle"))
+        }
+
+        fn indexed_vectors(&self) -> Option<Vec<&[i8]>> {
+            Some(vec![&self.values])
+        }
+
+        fn for_each_vector(
+            &mut self,
+            visit: &mut dyn FnMut(usize, &[i8]),
+        ) -> Result<(), Self::Error> {
+            visit(0, &self.values);
             Ok(())
         }
     }
@@ -2362,10 +3984,12 @@ mod tests {
     }
 
     #[test]
-    fn eight_bit_packing_uses_32_entries_for_a_256_bit_field() {
+    fn packing_doubles_the_base_mixed_width_ratio() {
         assert_eq!(std::mem::size_of::<i8>(), 1);
+        assert_eq!(std::mem::size_of::<i16>(), 2);
         assert_eq!(Fr::MODULUS_BIT_SIZE, 255);
-        assert_eq!(packing_stride_for_bit_width::<Fr>(64, 8).unwrap(), 32);
+        assert_eq!(packing_stride_for_bit_width::<Fr>(64, 8).unwrap(), 64);
+        assert_eq!(packing_stride_for_bit_width::<Fr>(64, 16).unwrap(), 32);
         assert_eq!(packing_stride_for_bit_width::<Fr>(16, 8).unwrap(), 16);
     }
 
@@ -2414,8 +4038,22 @@ mod tests {
         )
         .unwrap();
         let verification = proof.verify_with_tbv(&tbv, claimed);
+        let mut streaming_source = StreamingOnlyI8Source {
+            layout: layout.clone(),
+            vectors: vectors.clone(),
+        };
+        let (streaming_proof, _, streaming_profile) =
+            PackedEoLiteBulletProof::prove_i8_streaming_with_stride(
+                &mut streaming_source,
+                &tbv,
+                claimed,
+                8,
+                4,
+            )
+            .unwrap();
 
         assert!(verification.accepted);
+        assert_eq!(streaming_proof, proof);
         assert_eq!(proof.packing_stride, 4);
         assert_eq!(proof.packed_positive.len(), 3);
         assert_eq!(proof.packed_negative.len(), 3);
@@ -2425,15 +4063,60 @@ mod tests {
         assert_eq!(profile.source_passes, 2);
         assert_eq!(profile.physical_entries_per_pass, 9);
         assert_eq!(profile.total_visited_entries, 18);
-        assert_eq!(profile.maximum_live_vector_entries, 3);
+        assert_eq!(
+            profile.maximum_live_vector_entries,
+            2 * (layout.logical_len() / proof.packing_stride)
+        );
         assert_eq!(profile.materialized_padding_entries, 0);
         assert_eq!(counters.materialized_padding_entries, 0);
         assert_eq!(counters.padding_ip_field_ops, 0);
         assert_eq!(counters.padding_fold_field_ops, 0);
+        for timings in [profile.timings, streaming_profile.timings] {
+            for seconds in [
+                timings.packed_cross_terms_seconds,
+                timings.first_fold_seconds,
+                timings.reduced_check_seconds,
+                timings.binary_cross_terms_seconds,
+                timings.binary_challenge_seconds,
+                timings.binary_fold_seconds,
+            ] {
+                assert!(seconds.is_finite());
+                assert!(seconds >= 0.0);
+            }
+            assert_eq!(
+                timings.binary_rounds_seconds(),
+                timings.binary_cross_terms_seconds
+                    + timings.binary_challenge_seconds
+                    + timings.binary_fold_seconds
+            );
+            assert_eq!(
+                timings.accounted_seconds(),
+                timings.packed_cross_terms_seconds
+                    + timings.first_fold_seconds
+                    + timings.reduced_check_seconds
+                    + timings.binary_rounds_seconds()
+            );
+        }
         assert_eq!(
             proof.a_reduced,
             dense_fold_witness(&layout, &vectors, &verification.challenges_inv)
         );
+
+        let mut no_binary_source = ReplayI8Source {
+            layout: layout.clone(),
+            vectors: vectors.clone(),
+        };
+        let (_, _, no_binary_profile) = PackedEoLiteBulletProof::prove_i8_streaming_with_stride(
+            &mut no_binary_source,
+            &tbv,
+            claimed,
+            8,
+            layout.logical_len(),
+        )
+        .unwrap();
+        assert_eq!(no_binary_profile.timings.binary_cross_terms_seconds, 0.0);
+        assert_eq!(no_binary_profile.timings.binary_challenge_seconds, 0.0);
+        assert_eq!(no_binary_profile.timings.binary_fold_seconds, 0.0);
 
         let encoded = proof.to_bytes().unwrap();
         let decoded = PackedEoLiteBulletProof::<Fr>::from_bytes_exact(&encoded).unwrap();
@@ -2472,6 +4155,37 @@ mod tests {
     }
 
     #[test]
+    fn compact_rectangle_allocates_every_occupied_packed_row() {
+        let layout = BvaLayout {
+            logical_len: 64,
+            bucket_sizes: vec![64],
+            vector_to_bucket: vec![0],
+            vector_lengths: vec![32],
+        };
+        let values = (0..32)
+            .map(|index| (index % 17) as i8 - 8)
+            .collect::<Vec<_>>();
+        let challenges = (0..6)
+            .map(|round| Fr::from(round as u64 + 2))
+            .collect::<Vec<_>>();
+        let tbv = TensorBasisVector::global_tensor(&layout, &challenges).unwrap();
+        let mut source = CompactRectangleI8Source { layout, values };
+        let claimed = tbv.inner_product_i8_streaming(&mut source).unwrap();
+
+        let (proof, _, profile) = PackedEoLiteBulletProof::prove_i8_streaming_with_stride(
+            &mut source,
+            &tbv,
+            claimed,
+            8,
+            32,
+        )
+        .unwrap();
+
+        assert!(proof.verify_with_tbv(&tbv, claimed).accepted);
+        assert_eq!(profile.maximum_live_vector_entries, 4);
+    }
+
+    #[test]
     fn plus_one_lengths_keep_internal_cover_zeros_implicit_after_packing() {
         let vectors = (0..=8)
             .rev()
@@ -2491,7 +4205,7 @@ mod tests {
             .collect::<Vec<_>>();
         let tbv = TensorBasisVector::global_tensor(&layout, &challenges).unwrap();
         let claimed = claimed_inner_product(&vectors, &tbv);
-        let expected = dense_packed_cross_terms(&layout, &vectors, &tbv, 32);
+        let expected = dense_packed_cross_terms(&layout, &vectors, &tbv, 64);
         let mut source = ReplayI8Source {
             layout: layout.clone(),
             vectors: vectors.clone(),
@@ -2507,14 +4221,14 @@ mod tests {
             &tbv,
             claimed,
             8,
-            32,
+            64,
         )
         .unwrap();
         let verification = proof.verify_with_tbv(&tbv, claimed);
 
         assert_eq!(
             proof,
-            dense_packed_proof(&layout, &vectors, &tbv, claimed, 32)
+            dense_packed_proof(&layout, &vectors, &tbv, claimed, 64)
         );
         assert_eq!(proof.packed_positive, expected.0);
         assert_eq!(proof.packed_negative, expected.1);
@@ -2524,7 +4238,10 @@ mod tests {
             proof.a_reduced,
             dense_fold_witness(&layout, &vectors, &verification.challenges_inv)
         );
-        assert_eq!(profile.maximum_live_vector_entries, (1 << 4) + 5);
+        assert_eq!(
+            profile.maximum_live_vector_entries,
+            2 * (layout.logical_len() / 64)
+        );
         assert_eq!(profile.materialized_padding_entries, 0);
         assert_eq!(counters.materialized_padding_entries, 0);
         assert_eq!(counters.padding_ip_field_ops, 0);
@@ -2538,9 +4255,8 @@ mod tests {
         let pointer = values.as_ptr();
         let capacity = values.capacity();
         let challenge = Fr::from(9_u64);
-        let mut counters = PaddingWorkCounters::default();
 
-        packed_eo_fold_prefix_in_place_parallel(&mut values, challenge, &mut counters);
+        let operations = packed_eo_fold_prefix_in_place(&mut values, challenge);
 
         let expected = original
             .chunks(2)
@@ -2549,16 +4265,38 @@ mod tests {
         assert_eq!(values, expected);
         assert_eq!(values.as_ptr(), pointer);
         assert_eq!(values.capacity(), capacity);
+        assert_eq!(operations, 16);
     }
 
     #[test]
-    fn packed_eo_is_deterministic_across_one_and_four_rayon_threads() {
-        let vectors = vec![
-            (0..1 << 14)
-                .map(|index| (index as i8).wrapping_mul(3))
-                .collect::<Vec<_>>(),
-            vec![7_i8; 64],
+    fn packed_eo_is_deterministic_across_heterogeneous_strided_workers() {
+        let lengths = [
+            1 << 15,
+            (1 << 14) + 1,
+            1 << 13,
+            (1 << 12) + 1,
+            1 << 11,
+            (1 << 10) + 1,
+            513,
+            257,
+            129,
+            65,
+            33,
+            17,
+            7,
+            3,
+            1,
+            1,
         ];
+        let vectors = lengths
+            .iter()
+            .enumerate()
+            .map(|(vector_index, &length)| {
+                (0..length)
+                    .map(|entry_index| ((entry_index + 3 * vector_index) % 127) as i8 - 63)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
         let layout =
             BvaLayout::from_lengths(&vectors.iter().map(Vec::len).collect::<Vec<_>>()).unwrap();
         let challenges = (0..layout.logical_len().ilog2())
@@ -2584,8 +4322,10 @@ mod tests {
         };
 
         let serial = prove(1);
-        let parallel = prove(4);
-        assert_eq!(serial, parallel);
-        assert!(parallel.verify_with_tbv(&tbv, claimed).accepted);
+        let eight_threads = prove(8);
+        let sixty_four_threads = prove(64);
+        assert_eq!(serial, eight_threads);
+        assert_eq!(serial, sixty_four_threads);
+        assert!(sixty_four_threads.verify_with_tbv(&tbv, claimed).accepted);
     }
 }

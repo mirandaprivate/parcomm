@@ -7,6 +7,7 @@
 use std::{
     fmt::{Display, Formatter},
     sync::Arc,
+    time::Instant,
 };
 
 use ark_bn254::Fr;
@@ -24,16 +25,17 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
     bucketed_ip::{
-        packing_stride_for_bit_width, BvaI8Source, EoLiteBulletVerification,
+        packing_stride_for_bit_width, BvaI16Source, BvaI8Source, EoLiteBulletVerification,
         PackedEoLiteBulletProof, PaddingWorkCounters, StreamingEoError, StreamingEoProfile,
         TensorBasisVector,
     },
     fiat_shamir::FiatShamir,
     jolt_dory_adapter::{
-        commit_dense_i8_zk, commit_field_vector_zk as commit_field_vector_zk_adapter,
-        normalize_monomial_point, open_dense_i8_zk,
-        open_field_vector_zk as open_field_vector_zk_adapter, verify_dense_i8_zk,
-        verify_field_vector_zk as verify_field_vector_zk_adapter, DenseI8DoryError,
+        commit_dense_i16_zk, commit_dense_i8_zk,
+        commit_field_vector_zk as commit_field_vector_zk_adapter, normalize_monomial_point,
+        open_dense_i16_zk, open_dense_i8_zk, open_field_vector_zk as open_field_vector_zk_adapter,
+        verify_dense_i16_zk, verify_dense_i8_zk,
+        verify_field_vector_zk as verify_field_vector_zk_adapter, DenseI16Prefix, DenseI8DoryError,
         DenseI8DoryProof, DenseI8DorySetup, DenseI8Prefix,
     },
 };
@@ -56,13 +58,42 @@ pub struct DoryVerifierParameters {
     pub(crate) blindfold: PedersenSetup<Bn254G1>,
 }
 
+/// Stage-level timings for constructing the Dory and BlindFold parameters.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DorySetupProfile {
+    pub pcs_setup_seconds: f64,
+    pub blindfold_setup_seconds: f64,
+    pub total_seconds: f64,
+}
+
 /// Generate or load Jolt's canonical even-sized Dory URS.
 pub fn setup_dory_parameters(
     max_num_vars: usize,
 ) -> (DoryProverParameters, DoryVerifierParameters) {
+    let (prover_parameters, verifier_parameters, _) = setup_dory_parameters_profiled(max_num_vars);
+    (prover_parameters, verifier_parameters)
+}
+
+/// Generate the canonical Dory URS and report mutually exclusive setup stages.
+pub fn setup_dory_parameters_profiled(
+    max_num_vars: usize,
+) -> (
+    DoryProverParameters,
+    DoryVerifierParameters,
+    DorySetupProfile,
+) {
+    let total_started = Instant::now();
+    let pcs_setup_started = Instant::now();
     let setup = DenseI8DorySetup::new(max_num_vars);
-    let blindfold_capacity = 1_usize << (max_num_vars.next_multiple_of(2) / 2);
+    let pcs_setup_seconds = pcs_setup_started.elapsed().as_secs_f64();
+    // BlindFold rows only carry sumcheck round coefficients and packed output
+    // claims, so cap the Pedersen row width at 2^7: revealed vector openings
+    // stay constant-size instead of tracking the Dory row width (2^15 at a
+    // 2^30 setup would leak megabyte-scale combined vectors per proof).
+    let blindfold_setup_started = Instant::now();
+    let blindfold_capacity = 1_usize << (max_num_vars.next_multiple_of(2) / 2).min(7);
     let blindfold = PedersenSetup::<Bn254G1>::derive(&setup.prover, blindfold_capacity);
+    let blindfold_setup_seconds = blindfold_setup_started.elapsed().as_secs_f64();
     (
         DoryProverParameters {
             pcs: setup.prover,
@@ -72,6 +103,11 @@ pub fn setup_dory_parameters(
             pcs: setup.verifier,
             evaluation: setup.evaluation,
             blindfold,
+        },
+        DorySetupProfile {
+            pcs_setup_seconds,
+            blindfold_setup_seconds,
+            total_seconds: total_started.elapsed().as_secs_f64(),
         },
     )
 }
@@ -149,6 +185,21 @@ pub fn monomial_mle_evaluate_i8(
     Ok(Fr::from(source.evaluate_monomial_low(&point)?))
 }
 
+/// Evaluate a dense i16 prefix in ParComm's low-bit-first `(1, x)` basis.
+pub fn monomial_mle_evaluate_i16(
+    values: &[i16],
+    logical_len: usize,
+    point_low: &[Fr],
+) -> Result<Fr, DoryBackendError> {
+    let source = DenseI16Prefix::new(values, logical_len)?;
+    let point = point_low
+        .iter()
+        .copied()
+        .map(JoltFr::from)
+        .collect::<Vec<_>>();
+    Ok(Fr::from(source.evaluate_monomial_low(&point)?))
+}
+
 /// Commitment counters for the streaming dense-i8 path.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DoryCommitProfile {
@@ -182,6 +233,8 @@ pub struct PackedI8ParCommProfile {
     pub packed_eo_padding: PaddingWorkCounters,
 }
 
+pub type PackedI16ParCommProfile = PackedI8ParCommProfile;
+
 /// Complete commitment-bound Packed EO and Dory proof.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackedI8ParCommProof {
@@ -189,6 +242,8 @@ pub struct PackedI8ParCommProof {
     pub packed_eo: PackedEoLiteBulletProof<Fr>,
     pub opening: DenseI8DoryProof,
 }
+
+pub type PackedI16ParCommProof = PackedI8ParCommProof;
 
 impl PackedI8ParCommProof {
     pub fn to_bytes(&self) -> Result<Vec<u8>, PackedI8ParCommProofDecodeError> {
@@ -268,7 +323,7 @@ pub enum DoryBackendError {
     InvalidLogicalEntries(usize),
     DensePrefixLength { expected: usize, actual: usize },
     FieldVectorLength { expected: usize, actual: usize },
-    ValueOutOfRange { value: i8, bit_width: usize },
+    ValueOutOfRange { value: i32, bit_width: usize },
     PointShape { expected: usize, actual: usize },
     PackingStrideMismatch { expected: usize, actual: usize },
     PackedEoRejected,
@@ -314,6 +369,8 @@ impl<SourceError> std::error::Error for PackedI8ParCommProverError<SourceError> 
 }
 
 pub type PackedI8ParCommVerificationError = DoryBackendError;
+pub type PackedI16ParCommProverError<SourceError> = PackedI8ParCommProverError<SourceError>;
+pub type PackedI16ParCommVerificationError = DoryBackendError;
 
 /// Terminal verifier result; Dory has already executed its pairings.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -330,6 +387,23 @@ impl TerminalDoryVerification {
 /// Dense logical-prefix source required by the Jolt streaming adapter.
 pub trait DenseI8BvaSource: BvaI8Source {
     fn dense_values(&self) -> &[i8];
+}
+
+/// Dense logical-prefix source backed by native signed 16-bit values.
+pub trait DenseI16BvaSource: BvaI16Source {
+    fn dense_values(&self) -> &[i16];
+}
+
+pub(crate) fn dense_i8_polynomial<'a, S: DenseI8BvaSource>(
+    source: &'a S,
+) -> Result<DenseI8Prefix<'a>, DenseI8DoryError> {
+    DenseI8Prefix::new(source.dense_values(), source.layout().logical_len())
+}
+
+pub(crate) fn dense_i16_polynomial<'a, S: DenseI16BvaSource>(
+    source: &'a S,
+) -> Result<DenseI16Prefix<'a>, DenseI8DoryError> {
+    DenseI16Prefix::new(source.dense_values(), source.layout().logical_len())
 }
 
 /// Prover-only commitment state retained until Dory opening.
@@ -350,6 +424,16 @@ pub struct CommittedDoryFieldVector {
     pub(crate) matrix_column: usize,
     /// Shared Section 6 grid arity, or `None` for the legacy native layout.
     pub(crate) grid_num_vars: Option<usize>,
+}
+
+impl CommittedDoryFieldVector {
+    /// Padded column slice when this view sits inside a shared matrix commitment.
+    pub(crate) fn matrix_column_values(&self) -> Option<&[Fr]> {
+        let matrix = self.matrix.as_ref()?;
+        let start = self.matrix_column.checked_mul(matrix.padded_rows)?;
+        let end = start.checked_add(matrix.padded_rows)?;
+        matrix.values.get(start..end)
+    }
 }
 
 /// One materialized column-major Section 6 matrix behind a single Dory
@@ -1140,14 +1224,8 @@ pub fn commit_bva_i8_streaming<S: DenseI8BvaSource>(
     validate_bit_width(bit_width)?;
     let logical_len = source.layout().logical_len();
     let values = source.dense_values();
-    if values.len() != source.layout().active_len() {
-        return Err(DoryBackendError::DensePrefixLength {
-            expected: source.layout().active_len(),
-            actual: values.len(),
-        });
-    }
     validate_values(values, bit_width)?;
-    let dense = DenseI8Prefix::new(values, logical_len)?;
+    let dense = dense_i8_polynomial(source)?;
     let (commitment, hint) = commit_dense_i8_zk(&dense, &parameters.pcs);
     let sigma = dense.num_vars().div_ceil(2);
     let row_width = 1_usize << sigma;
@@ -1161,7 +1239,37 @@ pub fn commit_bva_i8_streaming<S: DenseI8BvaSource>(
             row_commitments: logical_len / row_width,
             physical_rows: values.len().div_ceil(row_width),
             materialized_field_entries: 0,
-            materialized_padding_entries: 0,
+            materialized_padding_entries: source.materialized_padding_entries(),
+            padding_group_operations: 0,
+        },
+    })
+}
+
+/// Commit a dense native-i16 prefix without constructing a field table.
+pub fn commit_bva_i16_streaming<S: DenseI16BvaSource>(
+    parameters: &DoryProverParameters,
+    source: &S,
+    bit_width: usize,
+) -> Result<CommittedDoryBva, DoryBackendError> {
+    validate_i16_bit_width(bit_width)?;
+    let logical_len = source.layout().logical_len();
+    let values = source.dense_values();
+    validate_i16_values(values, bit_width)?;
+    let dense = dense_i16_polynomial(source)?;
+    let (commitment, hint) = commit_dense_i16_zk(&dense, &parameters.pcs);
+    let sigma = dense.num_vars().div_ceil(2);
+    let row_width = 1_usize << sigma;
+    Ok(CommittedDoryBva {
+        commitment,
+        hint,
+        profile: DoryCommitProfile {
+            physical_entries: values.len(),
+            nonzero_entries: values.par_iter().filter(|&&value| value != 0).count(),
+            logical_entries: logical_len,
+            row_commitments: logical_len / row_width,
+            physical_rows: values.len().div_ceil(row_width),
+            materialized_field_entries: 0,
+            materialized_padding_entries: source.materialized_padding_entries(),
             padding_group_operations: 0,
         },
     })
@@ -1180,6 +1288,20 @@ pub fn prove_packed_i8_parcomm<S: DenseI8BvaSource>(
     prove_packed_i8_parcomm_precommitted(parameters, source, tbv, claimed, bit_width, committed)
 }
 
+/// Commit, reduce, and Dory-open a native-i16 BVA.
+pub fn prove_packed_i16_parcomm<S: DenseI16BvaSource>(
+    parameters: &DoryProverParameters,
+    source: &mut S,
+    tbv: &TensorBasisVector<Fr>,
+    claimed: Fr,
+    bit_width: usize,
+) -> Result<(PackedI16ParCommProof, PackedI16ParCommProfile), PackedI16ParCommProverError<S::Error>>
+{
+    let committed = commit_bva_i16_streaming(parameters, source, bit_width)
+        .map_err(PackedI8ParCommProverError::Backend)?;
+    prove_packed_i16_parcomm_precommitted(parameters, source, tbv, claimed, bit_width, committed)
+}
+
 /// Complete Packed EO and Dory opening from an existing commitment.
 pub fn prove_packed_i8_parcomm_precommitted<S: DenseI8BvaSource>(
     parameters: &DoryProverParameters,
@@ -1192,8 +1314,10 @@ pub fn prove_packed_i8_parcomm_precommitted<S: DenseI8BvaSource>(
     let binding =
         packed_i8_parcomm_statement_binding(&committed.commitment, tbv, claimed, bit_width);
     let (packed_eo, packed_eo_padding, packed_eo_profile) =
-        PackedEoLiteBulletProof::prove_i8_streaming_bound(source, tbv, claimed, bit_width, binding)
-            .map_err(PackedI8ParCommProverError::PackedEo)?;
+        PackedEoLiteBulletProof::prove_streaming_bound::<i8, S>(
+            source, tbv, claimed, bit_width, binding,
+        )
+        .map_err(PackedI8ParCommProverError::PackedEo)?;
     let verification = packed_eo.verify_with_tbv_bound(tbv, claimed, binding);
     if !verification.accepted {
         return Err(PackedI8ParCommProverError::Backend(
@@ -1209,7 +1333,7 @@ pub fn prove_packed_i8_parcomm_precommitted<S: DenseI8BvaSource>(
         .map(JoltFr::from)
         .collect::<Vec<_>>();
     let monomial_eval = JoltFr::from(packed_eo.a_reduced);
-    let dense = DenseI8Prefix::new(source.dense_values(), source.layout().logical_len())
+    let dense = dense_i8_polynomial(source)
         .map_err(DoryBackendError::from)
         .map_err(PackedI8ParCommProverError::Backend)?;
     let outer_binding = field_bytes(&binding);
@@ -1237,13 +1361,89 @@ pub fn prove_packed_i8_parcomm_precommitted<S: DenseI8BvaSource>(
             physical_entries: opening_physical_entries,
             nonzero_entries: opening_nonzero_entries,
             materialized_projection_entries: 1_usize << sigma,
-            materialized_padding_entries: 0,
+            materialized_padding_entries: committed.profile.materialized_padding_entries,
             padding_field_operations: 0,
         },
         packed_eo_padding,
     };
     Ok((
         PackedI8ParCommProof {
+            matrix_commitment: committed.commitment,
+            packed_eo,
+            opening,
+        },
+        profile,
+    ))
+}
+
+/// Complete Packed EO and Dory opening from an existing native-i16 commitment.
+pub fn prove_packed_i16_parcomm_precommitted<S: DenseI16BvaSource>(
+    parameters: &DoryProverParameters,
+    source: &mut S,
+    tbv: &TensorBasisVector<Fr>,
+    claimed: Fr,
+    bit_width: usize,
+    committed: CommittedDoryBva,
+) -> Result<(PackedI16ParCommProof, PackedI16ParCommProfile), PackedI16ParCommProverError<S::Error>>
+{
+    validate_i16_bit_width(bit_width).map_err(PackedI8ParCommProverError::Backend)?;
+    let binding =
+        packed_i8_parcomm_statement_binding(&committed.commitment, tbv, claimed, bit_width);
+    let (packed_eo, packed_eo_padding, packed_eo_profile) =
+        PackedEoLiteBulletProof::prove_streaming_bound::<i16, S>(
+            source, tbv, claimed, bit_width, binding,
+        )
+        .map_err(PackedI8ParCommProverError::PackedEo)?;
+    let verification = packed_eo.verify_with_tbv_bound(tbv, claimed, binding);
+    if !verification.accepted {
+        return Err(PackedI8ParCommProverError::Backend(
+            DoryBackendError::PackedEoRejected,
+        ));
+    }
+    normalize_monomial_mle_claim(&verification.challenges_inv, packed_eo.a_reduced)
+        .map_err(PackedI8ParCommProverError::Backend)?;
+    let monomial_point = verification
+        .challenges_inv
+        .iter()
+        .copied()
+        .map(JoltFr::from)
+        .collect::<Vec<_>>();
+    let monomial_eval = JoltFr::from(packed_eo.a_reduced);
+    let dense = dense_i16_polynomial(source)
+        .map_err(DoryBackendError::from)
+        .map_err(PackedI8ParCommProverError::Backend)?;
+    let outer_binding = field_bytes(&binding);
+    let mut transcript = Blake2bTranscript::new(b"parcomm-packed-eo-dory-v1");
+    let opening = open_dense_i16_zk(
+        &dense,
+        &committed.commitment,
+        committed.hint,
+        &monomial_point,
+        monomial_eval,
+        &outer_binding,
+        &parameters.pcs,
+        &mut transcript,
+    )
+    .map_err(DoryBackendError::from)
+    .map_err(PackedI8ParCommProverError::Backend)?;
+    let sigma = dense.num_vars().div_ceil(2);
+    let opening_physical_entries = committed.profile.physical_entries;
+    let opening_nonzero_entries = committed.profile.nonzero_entries;
+    let profile = PackedI16ParCommProfile {
+        commitment: committed.profile,
+        packed_eo: packed_eo_profile,
+        opening: DoryOpenProfile {
+            source_passes: 1,
+            physical_entries: opening_physical_entries,
+            nonzero_entries: opening_nonzero_entries,
+            materialized_projection_entries: 1_usize << sigma,
+            materialized_padding_entries: committed.profile.materialized_padding_entries,
+            padding_field_operations: 0,
+        },
+        packed_eo_padding,
+    };
+    Ok((
+        PackedI16ParCommProof {
             matrix_commitment: committed.commitment,
             packed_eo,
             opening,
@@ -1302,6 +1502,55 @@ pub fn verify_packed_i8_bva_opening_as_subprotocol(
     Ok(verification)
 }
 
+/// Verify the native-i16 Packed EO scalar reduction and Dory opening.
+pub fn verify_packed_i16_bva_opening_as_subprotocol(
+    parameters: &DoryVerifierParameters,
+    tbv: &TensorBasisVector<Fr>,
+    claimed: Fr,
+    bit_width: usize,
+    proof: &PackedI16ParCommProof,
+) -> Result<EoLiteBulletVerification<Fr>, PackedI16ParCommVerificationError> {
+    validate_i16_bit_width(bit_width)?;
+    let expected_stride = packing_stride_for_bit_width::<Fr>(tbv.layout().logical_len(), bit_width)
+        .map_err(|_| DoryBackendError::InvalidLogicalEntries(tbv.layout().logical_len()))?;
+    if proof.packed_eo.packing_stride != expected_stride {
+        return Err(DoryBackendError::PackingStrideMismatch {
+            expected: expected_stride,
+            actual: proof.packed_eo.packing_stride,
+        });
+    }
+    let binding =
+        packed_i8_parcomm_statement_binding(&proof.matrix_commitment, tbv, claimed, bit_width);
+    let verification =
+        proof
+            .packed_eo
+            .verify_scalar_identity_bound(tbv.layout().logical_len(), claimed, binding);
+    if !verification.accepted {
+        return Err(DoryBackendError::PackedEoRejected);
+    }
+    normalize_monomial_mle_claim(&verification.challenges_inv, proof.packed_eo.a_reduced)?;
+    let point = verification
+        .challenges_inv
+        .iter()
+        .copied()
+        .map(JoltFr::from)
+        .collect::<Vec<_>>();
+    let outer_binding = field_bytes(&binding);
+    let mut transcript = Blake2bTranscript::new(b"parcomm-packed-eo-dory-v1");
+    verify_dense_i16_zk(
+        &proof.matrix_commitment,
+        &proof.opening,
+        tbv.layout().logical_len(),
+        &point,
+        JoltFr::from(proof.packed_eo.a_reduced),
+        &outer_binding,
+        &parameters.pcs,
+        &parameters.evaluation,
+        &mut transcript,
+    )?;
+    Ok(verification)
+}
+
 /// Verify the terminal TBV inner product from an already checked Packed EO
 /// scalar transcript.
 pub fn verify_packed_i8_tbv_inner_product(
@@ -1332,6 +1581,21 @@ pub fn verify_packed_i8_parcomm_as_subprotocol(
     Ok(TerminalDoryVerification { accepted: true })
 }
 
+pub fn verify_packed_i16_parcomm_as_subprotocol(
+    parameters: &DoryVerifierParameters,
+    tbv: &TensorBasisVector<Fr>,
+    claimed: Fr,
+    bit_width: usize,
+    proof: &PackedI16ParCommProof,
+) -> Result<TerminalDoryVerification, PackedI16ParCommVerificationError> {
+    let verification =
+        verify_packed_i16_bva_opening_as_subprotocol(parameters, tbv, claimed, bit_width, proof)?;
+    if !verify_packed_i8_tbv_inner_product(tbv, proof, &verification) {
+        return Err(DoryBackendError::PackedEoRejected);
+    }
+    Ok(TerminalDoryVerification { accepted: true })
+}
+
 /// Verify the complete proof immediately.
 pub fn verify_packed_i8_parcomm(
     parameters: &DoryVerifierParameters,
@@ -1342,6 +1606,19 @@ pub fn verify_packed_i8_parcomm(
 ) -> Result<bool, PackedI8ParCommVerificationError> {
     Ok(
         verify_packed_i8_parcomm_as_subprotocol(parameters, tbv, claimed, bit_width, proof)?
+            .evaluate(),
+    )
+}
+
+pub fn verify_packed_i16_parcomm(
+    parameters: &DoryVerifierParameters,
+    tbv: &TensorBasisVector<Fr>,
+    claimed: Fr,
+    bit_width: usize,
+    proof: &PackedI16ParCommProof,
+) -> Result<bool, PackedI16ParCommVerificationError> {
+    Ok(
+        verify_packed_i16_parcomm_as_subprotocol(parameters, tbv, claimed, bit_width, proof)?
             .evaluate(),
     )
 }
@@ -1361,7 +1638,33 @@ fn validate_values(values: &[i8], bit_width: usize) -> Result<(), DoryBackendErr
         .par_iter()
         .find_any(|&&value| usize::from(value.unsigned_abs()) >= (1_usize << bit_width))
     {
-        return Err(DoryBackendError::ValueOutOfRange { value, bit_width });
+        return Err(DoryBackendError::ValueOutOfRange {
+            value: i32::from(value),
+            bit_width,
+        });
+    }
+    Ok(())
+}
+
+fn validate_i16_bit_width(bit_width: usize) -> Result<(), DoryBackendError> {
+    if bit_width == 0 || bit_width > 16 {
+        return Err(DoryBackendError::InvalidBitWidth(bit_width));
+    }
+    Ok(())
+}
+
+fn validate_i16_values(values: &[i16], bit_width: usize) -> Result<(), DoryBackendError> {
+    if bit_width == 16 {
+        return Ok(());
+    }
+    if let Some(&value) = values
+        .par_iter()
+        .find_any(|&&value| u64::from(value.unsigned_abs()) >= (1_u64 << bit_width))
+    {
+        return Err(DoryBackendError::ValueOutOfRange {
+            value: i32::from(value),
+            bit_width,
+        });
     }
     Ok(())
 }
@@ -1442,14 +1745,15 @@ mod tests {
     use jolt_poly::MultilinearPoly;
     use jolt_transcript::{Blake2bTranscript, Transcript};
 
-    use crate::bucketed_ip::{BvaI8Source, BvaLayout, TensorBasisVector};
+    use crate::bucketed_ip::{BvaI16Source, BvaI8Source, BvaLayout, TensorBasisVector};
 
     use super::{
         commit_field_matrix_columns_zk, commit_field_vector_zk, evaluate_field_vector_standard,
         normalize_monomial_mle_claim, open_field_vector_zk, open_hidden_field_vectors_batch_zk,
-        prove_packed_i8_parcomm, setup_dory_parameters, standard_mle_evaluate_i8,
-        verify_field_vector_zk, verify_hidden_field_vectors_batch_zk, verify_packed_i8_parcomm,
-        ClaimedArkFieldPolynomial, ClaimedFieldPolynomial, DenseI8BvaSource, PackedI8ParCommProof,
+        prove_packed_i16_parcomm, prove_packed_i8_parcomm, setup_dory_parameters,
+        standard_mle_evaluate_i8, verify_field_vector_zk, verify_hidden_field_vectors_batch_zk,
+        verify_packed_i16_parcomm, verify_packed_i8_parcomm, ClaimedArkFieldPolynomial,
+        ClaimedFieldPolynomial, DenseI16BvaSource, DenseI8BvaSource, PackedI8ParCommProof,
     };
 
     struct CountingPolynomial<'a> {
@@ -1510,6 +1814,10 @@ mod tests {
             &self.layout
         }
 
+        fn indexed_vectors(&self) -> Option<Vec<&[i8]>> {
+            Some(self.vectors.iter().map(Vec::as_slice).collect())
+        }
+
         fn for_each_vector(
             &mut self,
             visit: &mut dyn FnMut(usize, &[i8]),
@@ -1523,6 +1831,53 @@ mod tests {
 
     impl DenseI8BvaSource for ByteSource {
         fn dense_values(&self) -> &[i8] {
+            &self.dense
+        }
+    }
+
+    struct I16Source {
+        layout: BvaLayout,
+        vectors: Vec<Vec<i16>>,
+        dense: Vec<i16>,
+    }
+
+    impl I16Source {
+        fn new(vectors: Vec<Vec<i16>>) -> Self {
+            let layout =
+                BvaLayout::from_lengths(&vectors.iter().map(Vec::len).collect::<Vec<_>>()).unwrap();
+            let dense = vectors.iter().flatten().copied().collect();
+            Self {
+                layout,
+                vectors,
+                dense,
+            }
+        }
+    }
+
+    impl BvaI16Source for I16Source {
+        type Error = Infallible;
+
+        fn layout(&self) -> &BvaLayout {
+            &self.layout
+        }
+
+        fn indexed_vectors(&self) -> Option<Vec<&[i16]>> {
+            Some(self.vectors.iter().map(Vec::as_slice).collect())
+        }
+
+        fn for_each_vector(
+            &mut self,
+            visit: &mut dyn FnMut(usize, &[i16]),
+        ) -> Result<(), Self::Error> {
+            for (index, vector) in self.vectors.iter().enumerate() {
+                visit(index, vector);
+            }
+            Ok(())
+        }
+    }
+
+    impl DenseI16BvaSource for I16Source {
+        fn dense_values(&self) -> &[i16] {
             &self.dense
         }
     }
@@ -1867,6 +2222,39 @@ mod tests {
         assert_eq!(profile.opening.nonzero_entries, 45);
         assert_eq!(profile.commitment.materialized_field_entries, 0);
         assert!(verify_packed_i8_parcomm(&verifier, &tbv, claimed, 4, &proof).unwrap());
+    }
+
+    #[test]
+    fn sixteen_bit_dory_round_trip_keeps_native_i16_values() {
+        let mut source = I16Source::new(vec![
+            (0..32)
+                .map(|index| match index % 4 {
+                    0 => i16::MIN,
+                    1 => 30_000,
+                    2 => -1_024,
+                    _ => 17_000,
+                })
+                .collect(),
+            (0..16)
+                .map(|index| if index % 2 == 0 { 12_345 } else { -23_456 })
+                .collect(),
+        ]);
+        let point = (2_u64..8).map(Fr::from).collect::<Vec<_>>();
+        let tbv = TensorBasisVector::global_tensor(&source.layout, &point).unwrap();
+        let claimed = tbv.inner_product_i16_streaming(&mut source).unwrap();
+        let (prover, verifier) = setup_dory_parameters(6);
+        let (proof, profile) =
+            prove_packed_i16_parcomm(&prover, &mut source, &tbv, claimed, 16).unwrap();
+
+        assert_eq!(proof.packed_eo.packing_stride, 32);
+        assert_eq!(profile.commitment.physical_entries, 48);
+        assert_eq!(profile.commitment.materialized_field_entries, 0);
+        assert!(verify_packed_i16_parcomm(&verifier, &tbv, claimed, 16, &proof).unwrap());
+
+        let bytes = proof.to_bytes().unwrap();
+        let decoded = PackedI8ParCommProof::from_bytes_exact(&bytes).unwrap();
+        assert_eq!(decoded, proof);
+        assert!(verify_packed_i16_parcomm(&verifier, &tbv, claimed, 16, &decoded).unwrap());
     }
 
     #[test]

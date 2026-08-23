@@ -31,10 +31,11 @@ impl BvaI8Source for ByteBvaSource {
         &self.layout
     }
 
-    fn for_each_vector(
-        &mut self,
-        visit: &mut dyn FnMut(usize, &[i8]),
-    ) -> Result<(), Self::Error> {
+    fn indexed_vectors(&self) -> Option<Vec<&[i8]>> {
+        Some(self.vectors.iter().map(Vec::as_slice).collect())
+    }
+
+    fn for_each_vector(&mut self, visit: &mut dyn FnMut(usize, &[i8])) -> Result<(), Self::Error> {
         for (index, vector) in self.vectors.iter().enumerate() {
             visit(index, vector);
         }
@@ -64,7 +65,10 @@ fn parse_arguments() -> Arguments {
             _ => panic!("unknown argument {argument}"),
         }
     }
-    assert!(max_log <= 29, "geometric workload exceeds the 1G i8 benchmark limit");
+    assert!(
+        max_log <= 29,
+        "geometric workload exceeds the 1G i8 benchmark limit"
+    );
     Arguments {
         max_log,
         allow_non_64_threads,
@@ -110,7 +114,10 @@ fn main() {
     let generation_seconds = generation_started.elapsed().as_secs_f64();
     let physical_entries = vectors.iter().map(Vec::len).sum::<usize>();
     assert_eq!(physical_entries, requested_physical_entries);
-    println!("rss_after_generation_kib={}", peak_rss_kib.load(Ordering::Relaxed));
+    println!(
+        "rss_after_generation_kib={}",
+        peak_rss_kib.load(Ordering::Relaxed)
+    );
 
     let layout = BvaLayout::from_lengths(&lengths).expect("valid decreasing BVA layout");
     let packing_stride =
@@ -126,20 +133,29 @@ fn main() {
         .inner_product_i8_streaming(&mut source)
         .expect("streaming i8 inner product");
     let claim_seconds = claim_started.elapsed().as_secs_f64();
-    println!("rss_after_claim_kib={}", peak_rss_kib.load(Ordering::Relaxed));
+    println!(
+        "rss_after_claim_kib={}",
+        peak_rss_kib.load(Ordering::Relaxed)
+    );
 
     let prove_started = Instant::now();
     let (proof, counters, profile) =
         PackedEoLiteBulletProof::prove_i8_streaming(&mut source, &tbv, claim, 8)
             .expect("packed EO proof");
     let prove_seconds = prove_started.elapsed().as_secs_f64();
-    println!("rss_after_prove_kib={}", peak_rss_kib.load(Ordering::Relaxed));
+    println!(
+        "rss_after_prove_kib={}",
+        peak_rss_kib.load(Ordering::Relaxed)
+    );
 
     let verify_started = Instant::now();
     let verification = proof.verify_with_tbv(&tbv, claim);
     let verify_seconds = verify_started.elapsed().as_secs_f64();
     assert!(verification.accepted, "packed EO proof verification failed");
-    println!("rss_after_verify_kib={}", peak_rss_kib.load(Ordering::Relaxed));
+    println!(
+        "rss_after_verify_kib={}",
+        peak_rss_kib.load(Ordering::Relaxed)
+    );
 
     let proof_bytes = proof.to_bytes().expect("serialize packed EO proof");
     let proof_sha256 = Sha256::digest(&proof_bytes);
@@ -154,14 +170,10 @@ fn main() {
 
     assert_eq!(size_of::<i8>(), 1);
     assert_eq!(field_storage_bytes, 32);
-    assert_eq!(packing_stride, 32.min(source.layout.logical_len()));
-    assert!(
-        profile.maximum_live_vector_entries
-            <= physical_entries.div_ceil(packing_stride) + source.vectors.len()
-    );
-    assert!(
-        profile.maximum_live_vector_entries
-            < source.layout.active_len().div_ceil(packing_stride)
+    assert_eq!(packing_stride, 64.min(source.layout.logical_len()));
+    assert_eq!(
+        profile.maximum_live_vector_entries,
+        2 * (source.layout.logical_len() / packing_stride)
     );
     assert_eq!(counters.materialized_padding_entries, 0);
 
@@ -195,9 +207,7 @@ fn main() {
         profile.maximum_live_vector_entries - physical_entries.div_ceil(packing_stride)
     );
     println!("maximum_live_reduced_field_bytes={maximum_live_reduced_field_bytes}");
-    println!(
-        "simultaneous_witness_and_reduced_bytes={simultaneous_witness_and_reduced_bytes}"
-    );
+    println!("simultaneous_witness_and_reduced_bytes={simultaneous_witness_and_reduced_bytes}");
     println!("proof_field_elements={}", proof.field_element_count());
     println!("proof_size_bytes={}", proof.serialized_size(Compress::Yes));
     println!("proof_sha256={proof_sha256:x}");
@@ -206,7 +216,10 @@ fn main() {
     println!("prove_seconds={prove_seconds:.6}");
     println!("verify_seconds={verify_seconds:.6}");
     println!("source_passes={}", profile.source_passes);
-    println!("materialized_padding_entries={}", counters.materialized_padding_entries);
+    println!(
+        "materialized_padding_entries={}",
+        counters.materialized_padding_entries
+    );
     println!("peak_rss_kib={}", peak_rss_kib.load(Ordering::Relaxed));
     println!("accepted=true");
 }

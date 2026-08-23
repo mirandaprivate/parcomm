@@ -17,12 +17,13 @@ use batch::{
     bucketed_ip::packing_stride_for_bit_width,
     jolt_dory::{canonical_dory_log, setup_dory_parameters},
     matrix_collection::{constant_matrix_mle_evaluate, DenseMatrixBva},
-    section6_data::{Section6Layout, Section6MaskMatrixClaim},
-    section6_mask_protocol::{
-        prove_section6_mask_opening, register_section6_mask_collection_profiled,
-        section6_mask_required_dory_log, verify_section6_mask_opening, Section6MaskOpeningProof,
-        Section6MaskRegistrationStatement,
+    section6_data::{Section6Layout, Section6MatrixClaim},
+    validity_protocol::{
+        commit_opening_collection_profiled, prove_opening, prove_shape_validity_for_collection,
+        validity_required_dory_log, verify_shape_commitment, verify_validity_opening,
+        ValidityCommitStatement, ValidityOpeningProof,
     },
+    validity_shape::ShapeValidityProof,
 };
 use bincode::Options;
 use sha2::{Digest, Sha256};
@@ -32,19 +33,20 @@ const DEFAULT_MAX_LOG: usize = 15;
 const MAX_SUPPORTED_LOG: usize = 17;
 const MIN_LOG: usize = 2;
 const DEFAULT_SEED: u64 = 0x5345_4354_494f_4e36;
-const PROOF_MAGIC: [u8; 8] = *b"S6MASK01";
+const PROOF_MAGIC: [u8; 8] = *b"S6VALID1";
 
 #[derive(Debug)]
 struct Arguments {
     max_log: usize,
     seed: u64,
     allow_non_64_threads: bool,
+    shape_validity_proof: bool,
     /// A collection of equally sized squares, instead of the decreasing family.
     uniform: Option<UniformFamily>,
 }
 
 /// `count` copies of a `(2^log-1)x(2^log-1)` square.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct UniformFamily {
     count: usize,
     log: usize,
@@ -58,6 +60,7 @@ fn parse_arguments_from(arguments: impl IntoIterator<Item = String>) -> Result<O
     let mut max_log = DEFAULT_MAX_LOG;
     let mut seed = DEFAULT_SEED;
     let mut allow_non_64_threads = false;
+    let mut shape_validity_proof = false;
     let mut target_log = None;
     let mut uniform_count = None;
     let mut uniform_log = None;
@@ -109,6 +112,7 @@ fn parse_arguments_from(arguments: impl IntoIterator<Item = String>) -> Result<O
                 // Compatibility flags describing the now-fixed Section 6 family.
             }
             "--allow-non-64-threads" => allow_non_64_threads = true,
+            "--shape-validity-proof" | "--shape-validity" => shape_validity_proof = true,
             "-h" | "--help" => {
                 print_help();
                 return Ok(None);
@@ -166,16 +170,34 @@ fn parse_arguments_from(arguments: impl IntoIterator<Item = String>) -> Result<O
         MIN_LOG + 1
     );
     if let Some(target_log) = target_log {
-        let expected_target_log = max_log.checked_mul(2).context("target log overflowed")?;
+        let expected_target_log = match uniform {
+            Some(family) => {
+                let count_log = family
+                    .count
+                    .checked_next_power_of_two()
+                    .context("uniform count overflowed")?
+                    .ilog2() as usize;
+                count_log
+                    .checked_add(
+                        family
+                            .log
+                            .checked_mul(2)
+                            .context("uniform matrix log overflowed")?,
+                    )
+                    .context("uniform target log overflowed")?
+            }
+            None => max_log.checked_mul(2).context("target log overflowed")?,
+        };
         ensure!(
             target_log == expected_target_log,
-            "max log {max_log} requires target log {expected_target_log}"
+            "workload requires target log {expected_target_log}"
         );
     }
     Ok(Some(Arguments {
         max_log,
         seed,
         allow_non_64_threads,
+        shape_validity_proof,
         uniform,
     }))
 }
@@ -193,6 +215,7 @@ fn print_help() {
            --interleaved-rectangles Compatibility flag for the fixed family\n\
            --start-with-rectangle   Compatibility flag for the fixed family\n\
            --allow-non-64-threads   Permit a local smoke run with fewer threads\n\
+           --shape-validity-proof   Include the optional shape validity proof\n\
            -h, --help               Print this help\n\
          \n\
          The full experiment is the default. Run it with:\n\
@@ -250,7 +273,8 @@ fn matrix_value(matrix: usize) -> i8 {
 
 fn claims_for_constant_matrices(
     shapes: &[(usize, usize)],
-) -> Result<Vec<Section6MaskMatrixClaim<Fr>>> {
+    point_log: usize,
+) -> Result<Vec<Section6MatrixClaim<Fr>>> {
     shapes
         .iter()
         .enumerate()
@@ -264,7 +288,7 @@ fn claims_for_constant_matrices(
                 .map(|coordinate| Fr::from((matrix * 41 + coordinate * 13 + 5) as u64))
                 .collect::<Vec<_>>();
             let value = constant_matrix_mle_evaluate(shape, matrix_value(matrix), &left, &right)?;
-            Section6MaskMatrixClaim::from_unpadded(&left, &right, value).map_err(Into::into)
+            Section6MatrixClaim::from_unpadded(point_log, &left, &right, value).map_err(Into::into)
         })
         .collect()
 }
@@ -276,11 +300,16 @@ fn proof_codec() -> impl Options {
 }
 
 fn encode_proof_artifact(
-    statement: &Section6MaskRegistrationStatement,
-    opening: &Section6MaskOpeningProof,
-) -> Result<(Vec<u8>, [usize; 2])> {
+    statement: &ValidityCommitStatement,
+    validity: Option<&ShapeValidityProof>,
+    opening: &ValidityOpeningProof,
+) -> Result<(Vec<u8>, [usize; 3])> {
     let components = [
         proof_codec().serialize(statement)?,
+        validity
+            .map(|proof| proof_codec().serialize(proof))
+            .transpose()?
+            .unwrap_or_default(),
         proof_codec().serialize(opening)?,
     ];
     let lengths = components.each_ref().map(|component| component.len());
@@ -292,7 +321,7 @@ fn encode_proof_artifact(
     let mut artifact = Vec::with_capacity(
         PROOF_MAGIC
             .len()
-            .checked_add(2 * size_of::<u64>())
+            .checked_add(3 * size_of::<u64>())
             .and_then(|header| header.checked_add(payload_len))
             .context("proof artifact overflowed")?,
     );
@@ -308,8 +337,12 @@ fn encode_proof_artifact(
 
 fn decode_proof_artifact_exact(
     artifact: &[u8],
-) -> Result<(Section6MaskRegistrationStatement, Section6MaskOpeningProof)> {
-    let header_len = PROOF_MAGIC.len() + 2 * size_of::<u64>();
+) -> Result<(
+    ValidityCommitStatement,
+    Option<ShapeValidityProof>,
+    ValidityOpeningProof,
+)> {
+    let header_len = PROOF_MAGIC.len() + 3 * size_of::<u64>();
     ensure!(
         artifact.len() >= header_len,
         "truncated proof artifact header"
@@ -318,7 +351,7 @@ fn decode_proof_artifact_exact(
         artifact[..PROOF_MAGIC.len()] == PROOF_MAGIC,
         "invalid proof artifact magic"
     );
-    let mut lengths = [0_usize; 2];
+    let mut lengths = [0_usize; 3];
     for (component, length) in lengths.iter_mut().enumerate() {
         let start = PROOF_MAGIC.len() + component * size_of::<u64>();
         let end = start + size_of::<u64>();
@@ -338,9 +371,15 @@ fn decode_proof_artifact_exact(
         "proof artifact has truncated or trailing bytes"
     );
     let statement_end = header_len + lengths[0];
+    let validity_end = statement_end + lengths[1];
     let statement = proof_codec().deserialize(&artifact[header_len..statement_end])?;
-    let opening = proof_codec().deserialize(&artifact[statement_end..expected_len])?;
-    Ok((statement, opening))
+    let validity = if lengths[1] == 0 {
+        None
+    } else {
+        Some(proof_codec().deserialize(&artifact[statement_end..validity_end])?)
+    };
+    let opening = proof_codec().deserialize(&artifact[validity_end..expected_len])?;
+    Ok((statement, validity, opening))
 }
 
 fn report_stage(name: &str, started: Instant, monitor: &MemoryMonitor) -> f64 {
@@ -376,10 +415,54 @@ fn main() -> Result<()> {
     let layout = Section6Layout::from_descriptor(&descriptor_only, BIT_WIDTH)?;
     let descriptor_seconds = report_stage("descriptor", descriptor_started, &monitor);
     let stride = packing_stride_for_bit_width::<Fr>(layout.logical_len, BIT_WIDTH)?;
-    let setup_log = section6_mask_required_dory_log(&layout.public())?;
+    let setup_log = validity_required_dory_log(&layout)?;
 
-    if arguments.uniform.is_some() {
-        // The counts below describe the fixed family only.
+    if let Some(family) = arguments.uniform {
+        if family
+            == (UniformFamily {
+                count: 1 << 14,
+                log: 10,
+            })
+        {
+            ensure!(
+                physical_entries == 17_146_331_136,
+                "unexpected homogeneous physical entry count"
+            );
+            ensure!(
+                layout.active_len == 1_usize << 34,
+                "unexpected homogeneous active BVA domain"
+            );
+            ensure!(
+                layout.logical_len == 1_usize << 34,
+                "unexpected homogeneous BVA domain"
+            );
+            ensure!(
+                layout.bucket_count == 1_usize << 18,
+                "unexpected homogeneous bucket count"
+            );
+        } else if family
+            == (UniformFamily {
+                count: 1 << 10,
+                log: 12,
+            })
+        {
+            ensure!(
+                physical_entries == 17_171_481_600,
+                "unexpected 2^34 homogeneous physical entry count"
+            );
+            ensure!(
+                layout.active_len == 1_usize << 34,
+                "unexpected 2^34 homogeneous active BVA domain"
+            );
+            ensure!(
+                layout.logical_len == 1_usize << 34,
+                "unexpected 2^34 homogeneous BVA domain"
+            );
+            ensure!(
+                layout.bucket_count == 1_usize << 14,
+                "unexpected 2^34 homogeneous bucket count"
+            );
+        }
     } else if arguments.max_log == DEFAULT_MAX_LOG {
         ensure!(shapes.len() == 26, "unexpected full-scale matrix count");
         ensure!(
@@ -387,7 +470,11 @@ fn main() -> Result<()> {
             "unexpected full-scale physical entry count"
         );
         ensure!(layout.logical_len == 1_usize << 30, "unexpected BVA domain");
-        ensure!(layout.bucket_count == 2_132, "unexpected bucket count");
+        ensure!(
+            layout.active_len == 1_073_741_689,
+            "unexpected active BVA length"
+        );
+        ensure!(layout.bucket_count == 383, "unexpected bucket count");
     } else if arguments.max_log == MAX_SUPPORTED_LOG {
         ensure!(shapes.len() == 30, "unexpected 2^34 matrix count");
         ensure!(
@@ -395,24 +482,38 @@ fn main() -> Result<()> {
             "unexpected 2^34 physical entry count"
         );
         ensure!(layout.logical_len == 1_usize << 34, "unexpected BVA domain");
-        ensure!(layout.bucket_count == 3_125, "unexpected bucket count");
+        ensure!(
+            layout.active_len == 17_179_869_049,
+            "unexpected active BVA length"
+        );
+        ensure!(layout.bucket_count == 447, "unexpected bucket count");
     }
 
     let packed_field_entries = layout.active_len.div_ceil(stride);
     let packed_field_bytes = packed_field_entries
         .checked_mul(size_of::<Fr>())
         .context("packed field byte estimate overflowed")?;
-    let witness_plus_packed_bytes = physical_entries
+    let stored_i8_entries = layout.logical_len;
+    let materialized_padding_entries = stored_i8_entries - physical_entries;
+    let witness_plus_packed_bytes = stored_i8_entries
         .checked_add(packed_field_bytes)
         .context("combined memory estimate overflowed")?;
 
     println!("experiment=parcomm-section6-hidden-cpu");
-    println!("protocol=section6-three-mask-atomic-packed-eo-streamed-i8-dory");
+    println!("protocol=section6-capped16-packed-eo-padded-i8-dory");
+    println!(
+        "shape_validity_proof_enabled={}",
+        arguments.shape_validity_proof
+    );
     println!("backend=jolt-dory-bn254-cpu");
     println!("rayon_threads={threads}");
     println!("formal_thread_requirement=64");
     println!("seed={}", arguments.seed);
     println!("bit_width={BIT_WIDTH}");
+    println!(
+        "splitting_budget={}",
+        batch::matrix_collection::DenseBvaDescriptor::SPLITTING_BUDGET
+    );
     println!("field_storage_bits={}", size_of::<Fr>() * 8);
     println!("kappa={stride}");
     match arguments.uniform {
@@ -443,12 +544,18 @@ fn main() -> Result<()> {
     }
     println!("matrix_count={}", shapes.len());
     println!("physical_entries={physical_entries}");
+    println!("active_logical_entries={}", layout.active_len);
     println!("logical_entries={}", layout.logical_len);
     println!(
-        "final_implicit_zero_entries={}",
-        layout.logical_len - physical_entries
+        "boundary_padding_i8_entries={}",
+        layout.active_len - physical_entries
     );
-    println!("materialized_padding_entries=0");
+    println!(
+        "final_padding_i8_entries={}",
+        layout.logical_len - layout.active_len
+    );
+    println!("materialized_padding_entries={materialized_padding_entries}");
+    println!("stored_i8_entries={stored_i8_entries}");
     println!("bucket_count={}", layout.bucket_count);
     println!(
         "shape_mask_rows={}",
@@ -456,7 +563,7 @@ fn main() -> Result<()> {
     );
     println!("required_dory_log={setup_log}");
     println!("canonical_dory_log={}", canonical_dory_log(setup_log));
-    println!("witness_storage_bytes={physical_entries}");
+    println!("witness_storage_bytes={stored_i8_entries}");
     println!("estimated_packed_field_entries={packed_field_entries}");
     println!("estimated_packed_field_bytes={packed_field_bytes}");
     println!("estimated_witness_plus_packed_bytes={witness_plus_packed_bytes}");
@@ -465,7 +572,7 @@ fn main() -> Result<()> {
     drop(descriptor_only);
 
     let claims_started = Instant::now();
-    let claims = claims_for_constant_matrices(&shapes)?;
+    let claims = claims_for_constant_matrices(&shapes, layout.point_log())?;
     let claims_seconds = report_stage("claims", claims_started, &monitor);
 
     let generation_started = Instant::now();
@@ -473,7 +580,7 @@ fn main() -> Result<()> {
     let generation_seconds = report_stage("generation", generation_started, &monitor);
     layout.validate_descriptor(source.descriptor())?;
     ensure!(
-        source.values().len() == physical_entries,
+        source.values().len() == stored_i8_entries,
         "witness length mismatch"
     );
 
@@ -482,18 +589,25 @@ fn main() -> Result<()> {
     let setup_seconds = report_stage("setup", setup_started, &monitor);
     let mut rng = StdRng::seed_from_u64(arguments.seed);
 
-    let registration_commit_started = Instant::now();
-    let (registered, registration_profile) =
-        register_section6_mask_collection_profiled(&prover_parameters, &source, BIT_WIDTH)?;
-    let registration_commit_seconds =
-        report_stage("registration_commit", registration_commit_started, &monitor);
-    let statement = registered.statement().clone();
-    let bva_commit_profile = registered.bva().profile;
+    let commit_phase_started = Instant::now();
+    let (committed, mut commit_profile) =
+        commit_opening_collection_profiled(&prover_parameters, &source, BIT_WIDTH)?;
+    let validity_proof = if arguments.shape_validity_proof {
+        let (proof, seconds) =
+            prove_shape_validity_for_collection(&prover_parameters, &committed, &mut rng)?;
+        commit_profile.validity_prove_seconds = seconds;
+        Some(proof)
+    } else {
+        None
+    };
+    let commit_phase_seconds = report_stage("commit_phase", commit_phase_started, &monitor);
+    let statement = committed.statement().clone();
+    let bva_commit_profile = committed.bva().profile;
 
     let opening_prove_started = Instant::now();
-    let (opening_proof, opening_profile) = prove_section6_mask_opening(
+    let (opening_proof, opening_profile) = prove_opening(
         &prover_parameters,
-        &registered,
+        &committed,
         &mut source,
         &claims,
         &mut rng,
@@ -505,18 +619,26 @@ fn main() -> Result<()> {
     let opening_prove_seconds = report_stage("opening_prove", opening_prove_started, &monitor);
 
     let serialization_started = Instant::now();
-    let pi_ip_proof_size_bytes =
-        usize::try_from(proof_codec().serialized_size(&opening_proof.packed_eo)?)
-            .context("pi_ip proof size does not fit usize")?;
+    let sized = |bytes: u64| usize::try_from(bytes).context("proof size does not fit usize");
+    let pi_ip_proof_size_bytes = sized(proof_codec().serialized_size(&opening_proof.packed_eo)?)?;
     let bva_dory_proof_size_bytes =
-        usize::try_from(proof_codec().serialized_size(&opening_proof.bva_opening.dory_opening)?)
-            .context("BVA Dory proof size does not fit usize")?;
+        sized(proof_codec().serialized_size(&opening_proof.bva_opening.dory_opening)?)?;
     let terminal_dory_proof_size_bytes =
-        usize::try_from(proof_codec().serialized_size(&opening_proof.final_opening)?)
-            .context("terminal Dory proof size does not fit usize")?;
-    let (proof_bytes, component_sizes) = encode_proof_artifact(&statement, &opening_proof)?;
+        sized(proof_codec().serialized_size(&opening_proof.terminal_opening)?)?;
+    let x_statement_size_bytes = sized(proof_codec().serialized_size(&opening_proof.x)?)?;
+    let tbv_statement_size_bytes = sized(proof_codec().serialized_size(&opening_proof.tbv)?)?;
+    let point_reduction_size_bytes = sized(proof_codec().serialized_size(&opening_proof.point)?)?;
+    let final_evaluation_size_bytes =
+        sized(proof_codec().serialized_size(&opening_proof.final_eval)?)?;
+    let (proof_bytes, component_sizes) =
+        encode_proof_artifact(&statement, validity_proof.as_ref(), &opening_proof)?;
     let proof_sha256 = Sha256::digest(&proof_bytes);
-    let (decoded_statement, decoded_opening) = decode_proof_artifact_exact(&proof_bytes)?;
+    let (decoded_statement, decoded_validity, decoded_opening) =
+        decode_proof_artifact_exact(&proof_bytes)?;
+    ensure!(
+        decoded_validity.is_some() == arguments.shape_validity_proof,
+        "shape validity proof mode does not match the artifact"
+    );
     let mut trailing = proof_bytes.clone();
     trailing.push(0);
     ensure!(
@@ -525,9 +647,22 @@ fn main() -> Result<()> {
     );
     let serialization_seconds = report_stage("serialization", serialization_started, &monitor);
 
+    let validity_verify_seconds = if let Some(validity) = decoded_validity.as_ref() {
+        let validity_verify_started = Instant::now();
+        verify_shape_commitment(&verifier_parameters, &decoded_statement, validity)?;
+        report_stage("validity_verify", validity_verify_started, &monitor)
+    } else {
+        println!("validity_verify_seconds=0.000000");
+        println!("peak_rss_after_validity_verify_kib={}", monitor.peak_kib());
+        io::stdout()
+            .flush()
+            .context("flush skipped validity stage")?;
+        0.0
+    };
+
     let opening_verify_started = Instant::now();
     let claimed_values = claims.iter().map(|claim| claim.value).collect::<Vec<_>>();
-    let verification = verify_section6_mask_opening(
+    let verification = verify_validity_opening(
         &verifier_parameters,
         &decoded_statement,
         &claimed_values,
@@ -536,43 +671,86 @@ fn main() -> Result<()> {
     let opening_verify_seconds = report_stage("opening_verify", opening_verify_started, &monitor);
 
     ensure!(
-        opening_profile.padding.materialized_padding_entries == 0,
-        "Packed EO materialized padding"
+        opening_profile.padding.materialized_padding_entries == materialized_padding_entries as u64,
+        "Packed EO padding counter mismatch"
     );
     ensure!(
-        opening_profile.packed_eo.materialized_padding_entries == 0,
-        "Packed EO profile reports materialized padding"
+        opening_profile.packed_eo.materialized_padding_entries == materialized_padding_entries,
+        "Packed EO profile padding count mismatch"
     );
     ensure!(
-        opening_profile.packed_eo.physical_entries_per_pass == physical_entries,
-        "Packed EO did not visit the exact physical witness"
+        opening_profile.packed_eo.physical_entries_per_pass == layout.active_len,
+        "Packed EO did not visit the complete padded bucket region"
     );
     ensure!(
         bva_commit_profile.materialized_field_entries == 0
-            && bva_commit_profile.materialized_padding_entries == 0,
-        "Dory commitment materialized a field witness or padding"
-    );
-    ensure!(
-        opening_profile.materialized_dense_bva_field_entries == 0,
-        "Dory opening materialized the dense BVA as a field vector"
+            && bva_commit_profile.materialized_padding_entries == materialized_padding_entries,
+        "Dory commitment materialized a field witness or reported the wrong i8 padding"
     );
 
-    let total_prover_seconds = registration_commit_seconds + opening_prove_seconds;
-    let total_verifier_seconds = opening_verify_seconds;
+    let total_prover_seconds = commit_phase_seconds + opening_prove_seconds;
+    let total_verifier_seconds = validity_verify_seconds + opening_verify_seconds;
     let total_seconds = experiment_started.elapsed().as_secs_f64();
     let peak_rss_kib = monitor.finish();
 
-    println!("registration_commitments_size_bytes={}", component_sizes[0]);
-    println!("registration_proof_size_bytes=0");
-    println!("opening_proof_size_bytes={}", component_sizes[1]);
+    // These top-level prover categories are mutually exclusive. The terminal
+    // auxiliary opening serves both conversion phases and is added only once.
+    let point_conversion_seconds = opening_profile.x_commit_seconds
+        + opening_profile.point_witness_seconds
+        + opening_profile.tbv_commit_seconds
+        + opening_profile.point_aux_commit_seconds
+        + opening_profile.keys_commit_seconds
+        + opening_profile.point_prove_seconds;
+    let tbv_evaluation_seconds = opening_profile.tbv_reconstruct_seconds
+        + opening_profile.final_witness_seconds
+        + opening_profile.final_aux_commit_seconds
+        + opening_profile.final_prove_seconds;
+    let point_conversion_plus_tbv_evaluation_seconds =
+        point_conversion_seconds + tbv_evaluation_seconds + opening_profile.terminal_open_seconds;
+    let commit_orchestration_seconds = (commit_phase_seconds
+        - commit_profile.shape_commit_seconds
+        - commit_profile.validity_prove_seconds
+        - commit_profile.bva_commit_seconds)
+        .max(0.0);
+    let classified_opening_seconds = point_conversion_plus_tbv_evaluation_seconds
+        + opening_profile.packed_eo_seconds
+        + opening_profile.bva_open_seconds;
+    let opening_orchestration_seconds =
+        (opening_prove_seconds - classified_opening_seconds).max(0.0);
+    let other_prover_seconds = commit_orchestration_seconds + opening_orchestration_seconds;
+    let prover_breakdown_sum_seconds = commit_profile.shape_commit_seconds
+        + commit_profile.validity_prove_seconds
+        + commit_profile.bva_commit_seconds
+        + opening_profile.packed_eo_seconds
+        + opening_profile.bva_open_seconds
+        + point_conversion_plus_tbv_evaluation_seconds
+        + other_prover_seconds;
+    ensure!(
+        (prover_breakdown_sum_seconds - total_prover_seconds).abs() < 0.001,
+        "prover timing breakdown is not exhaustive"
+    );
+    let eo_ip_accounted_seconds = opening_profile.packed_eo.timings.accounted_seconds();
+    let eo_ip_other_seconds =
+        (opening_profile.packed_eo_seconds - eo_ip_accounted_seconds).max(0.0);
+
+    println!("commit_statement_size_bytes={}", component_sizes[0]);
+    println!("validity_proof_size_bytes={}", component_sizes[1]);
+    println!("opening_proof_size_bytes={}", component_sizes[2]);
+    println!("x_statement_size_bytes={x_statement_size_bytes}");
+    println!("tbv_statement_size_bytes={tbv_statement_size_bytes}");
+    println!("point_reduction_size_bytes={point_reduction_size_bytes}");
     println!("pi_ip_proof_size_bytes={pi_ip_proof_size_bytes}");
+    println!("final_evaluation_size_bytes={final_evaluation_size_bytes}");
     println!("bva_dory_proof_size_bytes={bva_dory_proof_size_bytes}");
     println!("terminal_dory_proof_size_bytes={terminal_dory_proof_size_bytes}");
     println!(
         "physical_dory_proof_count={}",
         opening_proof.physical_dory_proof_count()
     );
-    println!("proof_objects_size_bytes={}", component_sizes[1]);
+    println!(
+        "proof_objects_size_bytes={}",
+        component_sizes[1] + component_sizes[2]
+    );
     println!("proof_size_bytes={}", proof_bytes.len());
     println!("total_communication_bytes={}", proof_bytes.len());
     println!("proof_sha256={proof_sha256:x}");
@@ -593,18 +771,22 @@ fn main() -> Result<()> {
         "dory_commit_materialized_padding_entries={}",
         bva_commit_profile.materialized_padding_entries
     );
-    println!(
-        "dory_open_materialized_dense_bva_field_entries={}",
-        opening_profile.materialized_dense_bva_field_entries
-    );
     println!("x_commit_seconds={:.6}", opening_profile.x_commit_seconds);
     println!(
         "point_witness_seconds={:.6}",
         opening_profile.point_witness_seconds
     );
     println!(
+        "tbv_commit_seconds={:.6}",
+        opening_profile.tbv_commit_seconds
+    );
+    println!(
         "point_aux_commit_seconds={:.6}",
         opening_profile.point_aux_commit_seconds
+    );
+    println!(
+        "keys_commit_seconds={:.6}",
+        opening_profile.keys_commit_seconds
     );
     println!(
         "point_prove_seconds={:.6}",
@@ -614,10 +796,7 @@ fn main() -> Result<()> {
         "tbv_reconstruct_seconds={:.6}",
         opening_profile.tbv_reconstruct_seconds
     );
-    println!(
-        "packed_eo_seconds={:.6}",
-        opening_profile.packed_eo_seconds
-    );
+    println!("packed_eo_seconds={:.6}", opening_profile.packed_eo_seconds);
     println!("bva_open_seconds={:.6}", opening_profile.bva_open_seconds);
     println!(
         "final_witness_seconds={:.6}",
@@ -632,8 +811,8 @@ fn main() -> Result<()> {
         opening_profile.final_prove_seconds
     );
     println!(
-        "auxiliary_open_seconds={:.6}",
-        opening_profile.auxiliary_open_seconds
+        "terminal_open_seconds={:.6}",
+        opening_profile.terminal_open_seconds
     );
     println!(
         "packed_eo_source_passes={}",
@@ -656,20 +835,32 @@ fn main() -> Result<()> {
             .context("profile byte count overflowed")?
     );
     println!(
-        "packed_eo_cross_terms_seconds={:.6}",
-        opening_profile.packed_eo.timings.cross_terms_seconds
+        "packed_eo_packed_cross_terms_seconds={:.6}",
+        opening_profile.packed_eo.timings.packed_cross_terms_seconds
     );
     println!(
-        "packed_eo_fold_seconds={:.6}",
-        opening_profile.packed_eo.timings.fold_seconds
+        "packed_eo_first_fold_seconds={:.6}",
+        opening_profile.packed_eo.timings.first_fold_seconds
     );
     println!(
         "packed_eo_reduced_check_seconds={:.6}",
         opening_profile.packed_eo.timings.reduced_check_seconds
     );
     println!(
+        "packed_eo_binary_cross_terms_seconds={:.6}",
+        opening_profile.packed_eo.timings.binary_cross_terms_seconds
+    );
+    println!(
+        "packed_eo_binary_challenge_seconds={:.6}",
+        opening_profile.packed_eo.timings.binary_challenge_seconds
+    );
+    println!(
+        "packed_eo_binary_fold_seconds={:.6}",
+        opening_profile.packed_eo.timings.binary_fold_seconds
+    );
+    println!(
         "packed_eo_binary_rounds_seconds={:.6}",
-        opening_profile.packed_eo.timings.binary_rounds_seconds
+        opening_profile.packed_eo.timings.binary_rounds_seconds()
     );
     println!(
         "terminal_claim_count={}",
@@ -680,22 +871,62 @@ fn main() -> Result<()> {
     println!("setup_seconds={setup_seconds:.6}");
     println!(
         "shape_commit_seconds={:.6}",
-        registration_profile.shape_mask_commit_seconds
+        commit_profile.shape_commit_seconds
     );
     println!(
         "bva_commit_seconds={:.6}",
-        registration_profile.bva_commit_seconds
+        commit_profile.bva_commit_seconds
     );
-    println!("registration_commit_seconds={registration_commit_seconds:.6}");
-    println!("registration_prove_seconds=0.000000");
+    println!("commit_phase_seconds={commit_phase_seconds:.6}");
+    println!(
+        "validity_prove_seconds={:.6}",
+        commit_profile.validity_prove_seconds
+    );
     println!("opening_prove_seconds={opening_prove_seconds:.6}");
+    println!(
+        "shape_commitment_seconds={:.6}",
+        commit_profile.shape_commit_seconds
+    );
+    println!(
+        "dense_vector_commitment_seconds={:.6}",
+        commit_profile.bva_commit_seconds
+    );
+    println!("dense_vector_commitment_kind=native_i8_bva");
+    println!("eo_ip_seconds={:.6}", opening_profile.packed_eo_seconds);
+    println!("eo_ip_accounted_seconds={eo_ip_accounted_seconds:.6}");
+    println!("eo_ip_other_seconds={eo_ip_other_seconds:.6}");
+    println!(
+        "dense_bva_open_seconds={:.6}",
+        opening_profile.bva_open_seconds
+    );
+    println!("point_conversion_seconds={point_conversion_seconds:.6}");
+    println!("tbv_evaluation_seconds={tbv_evaluation_seconds:.6}");
+    println!(
+        "terminal_auxiliary_open_seconds={:.6}",
+        opening_profile.terminal_open_seconds
+    );
+    println!(
+        "point_conversion_plus_tbv_evaluation_seconds={point_conversion_plus_tbv_evaluation_seconds:.6}"
+    );
+    println!("commit_orchestration_seconds={commit_orchestration_seconds:.6}");
+    println!("opening_orchestration_seconds={opening_orchestration_seconds:.6}");
+    println!("other_prover_seconds={other_prover_seconds:.6}");
+    println!("prover_breakdown_sum_seconds={prover_breakdown_sum_seconds:.6}");
     println!("serialization_seconds={serialization_seconds:.6}");
-    println!("registration_verify_seconds=0.000000");
+    println!("validity_verify_seconds={validity_verify_seconds:.6}");
     println!("opening_verify_seconds={opening_verify_seconds:.6}");
     println!("total_prover_seconds={total_prover_seconds:.6}");
     println!("total_verifier_seconds={total_verifier_seconds:.6}");
     println!("total_seconds={total_seconds:.6}");
     println!("peak_rss_kib={peak_rss_kib}");
+    println!(
+        "shape_validity_proof_status={}",
+        if arguments.shape_validity_proof {
+            "verified"
+        } else {
+            "not_requested"
+        }
+    );
     println!(
         "aggregated_claim_nonzero={}",
         verification.aggregated_claim != Fr::from(0_u64)
@@ -784,7 +1015,10 @@ fn read_rss_kib() -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_arguments_from, physical_entry_count, section6_shapes, DEFAULT_MAX_LOG};
+    use super::{
+        parse_arguments_from, physical_entry_count, section6_shapes, uniform_shapes, UniformFamily,
+        DEFAULT_MAX_LOG,
+    };
     use batch::matrix_collection::DenseBvaDescriptor;
 
     #[test]
@@ -802,9 +1036,11 @@ mod tests {
 
         let descriptor = DenseBvaDescriptor::from_shapes(&shapes).unwrap();
         assert_eq!(descriptor.logical_len(), 1_usize << 30);
-        assert_eq!(descriptor.conceptual_final_zeros(), 163_810);
-        assert_eq!(descriptor.bucket_count(), 2_132);
-        assert_eq!(descriptor.materialized_padding_entries(), 0);
+        assert_eq!(descriptor.layout().active_len(), 1_073_741_689);
+        assert_eq!(descriptor.conceptual_boundary_zeros(), 163_675);
+        assert_eq!(descriptor.conceptual_final_zeros(), 135);
+        assert_eq!(descriptor.bucket_count(), 383);
+        assert_eq!(descriptor.materialized_padding_entries(), 163_810);
     }
 
     #[test]
@@ -819,9 +1055,43 @@ mod tests {
 
         let descriptor = DenseBvaDescriptor::from_shapes(&shapes).unwrap();
         assert_eq!(descriptor.logical_len(), 1_usize << 34);
-        assert_eq!(descriptor.conceptual_final_zeros(), 655_326);
-        assert_eq!(descriptor.bucket_count(), 3_125);
-        assert_eq!(descriptor.materialized_padding_entries(), 0);
+        assert_eq!(descriptor.layout().active_len(), 17_179_869_049);
+        assert_eq!(descriptor.conceptual_boundary_zeros(), 655_191);
+        assert_eq!(descriptor.conceptual_final_zeros(), 135);
+        assert_eq!(descriptor.bucket_count(), 447);
+        assert_eq!(descriptor.materialized_padding_entries(), 655_326);
+    }
+
+    #[test]
+    fn homogeneous_target_has_sixteen_padded_buckets_per_matrix() {
+        let shapes = uniform_shapes(UniformFamily {
+            count: 1 << 14,
+            log: 10,
+        })
+        .unwrap();
+        let descriptor = DenseBvaDescriptor::from_shapes(&shapes).unwrap();
+
+        assert_eq!(physical_entry_count(&shapes).unwrap(), 17_146_331_136);
+        assert_eq!(descriptor.bucket_count(), 1 << 18);
+        assert_eq!(descriptor.layout().active_len(), 1 << 34);
+        assert_eq!(descriptor.logical_len(), 1 << 34);
+        assert_eq!(descriptor.materialized_padding_entries(), 33_538_048);
+    }
+
+    #[test]
+    fn requested_homogeneous_target_is_the_two_to_thirty_four_domain() {
+        let shapes = uniform_shapes(UniformFamily {
+            count: 1 << 10,
+            log: 12,
+        })
+        .unwrap();
+        let descriptor = DenseBvaDescriptor::from_shapes(&shapes).unwrap();
+
+        assert_eq!(physical_entry_count(&shapes).unwrap(), 17_171_481_600);
+        assert_eq!(descriptor.bucket_count(), 1 << 14);
+        assert_eq!(descriptor.layout().active_len(), 1 << 34);
+        assert_eq!(descriptor.logical_len(), 1 << 34);
+        assert_eq!(descriptor.materialized_padding_entries(), 8_387_584);
     }
 
     #[test]
@@ -837,11 +1107,53 @@ mod tests {
 
         let defaults = parse_arguments_from(Vec::new()).unwrap().unwrap();
         assert_eq!(defaults.max_log, DEFAULT_MAX_LOG);
+        assert!(!defaults.shape_validity_proof);
+
+        let explicit_shape_validity =
+            parse_arguments_from(["--shape-validity-proof"].into_iter().map(String::from))
+                .unwrap()
+                .unwrap();
+        assert!(explicit_shape_validity.shape_validity_proof);
+
+        let homogeneous = parse_arguments_from(
+            [
+                "--uniform-count",
+                "1024",
+                "--uniform-log",
+                "12",
+                "--target-log",
+                "34",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            homogeneous.uniform,
+            Some(UniformFamily {
+                count: 1024,
+                log: 12
+            })
+        );
 
         assert!(parse_arguments_from(
             ["--max-log", "17", "--target-log", "30"]
                 .into_iter()
                 .map(String::from),
+        )
+        .is_err());
+        assert!(parse_arguments_from(
+            [
+                "--uniform-count",
+                "1024",
+                "--uniform-log",
+                "12",
+                "--target-log",
+                "30",
+            ]
+            .into_iter()
+            .map(String::from),
         )
         .is_err());
         assert!(parse_arguments_from(["--max-log", "18"].into_iter().map(String::from),).is_err());

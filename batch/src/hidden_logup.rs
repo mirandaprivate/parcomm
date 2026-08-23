@@ -14,7 +14,6 @@ use std::fmt::{Display, Formatter};
 
 use ark_bn254::Fr as ArkFr;
 use ark_ff::{batch_inversion, One, Zero};
-use ark_serialize::CanonicalSerialize;
 use ark_std::rand::RngCore;
 use jolt_dory::DoryCommitment;
 use jolt_field::Fr as JoltFr;
@@ -22,7 +21,6 @@ use jolt_transcript::domain::{Label, LabelWithCount, U64Word};
 use jolt_transcript::{Blake2bTranscript, Transcript};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::hidden_relation::{
     prove_hidden_relation_openings_batch, verify_hidden_relation_openings_batch,
@@ -775,11 +773,11 @@ pub fn prove_mixed_hidden_logup_deferred<'a>(
     let query_slices = query_columns
         .iter()
         .map(mixed_prover_values)
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     let table_slices = table_columns
         .iter()
         .map(mixed_prover_values)
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     let query_keys = compress_tuple_columns(&query_slices, compression_challenge, logical_len);
     let table_keys = compress_tuple_columns(&table_slices, compression_challenge, logical_len);
     let multiplicities = compute_multiplicities(&query_keys, &table_keys)?;
@@ -1017,8 +1015,8 @@ fn prove_hidden_logup_parts_deferred_with_grid<'a>(
         tuple_width,
     )?;
 
-    let query_keys = compress_prover_parts(query_parts, compression_challenge, logical_len);
-    let table_keys = compress_prover_parts(table_parts, compression_challenge, logical_len);
+    let query_keys = compress_prover_parts(query_parts, compression_challenge, logical_len)?;
+    let table_keys = compress_prover_parts(table_parts, compression_challenge, logical_len)?;
     let multiplicities = compute_part_multiplicities(&query_keys, &table_keys)?;
     let committed_query_keys = commit_auxiliary_matrix(parameters, grid, &query_keys)?;
     let committed_table_keys = commit_auxiliary_matrix(parameters, grid, &table_keys)?;
@@ -1680,12 +1678,15 @@ fn compress_prover_parts(
     parts: &[Vec<MixedLogUpColumn<'_>>],
     challenge: ArkFr,
     logical_len: usize,
-) -> Vec<Vec<ArkFr>> {
+) -> Result<Vec<Vec<ArkFr>>, HiddenLogUpError> {
     parts
         .iter()
         .map(|part| {
-            let columns = part.iter().map(mixed_prover_values).collect::<Vec<_>>();
-            compress_tuple_columns(&columns, challenge, logical_len)
+            let columns = part
+                .iter()
+                .map(mixed_prover_values)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(compress_tuple_columns(&columns, challenge, logical_len))
         })
         .collect()
 }
@@ -1895,9 +1896,7 @@ where
                 }
                 MixedLogUpColumn::Public(column) => {
                     let index = total_hidden + public.len();
-                    public.push(PublicRelationTable {
-                        values: column.values,
-                    });
+                    public.push(*column);
                     index
                 }
             };
@@ -2092,10 +2091,17 @@ fn validate_mixed_statement_columns(
     Ok(logical_len)
 }
 
-fn mixed_prover_values<'a>(column: &MixedLogUpColumn<'a>) -> &'a [ArkFr] {
+fn mixed_prover_values<'a>(column: &MixedLogUpColumn<'a>) -> Result<&'a [ArkFr], HiddenLogUpError> {
     match column {
-        MixedLogUpColumn::Hidden(column) => column.values,
-        MixedLogUpColumn::Public(column) => column.values,
+        MixedLogUpColumn::Hidden(column) => Ok(column.values),
+        MixedLogUpColumn::Public(column) => match column {
+            PublicRelationTable::Dense(values) => Ok(values),
+            PublicRelationTable::Structured { values, .. } => values.ok_or_else(|| {
+                HiddenLogUpError::Encoding(
+                    "structured public column is missing prover entries".to_owned(),
+                )
+            }),
+        },
     }
 }
 
@@ -2130,11 +2136,7 @@ fn prover_column_statements<'a>(
             MixedLogUpColumn::Hidden(column) => MixedLogUpColumnStatement::Hidden(
                 HiddenRelationTableStatement::from(column.committed),
             ),
-            MixedLogUpColumn::Public(column) => {
-                MixedLogUpColumnStatement::Public(PublicRelationTable {
-                    values: column.values,
-                })
-            }
+            MixedLogUpColumn::Public(column) => MixedLogUpColumnStatement::Public(*column),
         })
         .collect()
 }
@@ -2142,7 +2144,7 @@ fn prover_column_statements<'a>(
 fn mixed_statement_len(column: &MixedLogUpColumnStatement<'_>) -> usize {
     match column {
         MixedLogUpColumnStatement::Hidden(column) => column.logical_len,
-        MixedLogUpColumnStatement::Public(column) => column.values.len(),
+        MixedLogUpColumnStatement::Public(column) => column.logical_len(),
     }
 }
 
@@ -2213,35 +2215,29 @@ fn append_source_column(
             transcript.append_labeled(b"lu_table_len", &U64Word(statement.logical_len as u64));
         }
         (HiddenLogUpSide::Query, MixedLogUpColumnStatement::Public(statement)) => {
-            let digest = public_column_digest(statement.values)?;
+            let digest = statement
+                .transcript_digest()
+                .map_err(HiddenLogUpError::Relation)?;
             transcript.append(&LabelWithCount(b"lu_query_pub", digest.len() as u64));
             transcript.append_bytes(&digest);
-            transcript.append_labeled(b"lu_query_pub_len", &U64Word(statement.values.len() as u64));
+            transcript.append_labeled(
+                b"lu_query_pub_len",
+                &U64Word(statement.logical_len() as u64),
+            );
         }
         (HiddenLogUpSide::Table, MixedLogUpColumnStatement::Public(statement)) => {
-            let digest = public_column_digest(statement.values)?;
+            let digest = statement
+                .transcript_digest()
+                .map_err(HiddenLogUpError::Relation)?;
             transcript.append(&LabelWithCount(b"lu_table_pub", digest.len() as u64));
             transcript.append_bytes(&digest);
-            transcript.append_labeled(b"lu_table_pub_len", &U64Word(statement.values.len() as u64));
+            transcript.append_labeled(
+                b"lu_table_pub_len",
+                &U64Word(statement.logical_len() as u64),
+            );
         }
     }
     Ok(())
-}
-
-fn public_column_digest(values: &[ArkFr]) -> Result<[u8; 32], HiddenLogUpError> {
-    let mut hasher = Sha256::new();
-    hasher.update(b"parcomm-hidden-logup-public-column-v1");
-    hasher.update((values.len() as u64).to_le_bytes());
-    let mut encoded = Vec::new();
-    for value in values {
-        encoded.clear();
-        value
-            .serialize_compressed(&mut encoded)
-            .map_err(|error| HiddenLogUpError::Encoding(error.to_string()))?;
-        hasher.update((encoded.len() as u64).to_le_bytes());
-        hasher.update(&encoded);
-    }
-    Ok(hasher.finalize().into())
 }
 
 fn prover_key_relation_inputs<'source, 'output>(
@@ -2275,9 +2271,7 @@ where
         .iter()
         .filter_map(|column| match column {
             MixedLogUpColumn::Hidden(_) => None,
-            MixedLogUpColumn::Public(column) => Some(PublicRelationTable {
-                values: column.values,
-            }),
+            MixedLogUpColumn::Public(column) => Some(*column),
         })
         .collect::<Vec<_>>();
     let expression = mixed_key_zero_expression(
@@ -2612,11 +2606,11 @@ mod tests {
     ) {
         let tag = vec![ArkFr::from(9_u64); query.values.len()];
         let query_parts = vec![vec![
-            MixedLogUpColumn::Public(PublicRelationTable { values: &tag }),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&tag)),
             MixedLogUpColumn::Hidden(query),
         ]];
         let table_parts = vec![vec![
-            MixedLogUpColumn::Public(PublicRelationTable { values: &tag }),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&tag)),
             MixedLogUpColumn::Hidden(table),
         ]];
         let (proof, pending) = prove_hidden_logup_parts_deferred(
@@ -2641,11 +2635,11 @@ mod tests {
     ) -> HiddenLogUpVerifierOpeningState<'a> {
         let tag = vec![ArkFr::from(9_u64); query.logical_len];
         let query_parts = vec![vec![
-            MixedLogUpColumnStatement::Public(PublicRelationTable { values: &tag }),
+            MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(&tag)),
             MixedLogUpColumnStatement::Hidden(query),
         ]];
         let table_parts = vec![vec![
-            MixedLogUpColumnStatement::Public(PublicRelationTable { values: &tag }),
+            MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(&tag)),
             MixedLogUpColumnStatement::Hidden(table),
         ]];
         verify_hidden_logup_parts_deferred(
@@ -2851,12 +2845,8 @@ mod tests {
             }),
         ];
         let table = vec![
-            MixedLogUpColumn::Public(PublicRelationTable {
-                values: &public_exponents,
-            }),
-            MixedLogUpColumn::Public(PublicRelationTable {
-                values: &public_powers,
-            }),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&public_exponents)),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&public_powers)),
         ];
         let mut rng = StdRng::seed_from_u64(41);
         let proof = prove_mixed_hidden_logup(
@@ -2877,12 +2867,8 @@ mod tests {
             )),
         ];
         let table_statement = vec![
-            MixedLogUpColumnStatement::Public(PublicRelationTable {
-                values: &public_exponents,
-            }),
-            MixedLogUpColumnStatement::Public(PublicRelationTable {
-                values: &public_powers,
-            }),
+            MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(&public_exponents)),
+            MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(&public_powers)),
         ];
         verify_mixed_hidden_logup(
             b"public-exponent-table",
@@ -2912,12 +2898,8 @@ mod tests {
             }),
         ];
         let table = vec![
-            MixedLogUpColumn::Public(PublicRelationTable {
-                values: &public_exponents,
-            }),
-            MixedLogUpColumn::Public(PublicRelationTable {
-                values: &public_powers,
-            }),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&public_exponents)),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&public_powers)),
         ];
         let mut rng = StdRng::seed_from_u64(43);
         let proof = prove_mixed_hidden_logup(
@@ -2940,12 +2922,8 @@ mod tests {
         let mut tampered_powers = public_powers.clone();
         tampered_powers[3] += ArkFr::one();
         let tampered_table = vec![
-            MixedLogUpColumnStatement::Public(PublicRelationTable {
-                values: &public_exponents,
-            }),
-            MixedLogUpColumnStatement::Public(PublicRelationTable {
-                values: &tampered_powers,
-            }),
+            MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(&public_exponents)),
+            MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(&tampered_powers)),
         ];
         assert!(verify_mixed_hidden_logup(
             b"tampered-public-table",
@@ -2972,21 +2950,15 @@ mod tests {
         let committed_query_values =
             commit_field_vector_zk(&prover_parameters, &query_values).unwrap();
         let query = vec![
-            MixedLogUpColumn::Public(PublicRelationTable {
-                values: &query_rows,
-            }),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&query_rows)),
             MixedLogUpColumn::Hidden(HiddenRelationTable {
                 values: &query_values,
                 committed: &committed_query_values,
             }),
         ];
         let table = vec![
-            MixedLogUpColumn::Public(PublicRelationTable {
-                values: &table_rows,
-            }),
-            MixedLogUpColumn::Public(PublicRelationTable {
-                values: &table_values,
-            }),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&table_rows)),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&table_values)),
         ];
         let mut rng = StdRng::seed_from_u64(47);
         assert!(matches!(
@@ -3033,7 +3005,7 @@ mod tests {
             .iter()
             .map(|part| {
                 part.iter()
-                    .map(|values| MixedLogUpColumn::Public(PublicRelationTable { values }))
+                    .map(|values| MixedLogUpColumn::Public(PublicRelationTable::Dense(values)))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
@@ -3063,7 +3035,9 @@ mod tests {
             .iter()
             .map(|part| {
                 part.iter()
-                    .map(|values| MixedLogUpColumnStatement::Public(PublicRelationTable { values }))
+                    .map(|values| {
+                        MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(values))
+                    })
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
@@ -3111,11 +3085,11 @@ mod tests {
         let table_values = [field_column(&[4, 3, 2, 1]), field_column(&[5, 6, 7, 8])];
         let query_parts = query_values
             .iter()
-            .map(|values| vec![MixedLogUpColumn::Public(PublicRelationTable { values })])
+            .map(|values| vec![MixedLogUpColumn::Public(PublicRelationTable::Dense(values))])
             .collect::<Vec<_>>();
         let table_parts = table_values
             .iter()
-            .map(|values| vec![MixedLogUpColumn::Public(PublicRelationTable { values })])
+            .map(|values| vec![MixedLogUpColumn::Public(PublicRelationTable::Dense(values))])
             .collect::<Vec<_>>();
         let mut rng = StdRng::seed_from_u64(57);
         let (reduction, pending) = prove_hidden_logup_parts_deferred_on_grid(
@@ -3145,17 +3119,17 @@ mod tests {
         let query_statements = query_values
             .iter()
             .map(|values| {
-                vec![MixedLogUpColumnStatement::Public(PublicRelationTable {
-                    values,
-                })]
+                vec![MixedLogUpColumnStatement::Public(
+                    PublicRelationTable::Dense(values),
+                )]
             })
             .collect::<Vec<_>>();
         let table_statements = table_values
             .iter()
             .map(|values| {
-                vec![MixedLogUpColumnStatement::Public(PublicRelationTable {
-                    values,
-                })]
+                vec![MixedLogUpColumnStatement::Public(
+                    PublicRelationTable::Dense(values),
+                )]
             })
             .collect::<Vec<_>>();
         let verifier_pending = verify_hidden_logup_parts_deferred_on_grid(

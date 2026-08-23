@@ -1,6 +1,6 @@
 //! One terminal Dory opening for heterogeneous Section 6 MLE claims.
 
-use std::{collections::HashMap, fmt::Display, sync::Arc};
+use std::{collections::HashMap, fmt::Display, sync::Arc, time::Instant};
 
 use ark_bn254::Fr as ArkFr;
 use ark_ff::{One, Zero};
@@ -29,11 +29,11 @@ use serde::{Deserialize, Serialize};
 use crate::{
     hidden_relation::{HiddenRelationTable, HiddenRelationTableStatement, HiddenScalarWitness},
     jolt_dory::{
-        commitment_binding_bytes, CommittedDoryBva, CommittedDoryFieldMatrix,
+        commitment_binding_bytes, dense_i8_polynomial, CommittedDoryBva, CommittedDoryFieldMatrix,
         CommittedDoryFieldVector, DenseI8BvaSource, DoryCommitProfile, DoryProverParameters,
         DoryVerifierParameters, HiddenFieldVectorDoryProof,
     },
-    jolt_dory_adapter::DenseI8DoryError,
+    jolt_dory_adapter::{commit_dense_i8_zk, DenseI8DoryError},
 };
 
 const SUMCHECK_DEGREE: usize = 2;
@@ -225,18 +225,26 @@ pub struct CommittedSection6DorySource {
 #[derive(Clone, Copy)]
 pub enum Section6FinalOpeningData<'a> {
     Field(&'a [ArkFr]),
+    MatrixColumn {
+        values: &'a [ArkFr],
+        padded_rows: usize,
+        padded_cols: usize,
+        column: usize,
+    },
 }
 
 impl Section6FinalOpeningData<'_> {
     fn physical_len(self) -> usize {
         match self {
             Self::Field(values) => values.len(),
+            Self::MatrixColumn { values, .. } => values.len(),
         }
     }
 
     fn value(self, index: usize) -> Fr {
         match self {
             Self::Field(values) => Fr::from(values[index]),
+            Self::MatrixColumn { values, .. } => Fr::from(values[index]),
         }
     }
 }
@@ -261,7 +269,10 @@ pub struct Section6FinalOpeningVerifierClaim<'a> {
 
 enum ResolvedFieldData<'a> {
     Vector(&'a [ArkFr]),
-    Matrix(Arc<CommittedDoryFieldMatrix>),
+    Matrix {
+        matrix: Arc<CommittedDoryFieldMatrix>,
+        column: usize,
+    },
 }
 
 /// Owned adapter from a relation operand to one global-opening prover claim.
@@ -281,11 +292,18 @@ impl ResolvedSection6FieldProverClaim<'_> {
         evaluation: &'a HiddenScalarWitness,
     ) -> Section6FinalOpeningProverClaim<'a> {
         let values = match &self.data {
-            ResolvedFieldData::Vector(values) => *values,
-            ResolvedFieldData::Matrix(matrix) => matrix.values.as_slice(),
+            ResolvedFieldData::Vector(values) => Section6FinalOpeningData::Field(values),
+            ResolvedFieldData::Matrix { matrix, column } => {
+                Section6FinalOpeningData::MatrixColumn {
+                    values: matrix.values.as_slice(),
+                    padded_rows: matrix.padded_rows,
+                    padded_cols: matrix.padded_cols,
+                    column: *column,
+                }
+            }
         };
         Section6FinalOpeningProverClaim {
-            data: Section6FinalOpeningData::Field(values),
+            data: values,
             committed: &self.source,
             point_msb: &self.point_msb,
             evaluation,
@@ -338,7 +356,13 @@ pub fn resolve_section6_hidden_relation_prover_claim<'a>(
     let (data, point_msb) = if let Some(matrix) = &table.committed.matrix {
         let mut point = column_point_msb(table.committed.matrix_column, matrix.padded_cols)?;
         point.extend(row_point.iter().copied().map(ArkFr::from));
-        (ResolvedFieldData::Matrix(matrix.clone()), point)
+        (
+            ResolvedFieldData::Matrix {
+                matrix: matrix.clone(),
+                column: table.committed.matrix_column,
+            },
+            point,
+        )
     } else {
         (
             ResolvedFieldData::Vector(table.values),
@@ -421,6 +445,52 @@ impl Section6FinalOpeningProof {
             blindfold: _,
         } = self;
         1
+    }
+}
+
+/// Mutually exclusive prover timings for the terminal Section 6 opening.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Section6FinalOpeningProverProfile {
+    pub preparation_state_setup_seconds: f64,
+    pub sumcheck_seconds: f64,
+    pub dory_batch_open_seconds: f64,
+    pub blindfold_preparation_seconds: f64,
+    pub blindfold_prove_seconds: f64,
+    pub result_assembly_seconds: f64,
+    pub total_seconds: f64,
+}
+
+impl Section6FinalOpeningProverProfile {
+    pub fn classified_seconds(&self) -> f64 {
+        self.preparation_state_setup_seconds
+            + self.sumcheck_seconds
+            + self.dory_batch_open_seconds
+            + self.blindfold_preparation_seconds
+            + self.blindfold_prove_seconds
+            + self.result_assembly_seconds
+    }
+}
+
+/// Mutually exclusive verifier timings for the terminal Section 6 opening.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Section6FinalOpeningVerifierProfile {
+    pub preparation_state_setup_seconds: f64,
+    pub sumcheck_verify_seconds: f64,
+    pub dory_batch_verify_seconds: f64,
+    pub blindfold_preparation_seconds: f64,
+    pub blindfold_verify_seconds: f64,
+    pub result_finalization_seconds: f64,
+    pub total_seconds: f64,
+}
+
+impl Section6FinalOpeningVerifierProfile {
+    pub fn classified_seconds(&self) -> f64 {
+        self.preparation_state_setup_seconds
+            + self.sumcheck_verify_seconds
+            + self.dory_batch_verify_seconds
+            + self.blindfold_preparation_seconds
+            + self.blindfold_verify_seconds
+            + self.result_finalization_seconds
     }
 }
 
@@ -617,17 +687,51 @@ pub fn commit_section6_field_matrix_columns_on_grid_zk(
         let start = column * padded_rows;
         values[start..start + padded_rows].copy_from_slice(source);
     }
+    commit_section6_owned_field_matrix_on_grid_zk(
+        parameters,
+        grid,
+        values,
+        padded_rows,
+        columns.len(),
+        padded_cols,
+    )
+}
+
+/// Commit an already column-major padded matrix by moving its buffer, avoiding
+/// a second full-size allocation when the prover built the cover in place.
+pub fn commit_section6_owned_field_matrix_on_grid_zk(
+    parameters: &DoryProverParameters,
+    grid: &Section6DoryGrid,
+    values: Vec<ArkFr>,
+    padded_rows: usize,
+    logical_cols: usize,
+    padded_cols: usize,
+) -> Result<Vec<CommittedDoryFieldVector>, Section6FinalOpeningError> {
+    if logical_cols == 0
+        || padded_cols < logical_cols
+        || !padded_cols.is_power_of_two()
+        || padded_rows == 0
+        || !padded_rows.is_power_of_two()
+    {
+        return Err(Section6FinalOpeningError::ProofShape);
+    }
+    let matrix_len = padded_rows
+        .checked_mul(padded_cols)
+        .ok_or(Section6FinalOpeningError::InvalidLogicalLength(usize::MAX))?;
+    if values.len() != matrix_len {
+        return Err(Section6FinalOpeningError::ProofShape);
+    }
     let source = commit_section6_field_on_grid_zk(parameters, grid, &values)?;
     let matrix = Arc::new(CommittedDoryFieldMatrix {
         values,
         padded_rows,
-        logical_cols: columns.len(),
+        logical_cols,
         padded_cols,
         commitment: source.commitment.clone(),
         hint: source.hint.clone(),
         grid_num_vars: Some(grid.num_vars),
     });
-    Ok((0..columns.len())
+    Ok((0..logical_cols)
         .map(|matrix_column| CommittedDoryFieldVector {
             commitment: source.commitment.clone(),
             logical_len: padded_rows,
@@ -651,12 +755,6 @@ pub fn commit_section6_bva_i8_on_grid_zk<S: DenseI8BvaSource>(
     }
     let logical_len = source.layout().logical_len();
     let values = source.dense_values();
-    if values.len() != source.layout().active_len() {
-        return Err(Section6FinalOpeningError::SourceLength {
-            logical: source.layout().active_len(),
-            physical: values.len(),
-        });
-    }
     if bit_width < 8
         && values
             .par_iter()
@@ -664,12 +762,14 @@ pub fn commit_section6_bva_i8_on_grid_zk<S: DenseI8BvaSource>(
     {
         return Err(Section6FinalOpeningError::ProofShape);
     }
-    let committed = commit_section6_dense_i8_on_grid_zk(parameters, grid, values, logical_len)?;
+    let dense = dense_i8_polynomial(source)
+        .map_err(|error| Section6FinalOpeningError::Dory(error.to_string()))?;
+    let (commitment, hint) = commit_dense_i8_zk(&dense, &parameters.pcs);
     let shape = grid.native_shape(logical_len)?;
     let row_width = shape.row_width();
     Ok(CommittedDoryBva {
-        commitment: committed.commitment,
-        hint: committed.hint.as_ref().clone(),
+        commitment,
+        hint,
         profile: DoryCommitProfile {
             physical_entries: values.len(),
             nonzero_entries: values.par_iter().filter(|&&value| value != 0).count(),
@@ -677,7 +777,7 @@ pub fn commit_section6_bva_i8_on_grid_zk<S: DenseI8BvaSource>(
             row_commitments: shape.row_count(),
             physical_rows: values.len().div_ceil(row_width),
             materialized_field_entries: 0,
-            materialized_padding_entries: 0,
+            materialized_padding_entries: source.materialized_padding_entries(),
             padding_group_operations: 0,
         },
     })
@@ -693,6 +793,23 @@ pub fn prove_section6_final_opening(
     claims: &[Section6FinalOpeningProverClaim<'_>],
     rng: &mut impl RngCore,
 ) -> Result<Section6FinalOpeningProof, Section6FinalOpeningError> {
+    prove_section6_final_opening_profiled(role, outer_binding, parameters, grid, claims, rng)
+        .map(|(proof, _)| proof)
+}
+
+/// Reduce heterogeneous claims once and report each terminal prover stage.
+#[allow(clippy::too_many_arguments)]
+pub fn prove_section6_final_opening_profiled(
+    role: &[u8],
+    outer_binding: &[u8],
+    parameters: &DoryProverParameters,
+    grid: &Section6DoryGrid,
+    claims: &[Section6FinalOpeningProverClaim<'_>],
+    rng: &mut impl RngCore,
+) -> Result<(Section6FinalOpeningProof, Section6FinalOpeningProverProfile), Section6FinalOpeningError>
+{
+    let total_started = Instant::now();
+    let preparation_state_setup_started = Instant::now();
     validate_prover_claims(parameters, *grid, claims)?;
     let statements = claims
         .iter()
@@ -724,6 +841,9 @@ pub fn prove_section6_final_opening(
     let mut builder =
         CommittedSumcheckBuilder::<Fr, Pedersen<Bn254G1>, _>::new(&parameters.blindfold, &mut *rng)
             .map_err(|error| Section6FinalOpeningError::Sumcheck(error.to_string()))?;
+    let preparation_state_setup_seconds = preparation_state_setup_started.elapsed().as_secs_f64();
+
+    let sumcheck_started = Instant::now();
     let mut sumcheck_point = Vec::with_capacity(grid.num_vars);
     for round_index in 0..grid.num_vars {
         let round = reduction_round(
@@ -755,6 +875,9 @@ pub fn prove_section6_final_opening(
     let SumcheckProof::Committed(sumcheck) = sumcheck else {
         return Err(Section6FinalOpeningError::ProofShape);
     };
+    let sumcheck_seconds = sumcheck_started.elapsed().as_secs_f64();
+
+    let dory_batch_open_started = Instant::now();
     let claim_link_coefficients = bind_claim_link_commitments(
         &mut transcript,
         &statements
@@ -795,7 +918,9 @@ pub fn prove_section6_final_opening(
         &sumcheck.output_claims.commitments,
     )?;
     bind_dory_completion(&mut transcript, &dory_hiding_commitment, &dory)?;
+    let dory_batch_open_seconds = dory_batch_open_started.elapsed().as_secs_f64();
 
+    let blindfold_preparation_started = Instant::now();
     let terminal_sumcheck_coefficients =
         terminal_sumcheck_coefficients(*grid, &statements, &sumcheck_point, &claim_coefficients)?;
     let claimed_sumcheck_coefficients =
@@ -860,6 +985,9 @@ pub fn prove_section6_final_opening(
         )
         .map_err(|error| Section6FinalOpeningError::BlindFold(error.to_string()))?;
     let blindfold_transcript_state = transcript.state();
+    let blindfold_preparation_seconds = blindfold_preparation_started.elapsed().as_secs_f64();
+
+    let blindfold_prove_started = Instant::now();
     let blindfold = prove_blindfold::<Fr, Pedersen<Bn254G1>, _, _>(
         &parameters.blindfold,
         &protocol,
@@ -873,12 +1001,26 @@ pub fn prove_section6_final_opening(
         &mut *rng,
     )
     .map_err(|error| Section6FinalOpeningError::BlindFold(error.to_string()))?;
-    Ok(Section6FinalOpeningProof {
+    let blindfold_prove_seconds = blindfold_prove_started.elapsed().as_secs_f64();
+
+    let result_assembly_started = Instant::now();
+    let proof = Section6FinalOpeningProof {
         sumcheck,
         dory,
         blindfold_transcript_state,
         blindfold,
-    })
+    };
+    let result_assembly_seconds = result_assembly_started.elapsed().as_secs_f64();
+    let profile = Section6FinalOpeningProverProfile {
+        preparation_state_setup_seconds,
+        sumcheck_seconds,
+        dory_batch_open_seconds,
+        blindfold_preparation_seconds,
+        blindfold_prove_seconds,
+        result_assembly_seconds,
+        total_seconds: total_started.elapsed().as_secs_f64(),
+    };
+    Ok((proof, profile))
 }
 
 /// Verify the terminal proof without reading any source evaluation table.
@@ -891,9 +1033,28 @@ pub fn verify_section6_final_opening(
     claims: &[Section6FinalOpeningVerifierClaim<'_>],
     proof: &Section6FinalOpeningProof,
 ) -> Result<(), Section6FinalOpeningError> {
+    verify_section6_final_opening_profiled(role, outer_binding, parameters, grid, claims, proof)
+        .map(|_| ())
+}
+
+/// Verify the terminal proof and report each verifier stage.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_section6_final_opening_profiled(
+    role: &[u8],
+    outer_binding: &[u8],
+    parameters: &DoryVerifierParameters,
+    grid: &Section6DoryGrid,
+    claims: &[Section6FinalOpeningVerifierClaim<'_>],
+    proof: &Section6FinalOpeningProof,
+) -> Result<Section6FinalOpeningVerifierProfile, Section6FinalOpeningError> {
+    let total_started = Instant::now();
+    let preparation_state_setup_started = Instant::now();
     validate_verifier_claims(parameters, *grid, claims)?;
     let mut transcript = final_opening_transcript(role, outer_binding, *grid, claims);
     let claim_coefficients = transcript.challenge_scalar_powers(claims.len());
+    let preparation_state_setup_seconds = preparation_state_setup_started.elapsed().as_secs_f64();
+
+    let sumcheck_verify_started = Instant::now();
     let consistency = SumcheckProof::<Fr, Bn254G1>::Committed(proof.sumcheck.clone())
         .verify_committed_consistency(
             SumcheckStatement::new(grid.num_vars, SUMCHECK_DEGREE),
@@ -901,6 +1062,9 @@ pub fn verify_section6_final_opening(
         )
         .map_err(|error| Section6FinalOpeningError::Sumcheck(error.to_string()))?;
     let sumcheck_point = consistency.challenges();
+    let sumcheck_verify_seconds = sumcheck_verify_started.elapsed().as_secs_f64();
+
+    let dory_batch_verify_started = Instant::now();
     let external_commitments = claims
         .iter()
         .map(|claim| claim.evaluation_commitment)
@@ -919,6 +1083,9 @@ pub fn verify_section6_final_opening(
         &proof.dory,
     )?;
     bind_dory_completion(&mut transcript, &dory_hiding_commitment, &proof.dory)?;
+    let dory_batch_verify_seconds = dory_batch_verify_started.elapsed().as_secs_f64();
+
+    let blindfold_preparation_started = Instant::now();
     let terminal_sumcheck_coefficients =
         terminal_sumcheck_coefficients(*grid, claims, &sumcheck_point, &claim_coefficients)?;
     let claimed_sumcheck_coefficients =
@@ -952,9 +1119,28 @@ pub fn verify_section6_final_opening(
     if transcript.state() != proof.blindfold_transcript_state {
         return Err(Section6FinalOpeningError::ProofShape);
     }
-    protocol
-        .verify::<Pedersen<Bn254G1>, _>(&proof.blindfold, &parameters.blindfold, &mut transcript)
-        .map_err(|error| Section6FinalOpeningError::BlindFold(format!("{error:?}")))
+    let blindfold_preparation_seconds = blindfold_preparation_started.elapsed().as_secs_f64();
+
+    let blindfold_verify_started = Instant::now();
+    let blindfold_result = protocol.verify::<Pedersen<Bn254G1>, _>(
+        &proof.blindfold,
+        &parameters.blindfold,
+        &mut transcript,
+    );
+    let blindfold_verify_seconds = blindfold_verify_started.elapsed().as_secs_f64();
+
+    let result_finalization_started = Instant::now();
+    blindfold_result.map_err(|error| Section6FinalOpeningError::BlindFold(format!("{error:?}")))?;
+    let result_finalization_seconds = result_finalization_started.elapsed().as_secs_f64();
+    Ok(Section6FinalOpeningVerifierProfile {
+        preparation_state_setup_seconds,
+        sumcheck_verify_seconds,
+        dory_batch_verify_seconds,
+        blindfold_preparation_seconds,
+        blindfold_verify_seconds,
+        result_finalization_seconds,
+        total_seconds: total_started.elapsed().as_secs_f64(),
+    })
 }
 
 fn validate_native_len(
@@ -1005,7 +1191,36 @@ fn validate_prover_claims(
                     physical: values.len(),
                 });
             }
+            Section6FinalOpeningData::MatrixColumn {
+                values,
+                padded_rows,
+                padded_cols,
+                column,
+            } if values.len() != claim.committed.logical_len
+                || padded_rows == 0
+                || padded_cols == 0
+                || !padded_rows.is_power_of_two()
+                || !padded_cols.is_power_of_two()
+                || padded_rows.checked_mul(padded_cols) != Some(values.len())
+                || column >= padded_cols =>
+            {
+                return Err(Section6FinalOpeningError::SourceLength {
+                    logical: claim.committed.logical_len,
+                    physical: values.len(),
+                });
+            }
             _ => {}
+        }
+        if let Section6FinalOpeningData::MatrixColumn {
+            padded_cols,
+            column,
+            ..
+        } = claim.data
+        {
+            let expected_prefix = column_point_msb(column, padded_cols)?;
+            if !claim.point_msb.starts_with(&expected_prefix) {
+                return Err(Section6FinalOpeningError::ProofShape);
+            }
         }
         if !Pedersen::<Bn254G1>::verify(
             &parameters.blindfold,
@@ -1111,9 +1326,16 @@ struct ReductionClaimState {
     source_index: usize,
 }
 
+enum ClaimEquality {
+    Dense(Vec<Fr>),
+    MatrixColumn { start: usize, values: Vec<Fr> },
+}
+
 struct ReductionStateSet {
     sources: Vec<ReductionSourceState>,
     claims: Vec<ReductionClaimState>,
+    #[cfg(test)]
+    claim_equality_entries: usize,
 }
 
 impl ReductionStateSet {
@@ -1128,6 +1350,8 @@ impl ReductionStateSet {
         let mut source_indices = HashMap::<Section6DorySourceKey, usize>::new();
         let mut sources = Vec::new();
         let mut claims = Vec::with_capacity(prover_claims.len());
+        #[cfg(test)]
+        let mut claim_equality_entries = 0;
         for (claim_index, (&claim, &coefficient)) in
             prover_claims.iter().zip(coefficients).enumerate()
         {
@@ -1146,32 +1370,99 @@ impl ReductionStateSet {
                 .copied()
                 .map(Fr::from)
                 .collect::<Vec<_>>();
-            let mut claim_eq = EqPolynomial::<Fr>::evals(&point, None);
             let source = &mut sources[source_index];
-            let native_evaluation = source
-                .values
-                .par_iter()
-                .zip(claim_eq.par_iter())
-                .map(|(&value, &weight)| value * weight)
-                .sum::<Fr>();
+            let (native_evaluation, claim_eq) = match claim.data {
+                Section6FinalOpeningData::Field(_) => {
+                    let claim_eq = EqPolynomial::<Fr>::evals(&point, None);
+                    #[cfg(test)]
+                    {
+                        claim_equality_entries += claim_eq.len();
+                    }
+                    let evaluation = source
+                        .values
+                        .par_iter()
+                        .zip(claim_eq.par_iter())
+                        .map(|(&value, &weight)| value * weight)
+                        .sum::<Fr>();
+                    (evaluation, ClaimEquality::Dense(claim_eq))
+                }
+                Section6FinalOpeningData::MatrixColumn {
+                    padded_rows,
+                    padded_cols,
+                    column,
+                    ..
+                } => {
+                    let column_vars = padded_cols.trailing_zeros() as usize;
+                    let row_point = point
+                        .get(column_vars..)
+                        .ok_or(Section6FinalOpeningError::ProofShape)?;
+                    if row_point.len() != padded_rows.trailing_zeros() as usize {
+                        return Err(Section6FinalOpeningError::ProofShape);
+                    }
+                    let claim_eq = EqPolynomial::<Fr>::evals(row_point, None);
+                    #[cfg(test)]
+                    {
+                        claim_equality_entries += claim_eq.len();
+                    }
+                    let start = column
+                        .checked_mul(padded_rows)
+                        .ok_or(Section6FinalOpeningError::InvalidLogicalLength(usize::MAX))?;
+                    let end = start
+                        .checked_add(padded_rows)
+                        .ok_or(Section6FinalOpeningError::InvalidLogicalLength(usize::MAX))?;
+                    let evaluation = source
+                        .values
+                        .get(start..end)
+                        .ok_or(Section6FinalOpeningError::ProofShape)?
+                        .par_iter()
+                        .zip(claim_eq.par_iter())
+                        .map(|(&value, &weight)| value * weight)
+                        .sum::<Fr>();
+                    (
+                        evaluation,
+                        ClaimEquality::MatrixColumn {
+                            start,
+                            values: claim_eq,
+                        },
+                    )
+                }
+            };
             if native_evaluation != Fr::from(claim.evaluation.value) {
                 return Err(Section6FinalOpeningError::EvaluationMismatch(claim_index));
             }
-            if source.eq.is_empty() {
-                claim_eq
-                    .par_iter_mut()
-                    .for_each(|weight| *weight *= coefficient);
-                source.eq = claim_eq;
-            } else {
-                source
-                    .eq
-                    .par_iter_mut()
-                    .zip(claim_eq.par_iter())
-                    .for_each(|(combined, &weight)| *combined += coefficient * weight);
+            match claim_eq {
+                ClaimEquality::Dense(mut values) => {
+                    if source.eq.is_empty() {
+                        values
+                            .par_iter_mut()
+                            .for_each(|weight| *weight *= coefficient);
+                        source.eq = values;
+                    } else {
+                        source
+                            .eq
+                            .par_iter_mut()
+                            .zip(values.par_iter())
+                            .for_each(|(combined, &weight)| *combined += coefficient * weight);
+                    }
+                }
+                ClaimEquality::MatrixColumn { start, values } => {
+                    if source.eq.is_empty() {
+                        source.eq = vec![Fr::zero(); source.values.len()];
+                    }
+                    source.eq[start..start + values.len()]
+                        .par_iter_mut()
+                        .zip(values.par_iter())
+                        .for_each(|(combined, &weight)| *combined += coefficient * weight);
+                }
             }
             claims.push(ReductionClaimState { source_index });
         }
-        Ok(Self { sources, claims })
+        Ok(Self {
+            sources,
+            claims,
+            #[cfg(test)]
+            claim_equality_entries,
+        })
     }
 
     fn bind(&mut self, round_index: usize, challenge: Fr) -> Result<(), Section6FinalOpeningError> {
@@ -1836,12 +2127,13 @@ mod tests {
     use jolt_field::Fr as JoltFr;
 
     use crate::{
-        hidden_relation::HiddenScalarWitness,
+        hidden_relation::{HiddenRelationTable, HiddenScalarWitness},
         jolt_dory::{evaluate_field_vector_standard, setup_dory_parameters},
     };
 
     use super::{
-        commit_section6_field_on_grid_zk, prove_section6_final_opening,
+        commit_section6_field_matrix_columns_on_grid_zk, commit_section6_field_on_grid_zk,
+        prove_section6_final_opening, resolve_section6_hidden_relation_prover_claim,
         verify_section6_final_opening, ReductionStateSet, Section6DoryGrid,
         Section6FinalOpeningData, Section6FinalOpeningProverClaim,
         Section6FinalOpeningVerifierClaim,
@@ -1955,6 +2247,66 @@ mod tests {
             &proof,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn matrix_column_claims_expand_only_row_equality_tables() {
+        let grid = Section6DoryGrid::new(6).unwrap();
+        let (prover_parameters, _) = setup_dory_parameters(grid.num_vars());
+        let columns = [
+            (0..8).map(|index| ark(index + 1)).collect::<Vec<_>>(),
+            (0..8).map(|index| ark(index + 17)).collect::<Vec<_>>(),
+        ];
+        let column_refs = columns.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let committed = commit_section6_field_matrix_columns_on_grid_zk(
+            &prover_parameters,
+            &grid,
+            &column_refs,
+            4,
+        )
+        .unwrap();
+        let points = [vec![ark(2), ark(3), ark(5)], vec![ark(7), ark(11), ark(13)]];
+        let evaluations = columns
+            .iter()
+            .zip(&points)
+            .map(|(column, point)| evaluate_field_vector_standard(column, point).unwrap())
+            .collect::<Vec<_>>();
+        let mut rng = StdRng::seed_from_u64(0x434f_4c55_4d4e_4551);
+        let witnesses = evaluations
+            .iter()
+            .map(|&evaluation| {
+                HiddenScalarWitness::commit(&prover_parameters, evaluation, &mut rng)
+            })
+            .collect::<Vec<_>>();
+        let row_points = points
+            .iter()
+            .map(|point| point.iter().copied().map(JoltFr::from).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let resolved = (0..columns.len())
+            .map(|column| {
+                resolve_section6_hidden_relation_prover_claim(
+                    HiddenRelationTable {
+                        values: &columns[column],
+                        committed: &committed[column],
+                    },
+                    &row_points[column],
+                    &grid,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let claims = resolved
+            .iter()
+            .zip(&witnesses)
+            .map(|(resolved, witness)| resolved.as_claim(witness))
+            .collect::<Vec<_>>();
+        let coefficients = [JoltFr::from(ark(19)), JoltFr::from(ark(23))];
+
+        let states = ReductionStateSet::new(&claims, &coefficients, grid).unwrap();
+
+        assert_eq!(states.sources.len(), 1);
+        assert_eq!(states.claims.len(), 2);
+        assert_eq!(states.claim_equality_entries, 2 * columns[0].len());
     }
 
     #[test]

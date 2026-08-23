@@ -5,8 +5,8 @@ use batch::matrix_collection::{
     commit_matrix_shapes, commit_registered_dense_bva, matrix_mle_evaluate,
     prove_registered_matrix_claim_collection, verify_registered_bva_opening,
     verify_registered_matrix_claim_collection, verify_registered_shape_point_consistency,
-    verify_registered_tbv_inner_product, DenseI8Matrix, DenseMatrixBva, MatrixMleClaim,
-    RegisteredMatrixCollectionProof,
+    verify_registered_tbv_inner_product, DenseI16Matrix, DenseI8Matrix, DenseMatrixBva,
+    MatrixMleClaim, RegisteredMatrixCollectionProof,
 };
 use jolt_field::Fr as JoltFr;
 
@@ -37,7 +37,65 @@ fn witness_matrix_is_column_major_but_each_bva_bucket_is_row_major() {
     );
 
     let dense_bva = DenseMatrixBva::from_matrices(&[matrix]).unwrap();
-    assert_eq!(dense_bva.values(), &[1, 3, 2, 4, 5, 6]);
+    assert_eq!(dense_bva.values(), &[1, 3, 2, 4, 5, 6, 0, 0]);
+}
+
+#[test]
+fn dense_short_int_bva_uses_native_i16_storage_end_to_end() {
+    let matrix = DenseI16Matrix::new(
+        (2, 3),
+        vec![i16::MIN, 30_000, -1_024, 17_000, 12_345, -23_456],
+    )
+    .unwrap();
+    let left = point(&[2]);
+    let right = point(&[3, 5]);
+    let claim = MatrixMleClaim::new(
+        matrix.shape(),
+        left.clone(),
+        right.clone(),
+        matrix_mle_evaluate(&matrix, &left, &right).unwrap(),
+    )
+    .unwrap();
+    let built = DenseMatrixBva::<i16>::from_matrices(&[matrix]).unwrap();
+    let descriptor = built.descriptor().clone();
+    let mut source = DenseMatrixBva::<i16>::from_prepacked_i16(
+        descriptor.matrix_shapes(),
+        built.values().to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        std::mem::size_of_val(source.values()),
+        2 * source.values().len()
+    );
+    assert!(source
+        .values()
+        .iter()
+        .any(|value| value.unsigned_abs() > 127));
+
+    let (prover, verifier) = setup_dory_parameters(descriptor.required_registration_dory_log());
+    let committed_shapes = commit_matrix_shapes(&prover, &descriptor).unwrap();
+    let registration = commit_registered_dense_bva(&prover, &source, 16, committed_shapes).unwrap();
+    let commitments = registration.commitments().clone();
+    let (proof, profile) = prove_registered_matrix_claim_collection(
+        &prover,
+        &mut source,
+        &[claim.clone()],
+        &registration,
+    )
+    .unwrap();
+
+    assert_eq!(proof.packed.packed_eo.packing_stride, 8);
+    assert_eq!(profile.commitment.materialized_field_entries, 0);
+    assert!(verify_registered_matrix_claim_collection(
+        &verifier,
+        &descriptor,
+        &commitments,
+        &[claim],
+        16,
+        &proof,
+    )
+    .unwrap()
+    .evaluate());
 }
 
 #[test]
@@ -61,10 +119,10 @@ fn public_matrix_claim_collection_binds_dense_bva_opening_and_rejects_tampering(
 
     let mut dense_bva = DenseMatrixBva::from_matrices(&matrices).unwrap();
     let descriptor = dense_bva.descriptor().clone();
-    assert_eq!(dense_bva.values().len(), 31);
+    assert_eq!(dense_bva.values().len(), 32);
     assert_eq!(descriptor.physical_len(), 31);
     assert_eq!(descriptor.logical_len(), 32);
-    assert_eq!(descriptor.materialized_padding_entries(), 0);
+    assert_eq!(descriptor.materialized_padding_entries(), 1);
     assert!(descriptor.bucket_ranges_are_a_partition());
     assert_eq!(descriptor.matrix_count(), claims.len());
 
@@ -93,11 +151,11 @@ fn public_matrix_claim_collection_binds_dense_bva_opening_and_rejects_tampering(
     assert_eq!(proof.packed.matrix_commitment, commitments.bva);
     assert_eq!(
         profile.commitment.physical_entries,
-        descriptor.physical_len()
+        descriptor.logical_len()
     );
-    assert_eq!(profile.commitment.materialized_padding_entries, 0);
-    assert_eq!(profile.packed_eo_padding.materialized_padding_entries, 0);
-    assert_eq!(profile.opening.materialized_padding_entries, 0);
+    assert_eq!(profile.commitment.materialized_padding_entries, 1);
+    assert_eq!(profile.packed_eo_padding.materialized_padding_entries, 1);
+    assert_eq!(profile.opening.materialized_padding_entries, 1);
 
     let bytes = proof.to_bytes().unwrap();
     let decoded = RegisteredMatrixCollectionProof::from_bytes_exact(&bytes).unwrap();
@@ -327,7 +385,7 @@ fn public_matrix_claim_collection_binds_dense_bva_opening_and_rejects_tampering(
 }
 
 #[test]
-fn dense_bva_oracle_uses_the_contiguous_prefix_and_implicit_zero_suffix() {
+fn dense_bva_oracle_uses_one_contiguous_padded_i8_vector() {
     let shapes = [(3, 5), (5, 2), (2, 3)];
     let dense_bva = DenseMatrixBva::from_fn(&shapes, |matrix, row, col| {
         let magnitude = ((matrix * 17 + row * 5 + col + 1) % 31 + 1) as i8;
@@ -338,8 +396,10 @@ fn dense_bva_oracle_uses_the_contiguous_prefix_and_implicit_zero_suffix() {
         }
     })
     .unwrap();
-    assert_eq!(dense_bva.values().len(), 31);
+    assert_eq!(dense_bva.values().len(), 32);
+    assert_eq!(dense_bva.values().last(), Some(&0));
     assert_eq!(dense_bva.descriptor().logical_len(), 32);
+    assert_eq!(dense_bva.descriptor().materialized_padding_entries(), 1);
 
     let point = vec![
         -Fr::one(),
@@ -384,6 +444,66 @@ fn constant_matrix_claim_has_expected_zero_and_unit_cases() {
         matrix_mle_evaluate::<Fr>(&unit, &[], &[]).unwrap(),
         Fr::one()
     );
+}
+
+#[test]
+fn prepacked_bva_evaluates_without_reconstructing_the_matrix() {
+    let shapes = [(3, 5), (2, 3)];
+    let generated = DenseMatrixBva::from_fn(&shapes, |matrix, row, col| {
+        (1 + matrix * 17 + row * 5 + col) as i8
+    })
+    .unwrap();
+    let prepacked =
+        DenseMatrixBva::from_prepacked_i8(&shapes, generated.values().to_vec()).unwrap();
+
+    for matrix in 0..shapes.len() {
+        let shape = shapes[matrix];
+        let left = (0..shape.0.next_power_of_two().ilog2())
+            .map(|index| Fr::from(3 + index as u64))
+            .collect::<Vec<_>>();
+        let right = (0..shape.1.next_power_of_two().ilog2())
+            .map(|index| Fr::from(11 + index as u64))
+            .collect::<Vec<_>>();
+        let dense = DenseI8Matrix::new(
+            shape,
+            (0..shape.1)
+                .flat_map(|col| {
+                    (0..shape.0).map(move |row| (1 + matrix * 17 + row * 5 + col) as i8)
+                })
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepacked
+                .matrix_mle_evaluate::<Fr>(matrix, &left, &right)
+                .unwrap(),
+            matrix_mle_evaluate::<Fr>(&dense, &left, &right).unwrap()
+        );
+    }
+}
+
+#[test]
+fn prepacked_bva_rejects_nonzero_materialized_padding() {
+    let shapes = [(3, 3)];
+    let generated = DenseMatrixBva::from_fn(&shapes, |_, row, col| (row + col + 1) as i8).unwrap();
+    let mut values = generated.values().to_vec();
+    let padding = generated
+        .descriptor()
+        .buckets()
+        .iter()
+        .find_map(|bucket| {
+            (bucket.physical_row_len() < bucket.row_len())
+                .then(|| bucket.dense_offset() + bucket.physical_row_len() * bucket.col_len())
+        })
+        .unwrap_or(generated.descriptor().layout().active_len());
+    values[padding] = 1;
+    assert!(DenseMatrixBva::from_prepacked_i8(&shapes, values).is_err());
+
+    let generated_i16 =
+        DenseMatrixBva::<i16>::from_i16_fn(&shapes, |_, row, col| (row + col + 1) as i16).unwrap();
+    let mut values_i16 = generated_i16.values().to_vec();
+    values_i16[padding] = 1;
+    assert!(DenseMatrixBva::from_prepacked_i16(&shapes, values_i16).is_err());
 }
 
 #[test]

@@ -39,6 +39,7 @@ use crate::{
         DoryBackendError, DoryProverParameters, DoryVerifierParameters, HiddenFieldVectorDoryProof,
     },
     jolt_dory_adapter::DenseI8DoryError,
+    structured_column::StructuredColumn,
 };
 
 /// A polynomial expression over relation operands.
@@ -134,8 +135,83 @@ pub struct HiddenRelationTable<'a> {
 ///
 /// Expression table indices list hidden tables first and public tables second.
 #[derive(Clone, Copy)]
-pub struct PublicRelationTable<'a> {
-    pub values: &'a [ArkFr],
+pub enum PublicRelationTable<'a> {
+    /// Dense entries; verification folds the full table, so this variant is
+    /// reserved for tables whose length is already logarithmic.
+    Dense(&'a [ArkFr]),
+    /// A piecewise-regular description evaluated in `O(polylog)` time.
+    Structured {
+        column: &'a StructuredColumn,
+        /// Prover-materialized entries; the verifier passes `None`.
+        values: Option<&'a [ArkFr]>,
+    },
+}
+
+/// One owned structured public column with optional prover entries.
+#[derive(Clone, Debug)]
+pub struct OwnedPublicColumn {
+    pub column: StructuredColumn,
+    /// Dense entries; the prover materializes them, the verifier stores None.
+    pub values: Option<Vec<ArkFr>>,
+}
+
+impl OwnedPublicColumn {
+    pub fn new(column: StructuredColumn, materialize: bool) -> Self {
+        let values = materialize.then(|| column.materialize());
+        Self { column, values }
+    }
+
+    pub fn table(&self) -> PublicRelationTable<'_> {
+        PublicRelationTable::Structured {
+            column: &self.column,
+            values: self.values.as_deref(),
+        }
+    }
+}
+
+impl<'a> PublicRelationTable<'a> {
+    pub fn structured(column: &'a StructuredColumn, values: Option<&'a [ArkFr]>) -> Self {
+        Self::Structured { column, values }
+    }
+
+    pub fn logical_len(&self) -> usize {
+        match self {
+            Self::Dense(values) => values.len(),
+            Self::Structured { column, .. } => column.padded_len,
+        }
+    }
+
+    /// Dense entries for the prover's round-polynomial evaluation.
+    fn prover_values(&self) -> Result<&'a [ArkFr], HiddenRelationError> {
+        match self {
+            Self::Dense(values) => Ok(values),
+            Self::Structured { values, .. } => values.ok_or_else(|| {
+                HiddenRelationError::Encoding(
+                    "structured public table is missing prover entries".to_owned(),
+                )
+            }),
+        }
+    }
+
+    pub(crate) fn transcript_digest(&self) -> Result<[u8; 32], HiddenRelationError> {
+        match self {
+            Self::Dense(values) => public_table_digest(values),
+            Self::Structured { column, .. } => column
+                .digest()
+                .map_err(|error| HiddenRelationError::Encoding(error.to_string())),
+        }
+    }
+
+    /// The table MLE at the sumcheck point, without linear-time folding for
+    /// structured tables.
+    fn evaluate(&self, point: &[Fr]) -> Result<Fr, HiddenRelationError> {
+        match self {
+            Self::Dense(values) => evaluate_public_table(values, point),
+            Self::Structured { column, .. } => column
+                .mle_eval(point)
+                .map_err(|error| HiddenRelationError::Encoding(error.to_string())),
+        }
+    }
 }
 
 /// The verifier-side commitment metadata for one relation operand.
@@ -791,14 +867,16 @@ fn prove_hidden_relation_deferred_with_check<'a>(
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    current_tables.extend(public_tables.iter().map(|table| {
-        table
-            .values
-            .iter()
-            .copied()
-            .map(Fr::from)
-            .collect::<Vec<_>>()
-    }));
+    for table in public_tables {
+        current_tables.push(
+            table
+                .prover_values()?
+                .iter()
+                .copied()
+                .map(Fr::from)
+                .collect::<Vec<_>>(),
+        );
+    }
     let mut current_eq = if check == RelationCheck::Identity {
         EqPolynomial::<Fr>::evals(&zero_test_point, None)
     } else {
@@ -1266,7 +1344,7 @@ fn verify_hidden_relation_deferred_with_check<'a>(
     let hidden_evaluation_commitments = &proof.evaluation_commitments[..hidden_tables.len()];
     let mut evaluation_commitments = hidden_evaluation_commitments.to_vec();
     for table in public_tables {
-        let evaluation = evaluate_public_table(table.values, &sumcheck_point)?;
+        let evaluation = table.evaluate(&sumcheck_point)?;
         evaluation_commitments.push(Pedersen::<Bn254G1>::commit(
             &parameters.blindfold,
             &[evaluation],
@@ -2323,6 +2401,15 @@ fn validate_prover_tables(
             }
         }
     }
+    for (public_index, table) in public_tables.iter().enumerate() {
+        if table.prover_values()?.len() != logical_len {
+            return Err(HiddenRelationError::TableLength {
+                table: hidden_tables.len() + public_index,
+                expected: logical_len,
+                actual: table.prover_values()?.len(),
+            });
+        }
+    }
     Ok(logical_len)
 }
 
@@ -2334,7 +2421,7 @@ fn validate_verifier_tables(
     let logical_len = hidden_tables
         .first()
         .map(|table| table.logical_len)
-        .or_else(|| public_tables.first().map(|table| table.values.len()))
+        .or_else(|| public_tables.first().map(|table| table.logical_len()))
         .ok_or(HiddenRelationError::EmptyTables)?;
     if logical_len < 2 || !logical_len.is_power_of_two() {
         return Err(HiddenRelationError::InvalidLogicalLength(logical_len));
@@ -2357,11 +2444,11 @@ fn validate_verifier_tables(
         }
     }
     for (public_index, table) in public_tables.iter().enumerate() {
-        if table.values.len() != logical_len {
+        if table.logical_len() != logical_len {
             return Err(HiddenRelationError::TableLength {
                 table: hidden_tables.len() + public_index,
                 expected: logical_len,
-                actual: table.values.len(),
+                actual: table.logical_len(),
             });
         }
     }
@@ -2374,7 +2461,7 @@ fn public_table_digests(
 ) -> Result<Vec<[u8; 32]>, HiddenRelationError> {
     tables
         .iter()
-        .map(|table| public_table_digest(table.values))
+        .map(|table| table.transcript_digest())
         .collect()
 }
 
@@ -3397,9 +3484,7 @@ mod tests {
                 committed: &committed_product,
             },
         ];
-        let public_tables = [PublicRelationTable {
-            values: &public_multiplier,
-        }];
+        let public_tables = [PublicRelationTable::Dense(&public_multiplier)];
         let mut rng = StdRng::seed_from_u64(23);
         let proof = prove_hidden_relation_with_public(
             b"test-public-row-varying",
@@ -3428,9 +3513,7 @@ mod tests {
 
         let mut tampered_multiplier = public_multiplier;
         tampered_multiplier[7] += ArkFr::one();
-        let tampered_public_tables = [PublicRelationTable {
-            values: &tampered_multiplier,
-        }];
+        let tampered_public_tables = [PublicRelationTable::Dense(&tampered_multiplier)];
         assert!(verify_hidden_relation_with_public(
             b"test-public-row-varying",
             &verifier_parameters,
@@ -3453,7 +3536,7 @@ mod tests {
             values: &hidden,
             committed: &committed_hidden,
         }];
-        let public_tables = [PublicRelationTable { values: &public }];
+        let public_tables = [PublicRelationTable::Dense(&public)];
         let mut rng = StdRng::seed_from_u64(29);
         let proof = prove_hidden_sum_relation_with_public(
             b"test-public-sum",
@@ -3491,7 +3574,7 @@ mod tests {
     fn logical_len_one_is_rejected_before_the_committed_stage() {
         let (prover_parameters, _) = setup_dory_parameters(2);
         let values = [ArkFr::one()];
-        let public_tables = [PublicRelationTable { values: &values }];
+        let public_tables = [PublicRelationTable::Dense(&values)];
         let expression = RelationExpression::table(0).sub(RelationExpression::table(0));
         let mut rng = StdRng::seed_from_u64(31);
         assert!(matches!(

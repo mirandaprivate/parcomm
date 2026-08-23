@@ -148,6 +148,23 @@ impl<'a> DenseI8Prefix<'a> {
     }
 }
 
+/// Common metadata required by dense-integer Dory opening wrappers.
+pub trait DoryIntegerPolynomial: MultilinearPoly<Fr> {
+    fn logical_len(&self) -> usize;
+}
+
+pub trait I8DoryPolynomial: DoryIntegerPolynomial {}
+
+pub trait I16DoryPolynomial: DoryIntegerPolynomial {}
+
+impl DoryIntegerPolynomial for DenseI8Prefix<'_> {
+    fn logical_len(&self) -> usize {
+        self.logical_len
+    }
+}
+
+impl I8DoryPolynomial for DenseI8Prefix<'_> {}
+
 fn monomial_tensor(point_low: &[Fr]) -> Vec<Fr> {
     let mut weights = vec![Fr::from_u64(1)];
     for coordinate in point_low {
@@ -241,6 +258,140 @@ impl MultilinearPoly<Fr> for DenseI8Prefix<'_> {
     }
 }
 
+/// A dense physical i16 prefix followed by an implicit logical zero suffix.
+pub struct DenseI16Prefix<'a> {
+    values: &'a [i16],
+    logical_len: usize,
+    num_vars: usize,
+}
+
+impl<'a> DenseI16Prefix<'a> {
+    pub fn new(values: &'a [i16], logical_len: usize) -> Result<Self, DenseI8DoryError> {
+        if logical_len == 0 || !logical_len.is_power_of_two() {
+            return Err(DenseI8DoryError::InvalidLogicalLength(logical_len));
+        }
+        if values.len() > logical_len {
+            return Err(DenseI8DoryError::PhysicalPrefixTooLong {
+                physical: values.len(),
+                logical: logical_len,
+            });
+        }
+        Ok(Self {
+            values,
+            logical_len,
+            num_vars: logical_len.trailing_zeros() as usize,
+        })
+    }
+
+    pub fn num_vars(&self) -> usize {
+        self.num_vars
+    }
+
+    pub fn evaluate_monomial_low(&self, point_low: &[Fr]) -> Result<Fr, DenseI8DoryError> {
+        if point_low.len() != self.num_vars {
+            return Err(DenseI8DoryError::PointLength {
+                expected: self.num_vars,
+                actual: point_low.len(),
+            });
+        }
+        let column_log = self.num_vars.div_ceil(2);
+        let row_weights = monomial_tensor(&point_low[column_log..]);
+        let column_weights = monomial_tensor(&point_low[..column_log]);
+        Ok(self
+            .fold_rows(&row_weights, column_log)
+            .into_iter()
+            .zip(column_weights)
+            .map(|(folded, weight)| folded * weight)
+            .sum())
+    }
+}
+
+impl DoryIntegerPolynomial for DenseI16Prefix<'_> {
+    fn logical_len(&self) -> usize {
+        self.logical_len
+    }
+}
+
+impl I16DoryPolynomial for DenseI16Prefix<'_> {}
+
+impl MultilinearPoly<Fr> for DenseI16Prefix<'_> {
+    fn num_vars(&self) -> usize {
+        self.num_vars
+    }
+
+    fn evaluate(&self, point: &[Fr]) -> Fr {
+        assert_eq!(
+            point.len(),
+            self.num_vars,
+            "point length must match num_vars"
+        );
+        let sigma = self.num_vars.div_ceil(2);
+        let nu = self.num_vars - sigma;
+        let left = EqPolynomial::new(point[..nu].to_vec()).evaluations();
+        let right = EqPolynomial::new(point[nu..].to_vec()).evaluations();
+        self.fold_rows(&left, sigma)
+            .into_iter()
+            .zip(right)
+            .map(|(folded, basis)| folded * basis)
+            .sum()
+    }
+
+    fn for_each_row(&self, sigma: usize, visit: &mut dyn FnMut(usize, &[Fr])) {
+        assert!(sigma <= self.num_vars, "sigma exceeds num_vars");
+        let row_width = 1_usize << sigma;
+        let row_count = self.logical_len / row_width;
+        let mut row = vec![Fr::from_u64(0); row_width];
+        for row_index in 0..row_count {
+            row.fill(Fr::from_u64(0));
+            let start = row_index * row_width;
+            let end = (start + row_width).min(self.values.len());
+            if start < end {
+                for (destination, value) in row.iter_mut().zip(&self.values[start..end]) {
+                    *destination = Fr::from_i16(*value);
+                }
+            }
+            visit(row_index, &row);
+        }
+    }
+
+    fn fold_rows(&self, left: &[Fr], sigma: usize) -> Vec<Fr> {
+        assert!(sigma <= self.num_vars, "sigma exceeds num_vars");
+        let row_width = 1_usize << sigma;
+        let row_count = self.logical_len / row_width;
+        assert_eq!(left.len(), row_count, "left vector has the wrong length");
+        let physical_rows = self.values.len().div_ceil(row_width);
+        if physical_rows == 0 {
+            return vec![Fr::from_u64(0); row_width];
+        }
+        let workers = rayon::current_num_threads().min(physical_rows);
+        (0..workers)
+            .into_par_iter()
+            .map(|worker| {
+                let start_row = worker * physical_rows / workers;
+                let end_row = (worker + 1) * physical_rows / workers;
+                let mut output = vec![Fr::from_u64(0); row_width];
+                for row_index in start_row..end_row {
+                    let start = row_index * row_width;
+                    let end = (start + row_width).min(self.values.len());
+                    let row_weight = left[row_index];
+                    for (destination, value) in output.iter_mut().zip(&self.values[start..end]) {
+                        *destination += row_weight.mul_i64(i64::from(*value));
+                    }
+                }
+                output
+            })
+            .reduce(
+                || vec![Fr::from_u64(0); row_width],
+                |mut left, right| {
+                    left.iter_mut()
+                        .zip(right)
+                        .for_each(|(destination, value)| *destination += value);
+                    left
+                },
+            )
+    }
+}
+
 /// Conversion from ParComm's monomial basis to Jolt's standard MLE basis.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MleNormalization {
@@ -276,6 +427,30 @@ pub fn normalize_monomial_point(
 /// Stream the i8 prefix and implicit zero rows into a hiding Dory commitment.
 pub fn commit_dense_i8_zk(
     source: &DenseI8Prefix<'_>,
+    setup: &DoryProverSetup,
+) -> (DoryCommitment, DoryHint) {
+    let sigma = source.num_vars.div_ceil(2);
+    let row_width = 1_usize << sigma;
+    let total_rows = source.logical_len / row_width;
+    let physical_rows = source.values.len().div_ceil(row_width);
+    let primitive_count = physical_rows * row_width;
+    let mut partial = DoryScheme::begin(setup);
+    if primitive_count != 0 {
+        DoryScheme::feed_i128_rows_with(
+            &mut partial,
+            |index| source.values.get(index).copied().unwrap_or(0) as i128,
+            primitive_count,
+            row_width,
+            setup,
+        );
+    }
+    DoryScheme::feed_zeros(&mut partial, row_width, total_rows - physical_rows, setup);
+    DoryScheme::finish_zk(partial, setup)
+}
+
+/// Stream the i16 prefix and implicit zero rows into a hiding Dory commitment.
+pub fn commit_dense_i16_zk(
+    source: &DenseI16Prefix<'_>,
     setup: &DoryProverSetup,
 ) -> (DoryCommitment, DoryHint) {
     let sigma = source.num_vars.div_ceil(2);
@@ -577,8 +752,8 @@ fn bind_hidden_dense_i8_statement<T: Transcript<Challenge = Fr>>(
 
 /// Open a dense i8 source while retaining the normalized evaluation and blind.
 #[allow(clippy::too_many_arguments)]
-pub fn open_hidden_dense_i8_zk<T: Transcript<Challenge = Fr>>(
-    source: &DenseI8Prefix<'_>,
+pub fn open_hidden_dense_i8_zk<S: I8DoryPolynomial, T: Transcript<Challenge = Fr>>(
+    source: &S,
     commitment: &DoryCommitment,
     hint: DoryHint,
     monomial_point_low: &[Fr],
@@ -587,9 +762,10 @@ pub fn open_hidden_dense_i8_zk<T: Transcript<Challenge = Fr>>(
     setup: &DoryProverSetup,
     transcript: &mut T,
 ) -> Result<(HiddenDenseI8DoryProof, Bn254G1, Fr), DenseI8DoryError> {
-    if monomial_point_low.len() != source.num_vars {
+    let num_vars = source.num_vars();
+    if monomial_point_low.len() != num_vars {
         return Err(DenseI8DoryError::PointLength {
-            expected: source.num_vars,
+            expected: num_vars,
             actual: monomial_point_low.len(),
         });
     }
@@ -599,7 +775,7 @@ pub fn open_hidden_dense_i8_zk<T: Transcript<Challenge = Fr>>(
         transcript,
         outer_binding,
         commitment,
-        source.logical_len,
+        source.logical_len(),
         &normalization.standard_point_msb,
     );
     let opening_source = ClaimedOpeningSource {
@@ -670,13 +846,13 @@ pub struct DenseI8DoryProof {
     pub evaluation_blind: Fr,
 }
 
-struct ClaimedOpeningSource<'source, 'values> {
-    source: &'source DenseI8Prefix<'values>,
+struct ClaimedOpeningSource<'source, S> {
+    source: &'source S,
     point: &'source [Fr],
     evaluation: Fr,
 }
 
-impl MultilinearPoly<Fr> for ClaimedOpeningSource<'_, '_> {
+impl<S: DoryIntegerPolynomial> MultilinearPoly<Fr> for ClaimedOpeningSource<'_, S> {
     fn num_vars(&self) -> usize {
         self.source.num_vars()
     }
@@ -720,8 +896,8 @@ fn bind_public_statement<T: Transcript<Challenge = Fr>>(
 
 /// Open the dense i8 source at a public monomial-basis claim.
 #[allow(clippy::too_many_arguments)]
-pub fn open_dense_i8_zk<T: Transcript<Challenge = Fr>>(
-    source: &DenseI8Prefix<'_>,
+pub fn open_dense_i8_zk<S: I8DoryPolynomial, T: Transcript<Challenge = Fr>>(
+    source: &S,
     commitment: &DoryCommitment,
     hint: DoryHint,
     monomial_point_low: &[Fr],
@@ -730,9 +906,10 @@ pub fn open_dense_i8_zk<T: Transcript<Challenge = Fr>>(
     setup: &DoryProverSetup,
     transcript: &mut T,
 ) -> Result<DenseI8DoryProof, DenseI8DoryError> {
-    if monomial_point_low.len() != source.num_vars {
+    let num_vars = source.num_vars();
+    if monomial_point_low.len() != num_vars {
         return Err(DenseI8DoryError::PointLength {
-            expected: source.num_vars,
+            expected: num_vars,
             actual: monomial_point_low.len(),
         });
     }
@@ -742,7 +919,56 @@ pub fn open_dense_i8_zk<T: Transcript<Challenge = Fr>>(
         transcript,
         outer_binding,
         commitment,
-        source.logical_len,
+        source.logical_len(),
+        &normalization.standard_point_msb,
+        standard_eval,
+    );
+    let opening_source = ClaimedOpeningSource {
+        source,
+        point: &normalization.standard_point_msb,
+        evaluation: standard_eval,
+    };
+    let (opening, _evaluation_commitment, evaluation_blind) = DoryScheme::open_zk(
+        &opening_source,
+        &normalization.standard_point_msb,
+        standard_eval,
+        setup,
+        hint,
+        transcript,
+    )
+    .map_err(|error| DenseI8DoryError::Dory(error.to_string()))?;
+    Ok(DenseI8DoryProof {
+        opening,
+        evaluation_blind,
+    })
+}
+
+/// Open the dense i16 source at a public monomial-basis claim.
+#[allow(clippy::too_many_arguments)]
+pub fn open_dense_i16_zk<S: I16DoryPolynomial, T: Transcript<Challenge = Fr>>(
+    source: &S,
+    commitment: &DoryCommitment,
+    hint: DoryHint,
+    monomial_point_low: &[Fr],
+    monomial_eval: Fr,
+    outer_binding: &[u8],
+    setup: &DoryProverSetup,
+    transcript: &mut T,
+) -> Result<DenseI8DoryProof, DenseI8DoryError> {
+    let num_vars = source.num_vars();
+    if monomial_point_low.len() != num_vars {
+        return Err(DenseI8DoryError::PointLength {
+            expected: num_vars,
+            actual: monomial_point_low.len(),
+        });
+    }
+    let normalization = normalize_monomial_point(monomial_point_low)?;
+    let standard_eval = monomial_eval * normalization.monomial_scale_inverse;
+    bind_public_statement(
+        transcript,
+        outer_binding,
+        commitment,
+        source.logical_len(),
         &normalization.standard_point_msb,
         standard_eval,
     );
@@ -817,4 +1043,30 @@ pub fn verify_dense_i8_zk<T: Transcript<Challenge = Fr>>(
         return Err(DenseI8DoryError::EvaluationCommitmentMismatch);
     }
     Ok(())
+}
+
+/// Verify a dense i16 Dory opening bound to a public claim.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_dense_i16_zk<T: Transcript<Challenge = Fr>>(
+    commitment: &DoryCommitment,
+    proof: &DenseI8DoryProof,
+    logical_len: usize,
+    monomial_point_low: &[Fr],
+    monomial_eval: Fr,
+    outer_binding: &[u8],
+    verifier_setup: &DoryVerifierSetup,
+    evaluation_setup: &PedersenSetup<Bn254G1>,
+    transcript: &mut T,
+) -> Result<(), DenseI8DoryError> {
+    verify_dense_i8_zk(
+        commitment,
+        proof,
+        logical_len,
+        monomial_point_low,
+        monomial_eval,
+        outer_binding,
+        verifier_setup,
+        evaluation_setup,
+        transcript,
+    )
 }

@@ -13,7 +13,6 @@ use super::linear;
 
 use crate::MyInt;
 
-
 pub trait ShortInt:
     Sized
     + Copy
@@ -28,7 +27,8 @@ pub trait ShortInt:
     + MulAB<Self>
     + AddAB<Self>
     + GetBit
-{}
+{
+}
 
 // Sparse matrix in Kronecker format
 // The smaller matrices are in col major format
@@ -56,10 +56,7 @@ where
     I: ShortInt,
     F: PrimeField + From<I>,
 {
-    pub fn new(
-        shape1_value: (usize, usize),
-        shape2_value: (usize, usize),
-    ) -> Self {
+    pub fn new(shape1_value: (usize, usize), shape2_value: (usize, usize)) -> Self {
         Self {
             shape1: shape1_value,
             shape2: shape2_value,
@@ -109,10 +106,9 @@ where
     I: ShortInt,
     F: PrimeField + From<I>,
 {
-
     pub fn new(m: usize, n: usize) -> Self {
         Self {
-            shape: (m,n),
+            shape: (m, n),
             data: Vec::new(),
             _marker: PhantomData,
         }
@@ -143,10 +139,9 @@ impl<F> SparseFieldMat<F>
 where
     F: PrimeField,
 {
-
     pub fn new(m: usize, n: usize) -> Self {
         Self {
-            shape: (m,n),
+            shape: (m, n),
             data: Vec::new(),
         }
     }
@@ -167,10 +162,11 @@ where
             panic!("The length of the left challenge is not enough");
         }
 
-        let result: Vec<std::sync::Mutex<F>> = (0..n).map(|_| std::sync::Mutex::new(F::zero())).collect();
+        let result: Vec<std::sync::Mutex<F>> =
+            (0..n).map(|_| std::sync::Mutex::new(F::zero())).collect();
 
         self.data.par_iter().for_each(|entry| {
-            if entry.0 < m && entry.1 < n{
+            if entry.0 < m && entry.1 < n {
                 let row = entry.0 as usize;
                 let col = entry.1 as usize;
                 let value = entry.2;
@@ -181,7 +177,8 @@ where
             }
         });
 
-        result.into_iter()
+        result
+            .into_iter()
             .map(|mutex_elem| mutex_elem.into_inner().unwrap())
             .collect()
     }
@@ -195,7 +192,8 @@ where
         }
 
         // Use Vec<Mutex<F>> to lock each result element individually
-        let result: Vec<std::sync::Mutex<F>> = (0..m).map(|_| std::sync::Mutex::new(F::zero())).collect();
+        let result: Vec<std::sync::Mutex<F>> =
+            (0..m).map(|_| std::sync::Mutex::new(F::zero())).collect();
 
         self.data.par_iter().for_each(|entry| {
             let row = entry.0;
@@ -209,16 +207,17 @@ where
             }
         });
 
-        result.into_iter()
+        result
+            .into_iter()
             .map(|mutex_elem| mutex_elem.into_inner().unwrap())
             .collect()
     }
 
-    pub fn to_dense(&self) -> DenseMatFieldCM::<F> {
+    pub fn to_dense(&self) -> DenseMatFieldCM<F> {
         let m = self.shape.0;
         let n = self.shape.1;
 
-        if n & (n-1) != 0 {
+        if n & (n - 1) != 0 {
             panic!("The number of columns is not a power of 2");
         }
 
@@ -229,10 +228,12 @@ where
             }
         }
 
-    DenseMatFieldCM::<F> { shape: (m, n), data }
+        DenseMatFieldCM::<F> {
+            shape: (m, n),
+            data,
+        }
     }
 }
-
 
 // Dense matrix in Col Major format
 #[derive(Derivative)]
@@ -259,14 +260,14 @@ where
 {
     pub fn new(m: usize, n: usize) -> Self {
         Self {
-            shape: (m,n),
+            shape: (m, n),
             data: Vec::new(),
             _marker: PhantomData,
         }
     }
 
     pub fn default() -> Self {
-        Self::new(0,0)
+        Self::new(0, 0)
     }
 
     pub fn set_data(&mut self, data: Vec<Vec<I>>) {
@@ -274,7 +275,6 @@ where
     }
 
     pub fn from_vec(&mut self, vec: &Vec<I>) {
-
         let m = self.shape.0;
         let n = self.shape.1;
 
@@ -284,23 +284,18 @@ where
 
         let mut data = Vec::new();
         for j in 0..n {
-            let col =
-            vec[(j * m )..(j * m + m)]
-            .to_vec();
+            let col = vec[(j * m)..(j * m + m)].to_vec();
             data.push(col);
         }
 
         self.data = data;
-
     }
 
     // Convert the matrix to a square matrix
     // Ready for commitment
     //
-    pub fn to_square_mat(&self) -> DenseMatCM::<I, F> {
-        let new_data = linear::reshape_mat_cm_short::<I>(
-            &self.data,
-        );
+    pub fn to_square_mat(&self) -> DenseMatCM<I, F> {
+        let new_data = linear::reshape_mat_cm_short::<I>(&self.data);
 
         let m = new_data[0].len();
         let n = new_data.len();
@@ -312,11 +307,8 @@ where
         }
     }
 
-    pub fn to_square_myint(&self) -> DenseMatCM::<MyInt, F> {
-        let new_data =
-        linear::reshape_mat_cm_to_myint_short::<I>(
-            &self.data,
-        );
+    pub fn to_square_myint(&self) -> DenseMatCM<MyInt, F> {
+        let new_data = linear::reshape_mat_cm_to_myint_short::<I>(&self.data);
 
         let m = new_data[0].len();
         let n = new_data.len();
@@ -337,9 +329,7 @@ where
             _marker: PhantomData,
         }
     }
-
 }
-
 
 // Dense matrix in Col Major format
 #[derive(Derivative)]
@@ -584,7 +574,7 @@ where
 {
     pub fn new(m: usize, n: usize) -> Self {
         Self {
-            shape: (m,n),
+            shape: (m, n),
             data: Vec::new(),
             _marker: PhantomData,
             _marker2: PhantomData,
@@ -601,7 +591,7 @@ where
     pub fn split_into_boolean(&self) -> (Vec<bool>, Vec<Vec<bool>>) {
         let n = self.shape.1;
 
-        if n & (n-1) != 0 {
+        if n & (n - 1) != 0 {
             panic!("The number of columns is not a power of 2");
         }
 
@@ -611,25 +601,20 @@ where
 
         for i in 0..kappa {
             let ii = kappa - i - 1;
-            let cur = self.data.par_iter().map(|x|{
-                if *x < 0 {
-                    false
-                } else {
-                    ((*x >> ii) & 1) == 1
-                }
-            }).collect();
+            let cur = self
+                .data
+                .par_iter()
+                .map(|x| if *x < 0 { false } else { ((*x >> ii) & 1) == 1 })
+                .collect();
 
             result.push(cur);
         }
 
-        let if_invalid: Vec<bool> =
-        self.data.par_iter().map(|x|{
-            if *x < 0 {
-                true
-            } else {
-                false
-            }
-        }).collect();
+        let if_invalid: Vec<bool> = self
+            .data
+            .par_iter()
+            .map(|x| if *x < 0 { true } else { false })
+            .collect();
 
         (if_invalid, result)
     }
@@ -641,7 +626,7 @@ where
         let m = self.shape.0;
         let n = self.shape.1;
 
-        if n & (n-1) != 0 {
+        if n & (n - 1) != 0 {
             panic!("The number of columns is not a power of 2");
         }
 
@@ -652,26 +637,25 @@ where
             panic!("The length of the right challenge is not consistent with the matrix");
         }
 
-
-
         let (if_invalid, boolean_mat) = self.split_into_boolean();
 
         let mut result = vec![F::one(); m];
         for i in 0..kappa {
             let boolean_vec = &boolean_mat[i];
             let factor = xr[i];
-            let cur =
-            boolean_vec.into_par_iter()
-            .zip(if_invalid.par_iter())
-            .map(|(x, y)| {
-                if *y {
-                    F::zero()
-                } else if *x {
-                    factor
-                } else {
-                    F::one()
-                }
-            }).collect::<Vec<F>>();
+            let cur = boolean_vec
+                .into_par_iter()
+                .zip(if_invalid.par_iter())
+                .map(|(x, y)| {
+                    if *y {
+                        F::zero()
+                    } else if *x {
+                        factor
+                    } else {
+                        F::one()
+                    }
+                })
+                .collect::<Vec<F>>();
             result = linear::vec_element_wise_mul(&result, &cur);
         }
 
@@ -688,12 +672,11 @@ where
         }
     }
 
-    pub  fn to_dense_bool(&self) ->
-    DenseMatCM<bool, F> {
+    pub fn to_dense_bool(&self) -> DenseMatCM<bool, F> {
         let m = self.shape.0;
         let n = self.shape.1;
 
-        if n & (n-1) != 0 {
+        if n & (n - 1) != 0 {
             panic!("The number of columns is not a power of 2");
         }
 
@@ -712,10 +695,7 @@ where
             _marker: PhantomData,
         }
     }
-
-
 }
-
 
 // Diagnoal block matrix
 #[derive(Derivative)]
@@ -736,7 +716,7 @@ where
     _marker: PhantomData<F>,
 }
 
-impl <I, F> DiagBlockMat<I, F>
+impl<I, F> DiagBlockMat<I, F>
 where
     I: ShortInt,
     F: PrimeField + From<I>,
@@ -754,14 +734,11 @@ where
         self.data = data;
     }
 
-    pub fn from_dense_block(
-        dense_block: &DenseBlockMat::<I, F>,
-    ) -> Self {
+    pub fn from_dense_block(dense_block: &DenseBlockMat<I, F>) -> Self {
         let block_shape = dense_block.block_shape;
         let num_blocks = dense_block.num_blocks;
 
-        let mut result =
-        Self::new(num_blocks, block_shape);
+        let mut result = Self::new(num_blocks, block_shape);
 
         result.set_data(dense_block.data.clone());
 
@@ -770,8 +747,7 @@ where
 
     pub fn from_data(data: Vec<Vec<Vec<I>>>) -> Self {
         let num_blocks = data.len();
-        let block_shape =
-        (data[0][0].len(), data[0].len());
+        let block_shape = (data[0][0].len(), data[0].len());
         Self {
             num_blocks,
             block_shape,
@@ -779,7 +755,6 @@ where
             _marker: PhantomData,
         }
     }
-
 }
 
 #[derive(Derivative)]
@@ -801,7 +776,7 @@ where
     _marker: PhantomData<F>,
 }
 
-impl <I, F> DenseBlockMat<I, F>
+impl<I, F> DenseBlockMat<I, F>
 where
     I: ShortInt,
     F: PrimeField + From<I>,
@@ -821,7 +796,6 @@ where
     }
 
     pub fn from_vec(&mut self, vec: &Vec<I>) {
-
         let m1 = self.block_shape.0;
         let n1 = self.block_shape.1;
 
@@ -837,9 +811,7 @@ where
         for i in 0..num_blocks {
             let mut block = Vec::new();
             for j in 0..n1 {
-                let col =
-                vec[(j * m + i * m1)..(j * m + i * m1 + m1)]
-                .to_vec();
+                let col = vec[(j * m + i * m1)..(j * m + i * m1 + m1)].to_vec();
                 block.push(col);
             }
             data.push(block);
@@ -847,23 +819,19 @@ where
 
         self.num_blocks = num_blocks;
         self.data = data;
-
     }
 
-
-    pub fn to_square_mat(&self) -> DenseMatCM::<I, F> {
+    pub fn to_square_mat(&self) -> DenseMatCM<I, F> {
         self.to_dense().to_square_mat()
     }
 
-    pub fn to_square_myint(&self) -> DenseMatCM::<MyInt, F> {
-
+    pub fn to_square_myint(&self) -> DenseMatCM<MyInt, F> {
         self.to_dense().to_square_myint()
     }
 
     pub fn from_data(data: Vec<Vec<Vec<I>>>) -> Self {
         let num_blocks = data.len();
-        let block_shape =
-        (data[0][0].len(), data[0].len());
+        let block_shape = (data[0][0].len(), data[0].len());
         Self {
             num_blocks,
             block_shape,
@@ -880,8 +848,8 @@ where
     F: PrimeField + From<I>,
     Vec<I>: IntoParallelIterator + FromParallelIterator<I>,
 {
-    fn to_dense(&self) -> DenseMatCM::<I, F>;
-    fn to_dense_myint(&self) -> DenseMatCM::<MyInt, F>;
+    fn to_dense(&self) -> DenseMatCM<I, F>;
+    fn to_dense_myint(&self) -> DenseMatCM<MyInt, F>;
     fn to_vec(&self) -> Vec<I>;
     fn to_field_vec(&self) -> Vec<F>;
     fn gen_rand(&mut self, k: usize);
@@ -892,37 +860,37 @@ where
     fn proj_lr(&self, xl: &Vec<F>, xr: &Vec<F>) -> F;
     fn get_shape(&self) -> (usize, usize);
     fn scalar_mul(&self, scalar: F) -> Vec<Vec<F>>;
-    fn to_bool_neg(&self) -> DenseMatCM<I,F>;
-    fn bit_decomposition(&self, k: usize)
-    -> (DenseMatCM::<bool,F>,
+    fn to_bool_neg(&self) -> DenseMatCM<I, F>;
+    fn bit_decomposition(
+        &self,
+        k: usize,
+    ) -> (
+        DenseMatCM<bool, F>,
         DenseMatCM<MyInt, F>,
-        Vec<DenseMatCM<bool,F>>);
+        Vec<DenseMatCM<bool, F>>,
+    );
     // Truncating the least important k bit,
     // and then restirct the values between
     // -2^{k-1}  and 2^{k-1}
-    fn clamp(&self, k: usize) -> DenseMatCM<I,F>;
+    fn clamp(&self, k: usize) -> DenseMatCM<I, F>;
     fn clear(&mut self);
 }
 
-pub fn inner_product_generic<I, F> (
-    a: &[I],
-    b: &[F],
-) -> F
+pub fn inner_product_generic<I, F>(a: &[I], b: &[F]) -> F
 where
     I: ShortInt,
     F: PrimeField + From<I>,
     Vec<I>: IntoParallelIterator,
 {
-    a.par_iter().zip(b.par_iter())
-    .map(|(a, b)| F::from(*a) * b).sum()
+    a.par_iter()
+        .zip(b.par_iter())
+        .map(|(a, b)| F::from(*a) * b)
+        .sum()
 }
 
 // Projection of a col major matrix to the left vector
 // Col Major
-pub fn proj_left_cm_generic<I, F> (
-    mat: &Vec<Vec<I>>,
-    l_vec: &Vec<F>,
-) -> Vec<F>
+pub fn proj_left_cm_generic<I, F>(mat: &Vec<Vec<I>>, l_vec: &Vec<F>) -> Vec<F>
 where
     I: ShortInt,
     F: PrimeField + From<I>,
@@ -936,21 +904,19 @@ where
 
     let l_vec = l_vec[0..m].to_vec();
 
-    let result: Vec<F> = (0..n).into_par_iter().map(|i| {
-        let col = &mat[i];
-        inner_product_generic::<I,F>(
-            &col, &l_vec)
-    }).collect();
+    let result: Vec<F> = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            let col = &mat[i];
+            inner_product_generic::<I, F>(&col, &l_vec)
+        })
+        .collect();
 
     result
 }
 
-
 // Projection of a col major matrix to the left vector
-pub fn proj_right_cm_generic<I, F> (
-    mat: &Vec<Vec<I>>,
-    r_vec: &Vec<F>,
-) -> Vec<F>
+pub fn proj_right_cm_generic<I, F>(mat: &Vec<Vec<I>>, r_vec: &Vec<F>) -> Vec<F>
 where
     I: ShortInt,
     F: PrimeField + From<I>,
@@ -964,24 +930,19 @@ where
 
     let r_vec = r_vec[0..n].to_vec();
 
-    let result: Vec<F> = (0..m).into_par_iter().map(|i| {
-        let row =
-        mat.iter()
-        .map(|x| x[i])
-        .collect::<Vec<I>>();
+    let result: Vec<F> = (0..m)
+        .into_par_iter()
+        .map(|i| {
+            let row = mat.iter().map(|x| x[i]).collect::<Vec<I>>();
 
-        inner_product_generic::<I,F>(
-            &row, &r_vec)
-    }).collect();
+            inner_product_generic::<I, F>(&row, &r_vec)
+        })
+        .collect();
 
     result
 }
 
-pub fn proj_lr_cm_generic<I, F> (
-    mat: &Vec<Vec<I>>,
-    xl: &Vec<F>,
-    xr: &Vec<F>,
-) -> F
+pub fn proj_lr_cm_generic<I, F>(mat: &Vec<Vec<I>>, xl: &Vec<F>, xr: &Vec<F>) -> F
 where
     I: ShortInt,
     F: PrimeField + From<I>,
@@ -997,22 +958,20 @@ where
     F: PrimeField + From<I>,
     Vec<I>: IntoParallelIterator + FromParallelIterator<I>,
 {
-
     fn clear(&mut self) {
         self.data = Vec::new();
     }
 
-    fn to_dense(&self) -> DenseMatCM::<I, F> {
+    fn to_dense(&self) -> DenseMatCM<I, F> {
         self.clone()
     }
 
-    fn to_dense_myint(&self) -> DenseMatCM::<MyInt, F> {
-        let data =
-        self.data.iter().map(|x|{
-            x.par_iter().map(|y|{
-                y.to_myint()
-            }).collect()
-        }).collect();
+    fn to_dense_myint(&self) -> DenseMatCM<MyInt, F> {
+        let data = self
+            .data
+            .iter()
+            .map(|x| x.par_iter().map(|y| y.to_myint()).collect())
+            .collect();
 
         DenseMatCM::<MyInt, F> {
             shape: self.shape,
@@ -1022,9 +981,7 @@ where
     }
 
     fn to_vec(&self) -> Vec<I> {
-        self.data.par_iter().flatten()
-        .map(|x| *x)
-        .collect()
+        self.data.par_iter().flatten().map(|x| *x).collect()
     }
 
     fn get_shape(&self) -> (usize, usize) {
@@ -1032,11 +989,10 @@ where
     }
 
     fn scalar_mul(&self, scalar: F) -> Vec<Vec<F>> {
-        self.data.iter().map(|x|{
-            x.par_iter().map(|y|{
-                scalar * F::from(*y)
-            }).collect()
-        }).collect()
+        self.data
+            .iter()
+            .map(|x| x.par_iter().map(|y| scalar * F::from(*y)).collect())
+            .collect()
     }
 
     // Convert the matrix to a field vector
@@ -1044,9 +1000,11 @@ where
     // vec(a) \bullet tensor(xr, xl) = l a r
     //
     fn to_field_vec(&self) -> Vec<F> {
-        self.data.par_iter().flatten()
-        .map(|x| F::from(*x))
-        .collect()
+        self.data
+            .par_iter()
+            .flatten()
+            .map(|x| F::from(*x))
+            .collect()
     }
 
     fn gen_rand(&mut self, k: usize) {
@@ -1085,7 +1043,6 @@ where
             panic!("The length of the left challenge is not enough");
         }
 
-
         let l_vec = xi::xi_from_challenges::<F>(&xl);
 
         proj_left_cm_generic::<I, F>(&self.data, &l_vec)
@@ -1097,7 +1054,6 @@ where
 
     fn proj_right_challenges(&self, xr: &Vec<F>) -> Vec<F> {
         let n = self.shape.1;
-
 
         if n > (1usize << xr.len()) {
             panic!("The length of the right challenge is not enough");
@@ -1132,16 +1088,21 @@ where
     }
 
     fn to_bool_neg(&self) -> DenseMatCM<I, F> {
-        let data =
-        self.data.iter().map(|x|{
-            x.par_iter().map(|y|{
-                if y == &I::from_myint(0) {
-                    I::from_myint(1)
-                } else {
-                    I::from_myint(0)
-                }
-            }).collect()
-        }).collect();
+        let data = self
+            .data
+            .iter()
+            .map(|x| {
+                x.par_iter()
+                    .map(|y| {
+                        if y == &I::from_myint(0) {
+                            I::from_myint(1)
+                        } else {
+                            I::from_myint(0)
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
 
         DenseMatCM::<I, F> {
             shape: self.shape,
@@ -1150,22 +1111,26 @@ where
         }
     }
 
-    fn bit_decomposition(&self, k: usize)
-        -> (
-            DenseMatCM::<bool,F>,
-            DenseMatCM::<MyInt, F>,
-            Vec<DenseMatCM::<bool,F>>,
-        ) {
-
-        let (sign_data, abs_data)
-        : (Vec<Vec<bool>>, Vec<Vec<MyInt>>) =
-        self.data.par_iter().map(|x|{
-            x.iter().map(|y|{
-                let ymyint = y.to_myint();
-                (ymyint >= 0, ymyint.abs() as MyInt)
-            }).unzip()
-        }).unzip();
-
+    fn bit_decomposition(
+        &self,
+        k: usize,
+    ) -> (
+        DenseMatCM<bool, F>,
+        DenseMatCM<MyInt, F>,
+        Vec<DenseMatCM<bool, F>>,
+    ) {
+        let (sign_data, abs_data): (Vec<Vec<bool>>, Vec<Vec<MyInt>>) = self
+            .data
+            .par_iter()
+            .map(|x| {
+                x.iter()
+                    .map(|y| {
+                        let ymyint = y.to_myint();
+                        (ymyint >= 0, ymyint.abs() as MyInt)
+                    })
+                    .unzip()
+            })
+            .unzip();
 
         // let sign_data: Vec<Vec<bool>> =
         // self.data.par_iter().map(|x|{
@@ -1184,15 +1149,13 @@ where
         // println!("\n raw_data: {:?} \n", self.to_dense().data[0]);
         // println!("sign_data: {:?} \n", sign_data[0]);
 
-
-        let sign_mat = DenseMatCM::<bool,F> {
+        let sign_mat = DenseMatCM::<bool, F> {
             shape: self.shape,
             data: sign_data,
             _marker: PhantomData,
         };
 
-        let abs_mats =
-        DenseMatCM::<MyInt, F> {
+        let abs_mats = DenseMatCM::<MyInt, F> {
             shape: self.shape,
             data: abs_data,
             _marker: PhantomData,
@@ -1201,15 +1164,20 @@ where
         let mut bit_mats = Vec::new();
 
         for kappa in 0..k {
-            let bit_data =
-            abs_mats.data.par_iter().map(|x|{
-                x.iter().map(|y|{
-                    let bit = ((y >> kappa) & 1) == 1;
-                    bit
-                }).collect()
-            }).collect();
+            let bit_data = abs_mats
+                .data
+                .par_iter()
+                .map(|x| {
+                    x.iter()
+                        .map(|y| {
+                            let bit = ((y >> kappa) & 1) == 1;
+                            bit
+                        })
+                        .collect()
+                })
+                .collect();
 
-            let bit_mat = DenseMatCM::<bool,F> {
+            let bit_mat = DenseMatCM::<bool, F> {
                 shape: self.shape,
                 data: bit_data,
                 _marker: PhantomData,
@@ -1219,31 +1187,35 @@ where
         }
 
         (sign_mat, abs_mats, bit_mats)
-
     }
 
-    fn clamp(&self, k: usize) -> DenseMatCM<I,F> {
-        let low_bound = (- 1 as MyInt) << (2 * k-1);
-        let up_bound = (1 as MyInt) << (2 * k-1);
+    fn clamp(&self, k: usize) -> DenseMatCM<I, F> {
+        let low_bound = (-1 as MyInt) << (2 * k - 1);
+        let up_bound = (1 as MyInt) << (2 * k - 1);
         let th = (1 as MyInt) << k;
 
-        let low_bound_value = (- 1 as MyInt) << (k-1);
-        let up_bound_value = (1 as MyInt) << (k-1);
+        let low_bound_value = (-1 as MyInt) << (k - 1);
+        let up_bound_value = (1 as MyInt) << (k - 1);
 
-        let data =
-        self.data.iter().map(|x|{
-            x.par_iter().map(|y|{
-                if y.to_myint() <= low_bound {
-                    I::from_myint(low_bound_value)
-                } else if y.to_myint() >= up_bound {
-                    I::from_myint(up_bound_value)
-                } else {
-                    I::from_myint(y.to_myint() / th)
-                }
-            }).collect()
-        }).collect();
+        let data = self
+            .data
+            .iter()
+            .map(|x| {
+                x.par_iter()
+                    .map(|y| {
+                        if y.to_myint() <= low_bound {
+                            I::from_myint(low_bound_value)
+                        } else if y.to_myint() >= up_bound {
+                            I::from_myint(up_bound_value)
+                        } else {
+                            I::from_myint(y.to_myint() / th)
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
 
-        DenseMatCM::<I,F> {
+        DenseMatCM::<I, F> {
             shape: self.shape,
             data,
             _marker: PhantomData,
@@ -1251,18 +1223,16 @@ where
     }
 }
 
-
 impl<I, F> MatOps<I, F> for SparseKronecker<I, F>
 where
     I: ShortInt,
     F: PrimeField + From<I>,
 {
-
     fn clear(&mut self) {
         self.data = (Vec::new(), Vec::new());
     }
 
-    fn to_dense(&self) -> DenseMatCM::<I, F> {
+    fn to_dense(&self) -> DenseMatCM<I, F> {
         let m1 = self.shape1.0;
         let n1 = self.shape1.1;
         let m2 = self.shape2.0;
@@ -1279,21 +1249,20 @@ where
             for j1 in 0..n1 {
                 for i2 in 0..m2 {
                     for j2 in 0..n2 {
-                        data[j1*n2+j2][i1*m2+i2] =
-                        mat1[j1][i1].mul_mix(mat2[j2][i2]);
+                        data[j1 * n2 + j2][i1 * m2 + i2] = mat1[j1][i1].mul_mix(mat2[j2][i2]);
                     }
                 }
             }
         }
 
-        DenseMatCM::<I,F> {
+        DenseMatCM::<I, F> {
             shape: (m, n),
             data,
             _marker: PhantomData,
         }
     }
 
-    fn to_dense_myint(&self) -> DenseMatCM::<MyInt, F> {
+    fn to_dense_myint(&self) -> DenseMatCM<MyInt, F> {
         let m1 = self.shape1.0;
         let n1 = self.shape1.1;
         let m2 = self.shape2.0;
@@ -1310,14 +1279,14 @@ where
             for j1 in 0..n1 {
                 for i2 in 0..m2 {
                     for j2 in 0..n2 {
-                        data[j1*n2+j2][i1*m2+i2] =
-                        mat1[j1][i1].mul_mix(mat2[j2][i2]).to_myint();
+                        data[j1 * n2 + j2][i1 * m2 + i2] =
+                            mat1[j1][i1].mul_mix(mat2[j2][i2]).to_myint();
                     }
                 }
             }
         }
 
-        DenseMatCM::<MyInt,F> {
+        DenseMatCM::<MyInt, F> {
             shape: (m, n),
             data,
             _marker: PhantomData,
@@ -1341,9 +1310,8 @@ where
             for j1 in 0..n1 {
                 for i2 in 0..m2 {
                     for j2 in 0..n2 {
-                        data[j1*n2+j2][i1*m2+i2] =
-                        F::from(mat1[j1][i1].mul_mix(mat2[j2][i2]))
-                        .mul(&scalar);
+                        data[j1 * n2 + j2][i1 * m2 + i2] =
+                            F::from(mat1[j1][i1].mul_mix(mat2[j2][i2])).mul(&scalar);
                     }
                 }
             }
@@ -1375,11 +1343,9 @@ where
         let m2 = self.shape2.0;
         let n2 = self.shape2.1;
 
-        let mut mat_1 =
-        DenseMatCM::<I, F>::new(m1, n1);
+        let mut mat_1 = DenseMatCM::<I, F>::new(m1, n1);
         mat_1.gen_rand(k);
-        let mut mat_2 =
-        DenseMatCM::<I, F>::new(m2, n2);
+        let mut mat_2 = DenseMatCM::<I, F>::new(m2, n2);
         mat_2.gen_rand(k);
 
         self.set_data((mat_1.data, mat_2.data));
@@ -1404,25 +1370,19 @@ where
         let xl1 = &xl[0..logm1].to_vec();
         let xl2 = &xl[logm1..(logm1 + logm2)].to_vec();
 
-
         let l_vec1 = xi::xi_from_challenges::<F>(&xl1);
         let l_vec2 = xi::xi_from_challenges::<F>(&xl2);
 
+        let la1 = proj_left_cm_generic::<I, F>(mat1, &l_vec1);
 
-        let la1 = proj_left_cm_generic::<I, F>(
-            mat1, &l_vec1
-        );
+        let la2 = proj_left_cm_generic::<I, F>(mat2, &l_vec2);
 
-        let la2 = proj_left_cm_generic::<I, F>(
-            mat2, &l_vec2
-        );
-
-        let result = linear::vec_kronecker(&la1,&la2);
+        let result = linear::vec_kronecker(&la1, &la2);
         result
     }
 
     fn proj_left(&self, l_vec: &Vec<F>) -> Vec<F> {
-       self.to_dense().proj_left(l_vec)
+        self.to_dense().proj_left(l_vec)
     }
 
     fn proj_right_challenges(&self, xr: &Vec<F>) -> Vec<F> {
@@ -1431,11 +1391,9 @@ where
 
         let n = n1 * n2;
 
-
         if n > (1usize << xr.len()) {
             panic!("The length of the right challenge is not enough");
         }
-
 
         let logn1 = n1.ilog2() as usize;
         let logn2 = n2.ilog2() as usize;
@@ -1449,15 +1407,11 @@ where
         let r_vec1 = xi::xi_from_challenges::<F>(&xr1);
         let r_vec2 = xi::xi_from_challenges::<F>(&xr2);
 
-        let ar1 = proj_right_cm_generic::<I, F>(
-            mat1, &r_vec1
-        );
+        let ar1 = proj_right_cm_generic::<I, F>(mat1, &r_vec1);
 
-        let ar2 = proj_right_cm_generic::<I, F>(
-            mat2, &r_vec2
-        );
+        let ar2 = proj_right_cm_generic::<I, F>(mat2, &r_vec2);
 
-        let result = linear::vec_kronecker(&ar1,&ar2);
+        let result = linear::vec_kronecker(&ar1, &ar2);
         result
     }
 
@@ -1500,13 +1454,9 @@ where
         let r_vec1 = xi::xi_from_challenges::<F>(&xr1);
         let r_vec2 = xi::xi_from_challenges::<F>(&xr2);
 
-        let lar1 = proj_lr_cm_generic::<I, F>(
-            mat1, &l_vec1,&r_vec1
-        );
+        let lar1 = proj_lr_cm_generic::<I, F>(mat1, &l_vec1, &r_vec1);
 
-        let lar2 = proj_lr_cm_generic::<I, F>(
-            mat2, &l_vec2,&r_vec2
-        );
+        let lar2 = proj_lr_cm_generic::<I, F>(mat2, &l_vec2, &r_vec2);
 
         let result = lar1 * lar2;
         result
@@ -1516,18 +1466,20 @@ where
         self.to_dense().to_bool_neg()
     }
 
-    fn bit_decomposition(&self, k: usize)
-    -> (DenseMatCM::<bool,F>,
+    fn bit_decomposition(
+        &self,
+        k: usize,
+    ) -> (
+        DenseMatCM<bool, F>,
         DenseMatCM<MyInt, F>,
-        Vec<DenseMatCM<bool,F>>) {
-
+        Vec<DenseMatCM<bool, F>>,
+    ) {
         self.to_dense().bit_decomposition(k)
     }
 
-    fn clamp(&self, k: usize) -> DenseMatCM<I,F> {
+    fn clamp(&self, k: usize) -> DenseMatCM<I, F> {
         self.to_dense().clamp(k)
     }
-
 }
 
 impl<I, F> MatOps<I, F> for DenseBlockMat<I, F>
@@ -1540,7 +1492,7 @@ where
         self.data = Vec::new();
     }
 
-    fn to_dense(&self) -> DenseMatCM::<I, F> {
+    fn to_dense(&self) -> DenseMatCM<I, F> {
         let m1 = self.block_shape.0;
         let n1 = self.block_shape.1;
         let num = self.num_blocks;
@@ -1562,10 +1514,14 @@ where
             })
             .collect();
 
-        DenseMatCM::<I, F> { shape: (m, n), data, _marker: PhantomData }
+        DenseMatCM::<I, F> {
+            shape: (m, n),
+            data,
+            _marker: PhantomData,
+        }
     }
 
-    fn to_dense_myint(&self) -> DenseMatCM::<MyInt, F> {
+    fn to_dense_myint(&self) -> DenseMatCM<MyInt, F> {
         let m1 = self.block_shape.0;
         let n1 = self.block_shape.1;
         let num = self.num_blocks;
@@ -1581,15 +1537,23 @@ where
                 let mut col = Vec::with_capacity(m);
                 for i in 0..num {
                     // Append the j-th column of the i-th block
-                    col.extend_from_slice(&self.data[i][j].iter().map(|x| x.to_myint()).collect::<Vec<_>>());
+                    col.extend_from_slice(
+                        &self.data[i][j]
+                            .iter()
+                            .map(|x| x.to_myint())
+                            .collect::<Vec<_>>(),
+                    );
                 }
                 col
             })
             .collect();
 
-        DenseMatCM::<MyInt, F> { shape: (m, n), data, _marker: PhantomData }
+        DenseMatCM::<MyInt, F> {
+            shape: (m, n),
+            data,
+            _marker: PhantomData,
+        }
     }
-
 
     fn scalar_mul(&self, scalar: F) -> Vec<Vec<F>> {
         let m = self.num_blocks * self.block_shape.0;
@@ -1599,8 +1563,8 @@ where
         for i in 0..self.num_blocks {
             for j in 0..self.block_shape.1 {
                 for ii in 0..self.block_shape.0 {
-                    data[j][i*self.block_shape.0 + ii] =
-                    F::from(self.data[i][j][ii]).mul(&scalar);
+                    data[j][i * self.block_shape.0 + ii] =
+                        F::from(self.data[i][j][ii]).mul(&scalar);
                 }
             }
         }
@@ -1611,7 +1575,6 @@ where
     fn to_vec(&self) -> Vec<I> {
         self.to_dense().to_vec()
     }
-
 
     fn to_field_vec(&self) -> Vec<F> {
         self.to_dense().to_field_vec()
@@ -1627,14 +1590,14 @@ where
         let m1 = self.block_shape.0;
         let n1 = self.block_shape.1;
 
-
         let data = (0..self.num_blocks)
-        .into_par_iter().map(|_|{
-            let mut dense_mat =
-            DenseMatCM::<I, F>::new(m1, n1);
-            dense_mat.gen_rand(k);
-            dense_mat.data
-        }).collect();
+            .into_par_iter()
+            .map(|_| {
+                let mut dense_mat = DenseMatCM::<I, F>::new(m1, n1);
+                dense_mat.gen_rand(k);
+                dense_mat.data
+            })
+            .collect();
 
         self.set_data(data);
     }
@@ -1658,21 +1621,25 @@ where
         let xi_l1 = xi::xi_from_challenges::<F>(&xl1);
         let xl2 = &xl[lognum..(logm1 + lognum)].to_vec();
 
-        let mut result = vec![F::zero();n];
+        let mut result = vec![F::zero(); n];
 
-        (0..num).into_par_iter().map(|i|{
-            let factor = xi_l1[i];
-            let dense_mat = DenseMatCM::<I, F>{
-                shape: (m1, n1),
-                data: self.data[i].clone(),
-                _marker: PhantomData,
-            };
-            let cur = dense_mat.proj_left_challenges(&xl2);
-            linear::vec_scalar_mul(&cur, &factor)
-        }).collect::<Vec<Vec<F>>>()
-        .iter().for_each(|cur|{
-            result = linear::vec_addition(&result, cur);
-        });
+        (0..num)
+            .into_par_iter()
+            .map(|i| {
+                let factor = xi_l1[i];
+                let dense_mat = DenseMatCM::<I, F> {
+                    shape: (m1, n1),
+                    data: self.data[i].clone(),
+                    _marker: PhantomData,
+                };
+                let cur = dense_mat.proj_left_challenges(&xl2);
+                linear::vec_scalar_mul(&cur, &factor)
+            })
+            .collect::<Vec<Vec<F>>>()
+            .iter()
+            .for_each(|cur| {
+                result = linear::vec_addition(&result, cur);
+            });
 
         result
     }
@@ -1688,7 +1655,6 @@ where
 
         let n = n1;
 
-
         if n > (1usize << xr.len()) {
             panic!(
                 "The length of the left challenge is not enough: n = {}, xr_len = {}",
@@ -1697,16 +1663,19 @@ where
             );
         }
 
-        (0..num).into_par_iter().map(|i|{
-            let dense_mat = DenseMatCM::<I, F>{
-                shape: (m1, n1),
-                data: self.data[i].clone(),
-                _marker: PhantomData,
-            };
-            let cur = dense_mat.proj_right_challenges(&xr);
-            cur
-        }).flatten().collect()
-
+        (0..num)
+            .into_par_iter()
+            .map(|i| {
+                let dense_mat = DenseMatCM::<I, F> {
+                    shape: (m1, n1),
+                    data: self.data[i].clone(),
+                    _marker: PhantomData,
+                };
+                let cur = dense_mat.proj_right_challenges(&xr);
+                cur
+            })
+            .flatten()
+            .collect()
     }
 
     fn proj_right(&self, r_vec: &Vec<F>) -> Vec<F> {
@@ -1720,7 +1689,6 @@ where
 
         let m = num * m1;
         let n = n1;
-
 
         if m > (1usize << xl.len()) {
             panic!("The length of the left challenge is not enough");
@@ -1737,37 +1705,39 @@ where
         let xi_l1 = xi::xi_from_challenges::<F>(&xl1);
         let xl2 = &xl[lognum..(logm1 + lognum)].to_vec();
 
-
-        (0..num).into_par_iter().map(|i|{
-            let dense_mat = DenseMatCM::<I, F>{
-                shape: (m1, n1),
-                data: self.data[i].clone(),
-                _marker: PhantomData,
-            };
-            let cur = dense_mat.proj_lr(&xl2, &xr);
-            cur * xi_l1[i]
-        }).sum()
-
-
+        (0..num)
+            .into_par_iter()
+            .map(|i| {
+                let dense_mat = DenseMatCM::<I, F> {
+                    shape: (m1, n1),
+                    data: self.data[i].clone(),
+                    _marker: PhantomData,
+                };
+                let cur = dense_mat.proj_lr(&xl2, &xr);
+                cur * xi_l1[i]
+            })
+            .sum()
     }
 
-    fn to_bool_neg(&self) -> DenseMatCM<I,F> {
+    fn to_bool_neg(&self) -> DenseMatCM<I, F> {
         self.to_dense().to_bool_neg()
     }
 
-    fn bit_decomposition(&self, k: usize)
-        -> (DenseMatCM::<bool,F>,
-            DenseMatCM<MyInt, F>,
-            Vec<DenseMatCM<bool,F>>) {
+    fn bit_decomposition(
+        &self,
+        k: usize,
+    ) -> (
+        DenseMatCM<bool, F>,
+        DenseMatCM<MyInt, F>,
+        Vec<DenseMatCM<bool, F>>,
+    ) {
         self.to_dense().bit_decomposition(k)
     }
 
-    fn clamp(&self, k: usize) -> DenseMatCM<I,F> {
+    fn clamp(&self, k: usize) -> DenseMatCM<I, F> {
         self.to_dense().clamp(k)
     }
-
 }
-
 
 impl<I, F> MatOps<I, F> for DiagBlockMat<I, F>
 where
@@ -1779,7 +1749,7 @@ where
         self.data = Vec::new();
     }
 
-    fn to_dense(&self) -> DenseMatCM::<I, F> {
+    fn to_dense(&self) -> DenseMatCM<I, F> {
         let mm = self.block_shape.0;
         let nn = self.block_shape.1;
 
@@ -1790,12 +1760,10 @@ where
         for i in 0..self.num_blocks {
             for ii in 0..mm {
                 for jj in 0..nn {
-                    data[i*nn + jj][i*mm + ii] =
-                    self.data[i][jj][ii];
+                    data[i * nn + jj][i * mm + ii] = self.data[i][jj][ii];
                 }
             }
         }
-
 
         DenseMatCM::<I, F> {
             shape: (m, n),
@@ -1804,7 +1772,7 @@ where
         }
     }
 
-    fn to_dense_myint(&self) -> DenseMatCM::<MyInt, F> {
+    fn to_dense_myint(&self) -> DenseMatCM<MyInt, F> {
         let mm = self.block_shape.0;
         let nn = self.block_shape.1;
 
@@ -1815,12 +1783,10 @@ where
         for i in 0..self.num_blocks {
             for ii in 0..mm {
                 for jj in 0..nn {
-                    data[i*nn + jj][i*mm + ii] =
-                    self.data[i][jj][ii].to_myint();
+                    data[i * nn + jj][i * mm + ii] = self.data[i][jj][ii].to_myint();
                 }
             }
         }
-
 
         DenseMatCM::<MyInt, F> {
             shape: (m, n),
@@ -1837,9 +1803,8 @@ where
         for i in 0..self.num_blocks {
             for ii in 0..self.block_shape.0 {
                 for jj in 0..self.block_shape.1 {
-                    data[i*self.block_shape.0 + jj][i*self.block_shape.0 + ii] =
-                    F::from(self.data[i][jj][ii])
-                    .mul(&scalar);
+                    data[i * self.block_shape.0 + jj][i * self.block_shape.0 + ii] =
+                        F::from(self.data[i][jj][ii]).mul(&scalar);
                 }
             }
         }
@@ -1865,14 +1830,14 @@ where
         let m1 = self.block_shape.0;
         let n1 = self.block_shape.1;
 
-
         let data = (0..self.num_blocks)
-        .into_par_iter().map(|_|{
-            let mut dense_mat =
-            DenseMatCM::<I, F>::new(m1, n1);
-            dense_mat.gen_rand(k);
-            dense_mat.data
-        }).collect();
+            .into_par_iter()
+            .map(|_| {
+                let mut dense_mat = DenseMatCM::<I, F>::new(m1, n1);
+                dense_mat.gen_rand(k);
+                dense_mat.data
+            })
+            .collect();
 
         self.set_data(data);
     }
@@ -1895,17 +1860,20 @@ where
         let xi_l1 = xi::xi_from_challenges::<F>(&xl1);
         let xl2 = &xl[lognum..(logm1 + lognum)].to_vec();
 
-
-        let result =(0..num).into_par_iter().map(|i|{
-            let factor = xi_l1[i];
-            let dense_mat = DenseMatCM::<I, F>{
-                shape: (m1, n1),
-                data: self.data[i].clone(),
-                _marker: PhantomData,
-            };
-            let cur = dense_mat.proj_left_challenges(&xl2);
-            linear::vec_scalar_mul(&cur, &factor)
-        }).flatten().collect::<Vec<F>>();
+        let result = (0..num)
+            .into_par_iter()
+            .map(|i| {
+                let factor = xi_l1[i];
+                let dense_mat = DenseMatCM::<I, F> {
+                    shape: (m1, n1),
+                    data: self.data[i].clone(),
+                    _marker: PhantomData,
+                };
+                let cur = dense_mat.proj_left_challenges(&xl2);
+                linear::vec_scalar_mul(&cur, &factor)
+            })
+            .flatten()
+            .collect::<Vec<F>>();
 
         result
     }
@@ -1921,16 +1889,20 @@ where
             panic!("The length of the left challenge is not enough");
         }
 
-        let result =(0..num).into_par_iter().map(|i|{
-            let l_vec_cur = l_vec[(i*m1)..(i*m1+m1)].to_vec();
-            let dense_mat = DenseMatCM::<I, F>{
-                shape: (m1, n1),
-                data: self.data[i].clone(),
-                _marker: PhantomData,
-            };
-            let cur = dense_mat.proj_left(&l_vec_cur);
-            cur
-        }).flatten().collect::<Vec<F>>();
+        let result = (0..num)
+            .into_par_iter()
+            .map(|i| {
+                let l_vec_cur = l_vec[(i * m1)..(i * m1 + m1)].to_vec();
+                let dense_mat = DenseMatCM::<I, F> {
+                    shape: (m1, n1),
+                    data: self.data[i].clone(),
+                    _marker: PhantomData,
+                };
+                let cur = dense_mat.proj_left(&l_vec_cur);
+                cur
+            })
+            .flatten()
+            .collect::<Vec<F>>();
 
         result
     }
@@ -1953,17 +1925,20 @@ where
         let xi_r1 = xi::xi_from_challenges::<F>(&xr1);
         let xr2 = &xr[lognum..(logn1 + lognum)].to_vec();
 
-
-        let result =(0..num).into_par_iter().map(|i|{
-            let factor = xi_r1[i];
-            let dense_mat = DenseMatCM::<I, F>{
-                shape: (m1, n1),
-                data: self.data[i].clone(),
-                _marker: PhantomData,
-            };
-            let cur = dense_mat.proj_right_challenges(&xr2);
-            linear::vec_scalar_mul(&cur, &factor)
-        }).flatten().collect::<Vec<F>>();
+        let result = (0..num)
+            .into_par_iter()
+            .map(|i| {
+                let factor = xi_r1[i];
+                let dense_mat = DenseMatCM::<I, F> {
+                    shape: (m1, n1),
+                    data: self.data[i].clone(),
+                    _marker: PhantomData,
+                };
+                let cur = dense_mat.proj_right_challenges(&xr2);
+                linear::vec_scalar_mul(&cur, &factor)
+            })
+            .flatten()
+            .collect::<Vec<F>>();
 
         result
     }
@@ -1979,16 +1954,20 @@ where
             panic!("The length of the right challenge is not enough");
         }
 
-        let result =(0..num).into_par_iter().map(|i|{
-            let r_vec_cur = r_vec[(i*n1)..(i*n1+n1)].to_vec();
-            let dense_mat = DenseMatCM::<I, F>{
-                shape: (m1, n1),
-                data: self.data[i].clone(),
-                _marker: PhantomData,
-            };
-            let cur = dense_mat.proj_right(&r_vec_cur);
-            cur
-        }).flatten().collect::<Vec<F>>();
+        let result = (0..num)
+            .into_par_iter()
+            .map(|i| {
+                let r_vec_cur = r_vec[(i * n1)..(i * n1 + n1)].to_vec();
+                let dense_mat = DenseMatCM::<I, F> {
+                    shape: (m1, n1),
+                    data: self.data[i].clone(),
+                    _marker: PhantomData,
+                };
+                let cur = dense_mat.proj_right(&r_vec_cur);
+                cur
+            })
+            .flatten()
+            .collect::<Vec<F>>();
 
         result
     }
@@ -2000,7 +1979,6 @@ where
 
         let m = num * m1;
         let n = num * n1;
-
 
         if m > (1usize << xr.len()) {
             panic!("The length of the left challenge is not enough");
@@ -2021,39 +1999,41 @@ where
         let xi_r1 = xi::xi_from_challenges::<F>(&xr1);
         let xr2 = &xr[lognum..(logn1 + lognum)].to_vec();
 
-
-        (0..num).into_par_iter().map(|i|{
-            let dense_mat = DenseMatCM::<I, F>{
-                shape: (m1, n1),
-                data: self.data[i].clone(),
-                _marker: PhantomData,
-            };
-            let cur = dense_mat.proj_lr(&xl2, &xr2);
-            cur * xi_l1[i] * xi_r1[i]
-        }).sum()
-
-
+        (0..num)
+            .into_par_iter()
+            .map(|i| {
+                let dense_mat = DenseMatCM::<I, F> {
+                    shape: (m1, n1),
+                    data: self.data[i].clone(),
+                    _marker: PhantomData,
+                };
+                let cur = dense_mat.proj_lr(&xl2, &xr2);
+                cur * xi_l1[i] * xi_r1[i]
+            })
+            .sum()
     }
 
-    fn to_bool_neg(&self) -> DenseMatCM<I,F> {
+    fn to_bool_neg(&self) -> DenseMatCM<I, F> {
         self.to_dense().to_bool_neg()
     }
 
-    fn bit_decomposition(&self, k: usize)
-    -> (DenseMatCM::<bool,F>,
+    fn bit_decomposition(
+        &self,
+        k: usize,
+    ) -> (
+        DenseMatCM<bool, F>,
         DenseMatCM<MyInt, F>,
-        Vec<DenseMatCM<bool,F>>) {
+        Vec<DenseMatCM<bool, F>>,
+    ) {
         self.to_dense().bit_decomposition(k)
     }
 
-    fn clamp(&self, k: usize) -> DenseMatCM<I,F> {
+    fn clamp(&self, k: usize) -> DenseMatCM<I, F> {
         self.to_dense().clamp(k)
     }
-
 }
 
-
-impl<I, F> MatOps<I, F> for SparseMat<I,F>
+impl<I, F> MatOps<I, F> for SparseMat<I, F>
 where
     I: ShortInt,
     F: PrimeField + From<I>,
@@ -2063,11 +2043,11 @@ where
         self.data = Vec::new();
     }
 
-    fn to_dense(&self) -> DenseMatCM::<I, F> {
+    fn to_dense(&self) -> DenseMatCM<I, F> {
         let m = self.shape.0;
         let n = self.shape.1;
 
-        if n & (n-1) != 0 {
+        if n & (n - 1) != 0 {
             panic!("The number of columns is not a power of 2");
         }
 
@@ -2078,18 +2058,18 @@ where
             }
         }
 
-        DenseMatCM::<I,F> {
+        DenseMatCM::<I, F> {
             shape: (m, n),
             data: data,
             _marker: PhantomData,
         }
     }
 
-    fn to_dense_myint(&self) -> DenseMatCM::<MyInt, F> {
+    fn to_dense_myint(&self) -> DenseMatCM<MyInt, F> {
         let m = self.shape.0;
         let n = self.shape.1;
 
-        if n & (n-1) != 0 {
+        if n & (n - 1) != 0 {
             panic!("The number of columns is not a power of 2");
         }
 
@@ -2100,7 +2080,7 @@ where
             }
         }
 
-        DenseMatCM::<MyInt,F> {
+        DenseMatCM::<MyInt, F> {
             shape: (m, n),
             data: data,
             _marker: PhantomData,
@@ -2131,10 +2111,11 @@ where
             panic!("The length of the left challenge is not enough");
         }
 
-        let result: Vec<std::sync::Mutex<F>> = (0..n).map(|_| std::sync::Mutex::new(F::zero())).collect();
+        let result: Vec<std::sync::Mutex<F>> =
+            (0..n).map(|_| std::sync::Mutex::new(F::zero())).collect();
 
         self.data.par_iter().for_each(|entry| {
-            if entry.0 < m && entry.1 < n{
+            if entry.0 < m && entry.1 < n {
                 let row = entry.0 as usize;
                 let col = entry.1 as usize;
                 let value = entry.2;
@@ -2145,7 +2126,8 @@ where
             }
         });
 
-        result.into_iter()
+        result
+            .into_iter()
             .map(|mutex_elem| mutex_elem.into_inner().unwrap())
             .collect()
     }
@@ -2158,8 +2140,9 @@ where
             panic!("The length of the right challenge is not enough");
         }
 
-    // Use a Vec<Mutex<F>> to lock each result element independently
-        let result: Vec<std::sync::Mutex<F>> = (0..m).map(|_| std::sync::Mutex::new(F::zero())).collect();
+        // Use a Vec<Mutex<F>> to lock each result element independently
+        let result: Vec<std::sync::Mutex<F>> =
+            (0..m).map(|_| std::sync::Mutex::new(F::zero())).collect();
 
         self.data.par_iter().for_each(|entry| {
             let row = entry.0;
@@ -2173,21 +2156,20 @@ where
             }
         });
 
-    // Extract the final result
-        result.into_iter()
+        // Extract the final result
+        result
+            .into_iter()
             .map(|mutex_elem| mutex_elem.into_inner().unwrap())
             .collect()
     }
 
     fn proj_left_challenges(&self, xl: &Vec<F>) -> Vec<F> {
-
         let xi_l = xi::xi_from_challenges::<F>(&xl);
 
         self.proj_left(&xi_l)
     }
 
     fn proj_right_challenges(&self, xr: &Vec<F>) -> Vec<F> {
-
         let xi_r = xi::xi_from_challenges::<F>(&xr);
 
         self.proj_right(&xi_r)
@@ -2210,38 +2192,42 @@ where
         linear::inner_product::<F>(&ar, &xi_l)
     }
 
-    fn to_bool_neg(&self) -> DenseMatCM<I,F> {
+    fn to_bool_neg(&self) -> DenseMatCM<I, F> {
         self.to_dense().to_bool_neg()
     }
 
     fn gen_rand(&mut self, _: usize) {
         let m = self.shape.0;
-    let n = self.shape.1; // Use usize instead of MyInt
+        let n = self.shape.1; // Use usize instead of MyInt
 
-        let data = (0..m).into_par_iter().map(|_|{
-            use rand::Rng;
-            let mut rng = rand::rng();
-            let col = rng.random_range(0..n); // 'col' is now usize
-            (col, rng.random_range(0..n), I::from_myint(1)) // return (usize, usize, I)
-        }).collect();
+        let data = (0..m)
+            .into_par_iter()
+            .map(|_| {
+                use rand::Rng;
+                let mut rng = rand::rng();
+                let col = rng.random_range(0..n); // 'col' is now usize
+                (col, rng.random_range(0..n), I::from_myint(1)) // return (usize, usize, I)
+            })
+            .collect();
 
         self.set_data(data);
     }
 
-
-    fn bit_decomposition(&self, k: usize)
-    -> (DenseMatCM::<bool,F>,
+    fn bit_decomposition(
+        &self,
+        k: usize,
+    ) -> (
+        DenseMatCM<bool, F>,
         DenseMatCM<MyInt, F>,
-        Vec<DenseMatCM<bool,F>>) {
+        Vec<DenseMatCM<bool, F>>,
+    ) {
         self.to_dense().bit_decomposition(k)
     }
 
-    fn clamp(&self, k: usize) -> DenseMatCM<I,F> {
+    fn clamp(&self, k: usize) -> DenseMatCM<I, F> {
         self.to_dense().clamp(k)
     }
-
 }
-
 
 impl<I, F> MatOps<I, F> for RotationMatIndexFormat<I, F>
 where
@@ -2253,11 +2239,11 @@ where
         self.data = Vec::new();
     }
 
-    fn to_dense(&self) -> DenseMatCM::<I, F> {
+    fn to_dense(&self) -> DenseMatCM<I, F> {
         let m = self.shape.0;
         let n = self.shape.1;
 
-        if n & (n-1) != 0 {
+        if n & (n - 1) != 0 {
             panic!("The number of columns is not a power of 2");
         }
 
@@ -2276,12 +2262,11 @@ where
         }
     }
 
-
-    fn to_dense_myint(&self) -> DenseMatCM::<MyInt, F> {
+    fn to_dense_myint(&self) -> DenseMatCM<MyInt, F> {
         let m = self.shape.0;
         let n = self.shape.1;
 
-        if n & (n-1) != 0 {
+        if n & (n - 1) != 0 {
             panic!("The number of columns is not a power of 2");
         }
 
@@ -2316,22 +2301,23 @@ where
         self.shape
     }
 
-
     fn gen_rand(&mut self, _: usize) {
         let m = self.shape.0;
         let n = self.shape.1 as MyInt;
 
-        let data = (0..m).into_par_iter().map(|_|{
-            use rand::Rng;
-            let mut rng = rand::rng();
-            rng.random_range(0..n)
-        }).collect();
+        let data = (0..m)
+            .into_par_iter()
+            .map(|_| {
+                use rand::Rng;
+                let mut rng = rand::rng();
+                rng.random_range(0..n)
+            })
+            .collect();
 
         self.set_data(data);
     }
 
     fn proj_left_challenges(&self, xl: &Vec<F>) -> Vec<F> {
-
         let xi_l = xi::xi_from_challenges::<F>(&xl);
 
         self.proj_left(&xi_l)
@@ -2345,11 +2331,7 @@ where
             panic!("The length of the left challenge is not enough");
         }
 
-        let result = std::sync::Arc::new(
-            std::sync::Mutex::new(
-                vec![F::zero(); n]
-            )
-        );
+        let result = std::sync::Arc::new(std::sync::Mutex::new(vec![F::zero(); n]));
 
         (0..m).into_par_iter().for_each(|i| {
             let idx = self.data[i];
@@ -2357,14 +2339,16 @@ where
                 let idx_usize = idx as usize;
                 // Lock the mutex to safely modify the result vector
                 if let Ok(mut result_lock) = result.lock() {
-                    result_lock[idx_usize] =
-                    result_lock[idx_usize] + l_vec[i];
+                    result_lock[idx_usize] = result_lock[idx_usize] + l_vec[i];
                 }
             }
         });
 
         // Unlock the mutex and return the result
-        std::sync::Arc::try_unwrap(result).unwrap().into_inner().unwrap()
+        std::sync::Arc::try_unwrap(result)
+            .unwrap()
+            .into_inner()
+            .unwrap()
     }
 
     fn proj_right_challenges(&self, xr: &Vec<F>) -> Vec<F> {
@@ -2381,15 +2365,18 @@ where
             panic!("The length of the right challenge is not enough");
         }
 
-        (0..m).into_par_iter().map(|i|{
-            let idx = self.data[i];
-            if idx >= 0 {
-                let idx = idx as usize;
-                r_vec[idx]
-            } else {
-                F::zero()
-            }
-        }).collect::<Vec<F>>()
+        (0..m)
+            .into_par_iter()
+            .map(|i| {
+                let idx = self.data[i];
+                if idx >= 0 {
+                    let idx = idx as usize;
+                    r_vec[idx]
+                } else {
+                    F::zero()
+                }
+            })
+            .collect::<Vec<F>>()
     }
 
     fn proj_lr(&self, xl: &Vec<F>, xr: &Vec<F>) -> F {
@@ -2411,22 +2398,25 @@ where
         result
     }
 
-    fn to_bool_neg(&self) -> DenseMatCM<I,F> {
+    fn to_bool_neg(&self) -> DenseMatCM<I, F> {
         self.to_dense().to_bool_neg()
     }
 
-    fn bit_decomposition(&self, k: usize)
-    -> (DenseMatCM::<bool,F>,
+    fn bit_decomposition(
+        &self,
+        k: usize,
+    ) -> (
+        DenseMatCM<bool, F>,
         DenseMatCM<MyInt, F>,
-        Vec<DenseMatCM<bool,F>>) {
+        Vec<DenseMatCM<bool, F>>,
+    ) {
         self.to_dense().bit_decomposition(k)
     }
 
-    fn clamp(&self, k: usize) -> DenseMatCM<I,F> {
+    fn clamp(&self, k: usize) -> DenseMatCM<I, F> {
         self.to_dense().clamp(k)
     }
 }
-
 
 impl ShortInt for MyInt {}
 impl ShortInt for bool {}
@@ -2497,7 +2487,11 @@ where
     fn bit_decomposition(
         &self,
         _k: usize,
-    ) -> (DenseMatCM<bool, F>, DenseMatCM<MyInt, F>, Vec<DenseMatCM<bool, F>>) {
+    ) -> (
+        DenseMatCM<bool, F>,
+        DenseMatCM<MyInt, F>,
+        Vec<DenseMatCM<bool, F>>,
+    ) {
         panic!("DenseMatFieldCM does not support bit_decomposition()");
     }
 
@@ -2564,7 +2558,6 @@ impl AddAB<bool> for bool {
     }
 }
 
-
 pub trait AddAB<B> {
     fn add_mix(self, b: B) -> Self;
 }
@@ -2613,12 +2606,57 @@ impl GetBit for bool {
     }
 }
 
+impl FromToMyInt for i16 {
+    fn from_myint(num: MyInt) -> Self {
+        i16::from(num)
+    }
+
+    fn to_myint(&self) -> MyInt {
+        MyInt::try_from(*self).expect("i16 value does not fit the legacy MyInt type")
+    }
+}
+
+impl MulAB<i16> for i16 {
+    fn mul_mix(self, value: i16) -> Self {
+        self * value
+    }
+}
+
+impl MulAB<bool> for i16 {
+    fn mul_mix(self, value: bool) -> Self {
+        if value {
+            self
+        } else {
+            0
+        }
+    }
+}
+
+impl AddAB<i16> for i16 {
+    fn add_mix(self, value: i16) -> Self {
+        self + value
+    }
+}
+
+impl AddAB<bool> for i16 {
+    fn add_mix(self, value: bool) -> Self {
+        self + i16::from(value)
+    }
+}
+
+impl GetBit for i16 {
+    fn get_bit(&self, index: usize) -> bool {
+        let mask = 1_i16 << index;
+        (self & mask) != 0
+    }
+}
+
+impl ShortInt for i16 {}
+
 // Reshape a vector into a col major matrix
-pub fn reshape_vec<T> (
-    vec: &Vec<T>,
-    shape: (usize, usize)
-) -> Vec<Vec<T>>
-where T: Clone,
+pub fn reshape_vec<T>(vec: &Vec<T>, shape: (usize, usize)) -> Vec<Vec<T>>
+where
+    T: Clone,
 {
     let m = shape.0;
     let n = shape.1;
@@ -2630,7 +2668,7 @@ where T: Clone,
     let mut mat = Vec::new();
 
     for i in 0..n {
-        let row = vec[i*m..(i+1)*m].to_vec();
+        let row = vec[i * m..(i + 1) * m].to_vec();
         mat.push(row);
     }
 

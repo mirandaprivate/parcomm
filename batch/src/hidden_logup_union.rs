@@ -435,14 +435,14 @@ fn union_shape<'a, Column: 'a>(
 fn prover_column_len(column: &MixedLogUpColumn<'_>) -> usize {
     match column {
         MixedLogUpColumn::Hidden(table) => table.committed.logical_len,
-        MixedLogUpColumn::Public(table) => table.values.len(),
+        MixedLogUpColumn::Public(table) => table.logical_len(),
     }
 }
 
 fn verifier_column_len(column: &MixedLogUpColumnStatement<'_>) -> usize {
     match column {
         MixedLogUpColumnStatement::Hidden(table) => table.logical_len,
-        MixedLogUpColumnStatement::Public(table) => table.values.len(),
+        MixedLogUpColumnStatement::Public(table) => table.logical_len(),
     }
 }
 
@@ -511,21 +511,19 @@ fn append_prover_parts<'source, 'borrow>(
 {
     for part in parts {
         let mut normalized = Vec::with_capacity(max_width + 1);
-        normalized.push(MixedLogUpColumn::Public(PublicRelationTable {
-            values: family_tag,
-        }));
+        normalized.push(MixedLogUpColumn::Public(PublicRelationTable::Dense(
+            family_tag,
+        )));
         normalized.extend(part.iter().map(|column| match column {
             MixedLogUpColumn::Hidden(table) => MixedLogUpColumn::Hidden(HiddenRelationTable {
                 values: table.values,
                 committed: table.committed,
             }),
-            MixedLogUpColumn::Public(table) => MixedLogUpColumn::Public(PublicRelationTable {
-                values: table.values,
-            }),
+            MixedLogUpColumn::Public(table) => MixedLogUpColumn::Public(*table),
         }));
         normalized.extend(
             (part.len()..max_width)
-                .map(|_| MixedLogUpColumn::Public(PublicRelationTable { values: zero })),
+                .map(|_| MixedLogUpColumn::Public(PublicRelationTable::Dense(zero))),
         );
         output.push(normalized);
     }
@@ -542,16 +540,16 @@ fn append_verifier_parts<'source, 'borrow>(
 {
     for part in parts {
         let mut normalized = Vec::with_capacity(max_width + 1);
-        normalized.push(MixedLogUpColumnStatement::Public(PublicRelationTable {
-            values: family_tag,
-        }));
+        normalized.push(MixedLogUpColumnStatement::Public(
+            PublicRelationTable::Dense(family_tag),
+        ));
         normalized.extend(part.iter().map(|column| match column {
             MixedLogUpColumnStatement::Hidden(table) => MixedLogUpColumnStatement::Hidden(*table),
             MixedLogUpColumnStatement::Public(table) => MixedLogUpColumnStatement::Public(*table),
         }));
         normalized.extend(
             (part.len()..max_width)
-                .map(|_| MixedLogUpColumnStatement::Public(PublicRelationTable { values: zero })),
+                .map(|_| MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(zero))),
         );
         output.push(normalized);
     }
@@ -596,7 +594,7 @@ mod tests {
     fn prover_public_parts<'a>(columns: &'a [Vec<Fr>]) -> Vec<Vec<MixedLogUpColumn<'a>>> {
         vec![columns
             .iter()
-            .map(|values| MixedLogUpColumn::Public(PublicRelationTable { values }))
+            .map(|values| MixedLogUpColumn::Public(PublicRelationTable::Dense(values)))
             .collect()]
     }
 
@@ -605,7 +603,7 @@ mod tests {
     ) -> Vec<Vec<MixedLogUpColumnStatement<'a>>> {
         vec![columns
             .iter()
-            .map(|values| MixedLogUpColumnStatement::Public(PublicRelationTable { values }))
+            .map(|values| MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(values)))
             .collect()]
     }
 
@@ -620,11 +618,11 @@ mod tests {
     ) {
         let public = vec![Fr::from(5_u64); query.values.len()];
         let query_parts = vec![vec![
-            MixedLogUpColumn::Public(PublicRelationTable { values: &public }),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&public)),
             MixedLogUpColumn::Hidden(query),
         ]];
         let table_parts = vec![vec![
-            MixedLogUpColumn::Public(PublicRelationTable { values: &public }),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&public)),
             MixedLogUpColumn::Hidden(table),
         ]];
         let families = [HiddenLogUpUnionProverFamily {
@@ -650,11 +648,11 @@ mod tests {
     ) -> HiddenLogUpVerifierOpeningState<'a> {
         let public = vec![Fr::from(5_u64); query.logical_len];
         let query_parts = vec![vec![
-            MixedLogUpColumnStatement::Public(PublicRelationTable { values: &public }),
+            MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(&public)),
             MixedLogUpColumnStatement::Hidden(query),
         ]];
         let table_parts = vec![vec![
-            MixedLogUpColumnStatement::Public(PublicRelationTable { values: &public }),
+            MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(&public)),
             MixedLogUpColumnStatement::Hidden(table),
         ]];
         let families = [HiddenLogUpUnionVerifierFamily {

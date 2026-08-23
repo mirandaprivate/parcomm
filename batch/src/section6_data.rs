@@ -1,18 +1,24 @@
 //! Prover-side data construction for the Section 6 point compiler.
 //!
-//! This module follows the fixed-parameter registered-mask variant of the
-//! specification: every source matrix is at most `2^m x 2^m` with `m = 15`,
-//! and one collection contains at most `2^d` matrices with `d = 10`.
-//! Registration stores exactly three Boolean mask matrices:
+//! This module follows the Boolean-mask shape encoding of the specification.
+//! Every point is zero-padded to `m` coordinates per side, where `m` is the
+//! public log bound on the matrix dimensions, and the persistent shape
+//! encoding consists of two Boolean matrices over the bucket-row cover:
 //!
-//! * `D_eta   in {0,1}^{T x (2m+d)}` - fixed offset bits of every bucket
-//!   (column offsets, then row offsets) followed by the bits of `tau - 1`;
-//! * `D_Z     in {0,1}^{T x 2m}`     - selectors of the varying coordinates;
-//! * `D_eta'  in {0,1}^{T x l}`      - bits of the global bucket offsets.
+//! * `D_eta in {0,1}^{T x (2m+d)}` - the offset bits of `alpha_r` then
+//!   `alpha_l`, followed by the bits of the zero-based source index;
+//! * `D_Z   in {0,1}^{T x 2m}`     - the prefix masks `1^{gamma_r} 0..`
+//!   then `1^{gamma_l} 0..` selecting the varying coordinates.
 //!
-//! No shape-validity relation is constructed anywhere: the masks are treated
-//! as registered inputs, and the per-opening argument only proves that the
-//! compiled TBV is consistent with them.
+//! The public layout additionally determines two derived masks:
+//!
+//! * `D_eta' in {0,1}^{T x ell}` - the bit decompositions of the global
+//!   bucket offsets, with `ell = log_2 K`;
+//! * `D_Z'   in {0,1}^{T x 2m}`  - the prefix masks `1^{log_2 k_j} 0..`.
+//!
+//! The layout `L = (K, N, T, {k_j}, m, d)` is public; only `D_eta` and
+//! `D_Z` (that is, which source matrix each bucket reads and where) stay
+//! private.
 //!
 //! This module intentionally stops at witness construction. It does not
 //! commit any table, append anything to a transcript, or orchestrate LogUp
@@ -62,50 +68,35 @@ impl Display for Section6DataError {
 
 impl std::error::Error for Section6DataError {}
 
-/// Fixed per-side point width `m`: every source matrix is at most
-/// `2^m x 2^m`.
-pub const SECTION6_FIXED_POINT_LOG: usize = 15;
-
-/// Fixed source-count width `d`: one collection has at most `2^d` matrices.
-pub const SECTION6_FIXED_MATRIX_LOG: usize = 10;
-
-/// Width `2m` shared by `D_Z`, `X`, `X'`, `sigma`, and `Z~`.
-pub const SECTION6_FIXED_LOCAL_WIDTH: usize = 2 * SECTION6_FIXED_POINT_LOG;
-
-/// Width `2m + d` of `D_eta` and of the eta prefix matrix `P`.
-pub const SECTION6_FIXED_ETA_WIDTH: usize = SECTION6_FIXED_LOCAL_WIDTH + SECTION6_FIXED_MATRIX_LOG;
-
-/// One private per-matrix MLE claim with fixed-width padded points.
+/// One private per-matrix MLE claim with points padded to `m = log_2 K`.
 ///
-/// Points are zero-padded to `m` coordinates per side. Because the tensor
-/// span is monomial (`weight(i) = prod_{bit set in i} x_bit`), the padded
-/// coordinates never contribute to the claimed value.
+/// Because the tensor span is monomial (`weight(i) = prod_{bit set in i}
+/// x_bit`), the padded coordinates never contribute to the claimed value.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Section6MaskMatrixClaim<F: PrimeField> {
-    /// Left (row) point zero-padded to `SECTION6_FIXED_POINT_LOG`.
+pub struct Section6MatrixClaim<F: PrimeField> {
+    /// Left (row) point zero-padded to `m` coordinates.
     pub left_point: Vec<F>,
-    /// Right (column) point zero-padded to `SECTION6_FIXED_POINT_LOG`.
+    /// Right (column) point zero-padded to `m` coordinates.
     pub right_point: Vec<F>,
     pub value: F,
 }
 
-impl<F: PrimeField> Section6MaskMatrixClaim<F> {
+impl<F: PrimeField> Section6MatrixClaim<F> {
     pub fn from_unpadded(
+        point_log: usize,
         left_point: &[F],
         right_point: &[F],
         value: F,
     ) -> Result<Self, Section6DataError> {
-        if left_point.len() > SECTION6_FIXED_POINT_LOG
-            || right_point.len() > SECTION6_FIXED_POINT_LOG
-        {
+        if left_point.len() > point_log || right_point.len() > point_log {
             return Err(Section6DataError::InvalidClaim(format!(
-                "claim points must fit {SECTION6_FIXED_POINT_LOG} coordinates per side"
+                "claim points must fit {point_log} coordinates per side"
             )));
         }
         let mut left = left_point.to_vec();
         let mut right = right_point.to_vec();
-        left.resize(SECTION6_FIXED_POINT_LOG, F::zero());
-        right.resize(SECTION6_FIXED_POINT_LOG, F::zero());
+        left.resize(point_log, F::zero());
+        right.resize(point_log, F::zero());
         Ok(Self {
             left_point: left,
             right_point: right,
@@ -113,102 +104,24 @@ impl<F: PrimeField> Section6MaskMatrixClaim<F> {
         })
     }
 
-    pub fn validate(&self) -> Result<(), Section6DataError> {
-        if self.left_point.len() != SECTION6_FIXED_POINT_LOG
-            || self.right_point.len() != SECTION6_FIXED_POINT_LOG
-        {
+    pub fn validate(&self, point_log: usize) -> Result<(), Section6DataError> {
+        if self.left_point.len() != point_log || self.right_point.len() != point_log {
             return Err(Section6DataError::InvalidClaim(format!(
-                "claim points must have exactly {SECTION6_FIXED_POINT_LOG} coordinates per side"
+                "claim points must have exactly {point_log} coordinates per side"
             )));
         }
         Ok(())
     }
 }
 
-/// Shape-hiding public layout shared with the verifier.
+/// The public layout `L = (K, N, T, {k_j})` shared with the verifier.
 ///
-/// The individual bucket sizes, bucket offsets, and source indices stay
-/// private; the verifier only learns the counts and the global BVA cover.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Section6PublicLayout {
-    /// Number of original matrices `t`.
-    pub matrix_count: usize,
-    /// Logical BVA length `K` including the implicit final zero suffix.
-    pub logical_len: usize,
-    /// Number of physically stored entries `N`.
-    pub active_len: usize,
-    /// Number of real dyadic buckets `T`.
-    pub bucket_count: usize,
-    /// `l = log_2(K)`, the length of the Packed EO point.
-    pub global_log: usize,
-    /// Low-bit witness width used by Packed EO-LiteBullet.
-    pub bit_width: usize,
-}
-
-impl Section6PublicLayout {
-    pub fn validate(&self) -> Result<(), Section6DataError> {
-        if self.matrix_count == 0 || self.bucket_count == 0 || self.active_len == 0 {
-            return Err(Section6DataError::InvalidLayout(
-                "matrix, bucket, and entry counts must be nonzero".to_owned(),
-            ));
-        }
-        if self.bit_width == 0 || self.bit_width > 8 {
-            return Err(Section6DataError::InvalidLayout(format!(
-                "bit_width must be in 1..=8, got {}",
-                self.bit_width
-            )));
-        }
-        if !self.logical_len.is_power_of_two()
-            || self.logical_len != next_power_of_two(self.active_len)?
-            || self.global_log != self.logical_len.ilog2() as usize
-        {
-            return Err(Section6DataError::InvalidLayout(
-                "logical_len must be next_power_of_two(active_len)".to_owned(),
-            ));
-        }
-        if self.bucket_count < self.matrix_count {
-            return Err(Section6DataError::InvalidLayout(
-                "every matrix must contribute at least one bucket".to_owned(),
-            ));
-        }
-        if self.global_log == 0 {
-            return Err(Section6DataError::InvalidLayout(
-                "the compiled protocol requires at least two BVA entries".to_owned(),
-            ));
-        }
-        self.validate_fixed_caps()
-    }
-
-    /// Enforce the fixed protocol caps `t <= 2^d` and `N <= 2^{2m+d}`.
-    pub fn validate_fixed_caps(&self) -> Result<(), Section6DataError> {
-        if self.matrix_count > 1 << SECTION6_FIXED_MATRIX_LOG {
-            return Err(Section6DataError::InvalidLayout(format!(
-                "matrix_count {} exceeds the fixed bound 2^{SECTION6_FIXED_MATRIX_LOG}",
-                self.matrix_count
-            )));
-        }
-        if self.global_log > SECTION6_FIXED_ETA_WIDTH {
-            return Err(Section6DataError::InvalidLayout(format!(
-                "global log {} exceeds the fixed 2^{SECTION6_FIXED_ETA_WIDTH} collection cover",
-                self.global_log
-            )));
-        }
-        Ok(())
-    }
-
-    /// Power-of-two bucket-row cover shared by every auxiliary matrix.
-    pub fn row_cover(&self) -> Result<usize, Section6DataError> {
-        next_power_of_two(self.bucket_count)
-    }
-
-    /// Width of `Z`, `Z'`, and `D_Z'`: no bucket has more than `min(2m, l)`
-    /// varying coordinates.
-    pub fn local_width(&self) -> usize {
-        SECTION6_FIXED_LOCAL_WIDTH.min(self.global_log)
-    }
-}
-
-/// The prover-side layout `L = (K, N, T, {k_j})` with the private bucket list.
+/// The bucket sizes (and hence their global offsets) are public; which
+/// source matrix each bucket reads, and at which in-source offset, stays
+/// private inside [`PrivateShapeMetadata`].
+///
+/// The bucket-size list serializes as run-length pairs `(size, count)`, so
+/// the encoded statement stays `O(log K)` even for millions of buckets.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Section6Layout {
     /// Number of original matrices and point rows.
@@ -220,12 +133,56 @@ pub struct Section6Layout {
     /// Number of real dyadic buckets `T`.
     pub bucket_count: usize,
     /// Non-increasing power-of-two bucket lengths in dense BVA order.
+    #[serde(with = "bucket_sizes_rle")]
     pub bucket_sizes: Vec<usize>,
-    /// `l = log_2(K)`, the length of the Packed EO point.
+    /// `ell = log_2(K)`, the Packed EO point length and `D_eta'` width.
     pub global_log: usize,
+    /// `m`, the public per-side point width: every matrix fits `2^m x 2^m`.
+    pub point_width: usize,
+    /// `d`, the public source-index width: at most `2^d` matrices.
+    pub tau_width: usize,
     /// Low-bit witness width used by Packed EO-LiteBullet.
     pub bit_width: usize,
 }
+
+/// Run-length serialization of the ordered bucket sizes.
+mod bucket_sizes_rle {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    /// Hard cap against decompression bombs; real layouts stay far below.
+    const MAX_TOTAL_BUCKETS: u64 = 1 << 40;
+
+    pub fn serialize<S: Serializer>(values: &[usize], serializer: S) -> Result<S::Ok, S::Error> {
+        let mut runs: Vec<(u64, u64)> = Vec::new();
+        for &value in values {
+            match runs.last_mut() {
+                Some((size, count)) if *size == value as u64 => *count += 1,
+                _ => runs.push((value as u64, 1)),
+            }
+        }
+        runs.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<usize>, D::Error> {
+        let runs = Vec::<(u64, u64)>::deserialize(deserializer)?;
+        let mut total = 0_u64;
+        for &(_, count) in &runs {
+            total = total
+                .checked_add(count)
+                .filter(|&sum| sum <= MAX_TOTAL_BUCKETS)
+                .ok_or_else(|| serde::de::Error::custom("bucket run-length overflow"))?;
+        }
+        let mut values = Vec::with_capacity(total as usize);
+        for (size, count) in runs {
+            values.extend(std::iter::repeat_n(size as usize, count as usize));
+        }
+        Ok(values)
+    }
+}
+
+/// The verifier's view of the layout. Since the bucket-size list is public
+/// in the registered-shape variant, this is the full layout.
+pub type Section6PublicLayout = Section6Layout;
 
 impl Section6Layout {
     pub fn new(
@@ -233,6 +190,8 @@ impl Section6Layout {
         logical_len: usize,
         active_len: usize,
         bucket_sizes: Vec<usize>,
+        point_width: usize,
+        tau_width: usize,
         bit_width: usize,
     ) -> Result<Self, Section6DataError> {
         if matrix_count == 0 {
@@ -266,6 +225,31 @@ impl Section6Layout {
                 "logical_len must be next_power_of_two(active_len): expected {expected_logical}, got {logical_len}"
             )));
         }
+        if logical_len < 2 {
+            return Err(Section6DataError::InvalidLayout(
+                "the compiled protocol requires at least two BVA entries".to_owned(),
+            ));
+        }
+        if bucket_sizes.len() < matrix_count {
+            return Err(Section6DataError::InvalidLayout(
+                "every matrix must contribute at least one bucket".to_owned(),
+            ));
+        }
+        if point_width == 0 || point_width >= usize::BITS as usize / 2 {
+            return Err(Section6DataError::InvalidLayout(format!(
+                "point width m={point_width} is out of range"
+            )));
+        }
+        if tau_width == 0 || tau_width >= usize::BITS as usize {
+            return Err(Section6DataError::InvalidLayout(format!(
+                "source-index width d={tau_width} is out of range"
+            )));
+        }
+        if matrix_count > 1_usize << tau_width {
+            return Err(Section6DataError::InvalidLayout(format!(
+                "{matrix_count} matrices exceed the 2^{tau_width} source bound"
+            )));
+        }
 
         let mut offset = 0_usize;
         let mut previous = usize::MAX;
@@ -273,6 +257,11 @@ impl Section6Layout {
             if !size.is_power_of_two() {
                 return Err(Section6DataError::InvalidLayout(format!(
                     "bucket {bucket} has non-power-of-two size {size}"
+                )));
+            }
+            if size.ilog2() as usize > 2 * point_width {
+                return Err(Section6DataError::InvalidLayout(format!(
+                    "bucket {bucket} size {size} exceeds the 2^{{2m}} bound"
                 )));
             }
             if size > previous {
@@ -317,6 +306,8 @@ impl Section6Layout {
             bucket_count: bucket_sizes.len(),
             bucket_sizes,
             global_log: logical_len.ilog2() as usize,
+            point_width,
+            tau_width,
             bit_width,
         })
     }
@@ -329,6 +320,8 @@ impl Section6Layout {
             self.logical_len,
             self.active_len,
             self.bucket_sizes.clone(),
+            self.point_width,
+            self.tau_width,
             self.bit_width,
         )?;
         if &canonical != self {
@@ -339,33 +332,33 @@ impl Section6Layout {
         Ok(())
     }
 
-    /// The shape-hiding projection shared with the verifier.
+    /// The verifier's view. The registered-shape layout is entirely public.
     pub fn public(&self) -> Section6PublicLayout {
-        Section6PublicLayout {
-            matrix_count: self.matrix_count,
-            logical_len: self.logical_len,
-            active_len: self.active_len,
-            bucket_count: self.bucket_count,
-            global_log: self.global_log,
-            bit_width: self.bit_width,
-        }
-    }
-
-    /// Enforce the fixed protocol caps on the private bucket list.
-    pub fn validate_fixed_caps(&self) -> Result<(), Section6DataError> {
-        self.public().validate_fixed_caps()?;
-        if let Some(&largest) = self.bucket_sizes.first() {
-            if largest > 1 << SECTION6_FIXED_LOCAL_WIDTH {
-                return Err(Section6DataError::InvalidLayout(format!(
-                    "bucket size {largest} exceeds the fixed 2^{SECTION6_FIXED_LOCAL_WIDTH} matrix cover"
-                )));
-            }
-        }
-        Ok(())
+        self.clone()
     }
 
     pub fn from_descriptor(
         descriptor: &DenseBvaDescriptor,
+        bit_width: usize,
+    ) -> Result<Self, Section6DataError> {
+        let point_width = descriptor
+            .matrix_shapes()
+            .iter()
+            .map(|&(rows, cols)| {
+                let side = rows.max(cols).max(2);
+                side.next_power_of_two().ilog2() as usize
+            })
+            .max()
+            .unwrap_or(1);
+        let tau_width = descriptor.matrix_count().max(2).next_power_of_two().ilog2() as usize;
+        Self::from_descriptor_with_widths(descriptor, point_width, tau_width, bit_width)
+    }
+
+    /// Build a layout with explicit public width bounds `m` and `d`.
+    pub fn from_descriptor_with_widths(
+        descriptor: &DenseBvaDescriptor,
+        point_width: usize,
+        tau_width: usize,
         bit_width: usize,
     ) -> Result<Self, Section6DataError> {
         let bucket_sizes = descriptor
@@ -376,8 +369,10 @@ impl Section6Layout {
         let layout = Self::new(
             descriptor.matrix_count(),
             descriptor.logical_len(),
-            descriptor.physical_len(),
+            descriptor.layout().active_len(),
             bucket_sizes,
+            point_width,
+            tau_width,
             bit_width,
         )?;
         layout.validate_descriptor(descriptor)?;
@@ -403,9 +398,48 @@ impl Section6Layout {
             .collect()
     }
 
+    /// Public local point lengths `gamma'_j = log_2 k_j`.
+    pub fn gamma_prime(&self) -> Vec<usize> {
+        self.bucket_sizes
+            .iter()
+            .map(|size| size.ilog2() as usize)
+            .collect()
+    }
+
     /// Power-of-two bucket-row cover shared by every auxiliary matrix.
     pub fn row_cover(&self) -> Result<usize, Section6DataError> {
         next_power_of_two(self.bucket_count)
+    }
+
+    /// Per-side point width `m`, the public matrix-dimension log bound.
+    pub fn point_log(&self) -> usize {
+        self.point_width
+    }
+
+    /// Source-index width `d`: at most `2^d` matrices.
+    pub fn tau_log(&self) -> usize {
+        self.tau_width
+    }
+
+    /// Width `2m` shared by `D_Z`, `X`, `X'`, `Z`, and `D_Z'`.
+    pub fn pair_width(&self) -> usize {
+        2 * self.point_width
+    }
+
+    /// Width `2m + d` of `D_eta` and the eta grand-product chain.
+    pub fn eta_width(&self) -> usize {
+        2 * self.point_width + self.tau_width
+    }
+
+    /// Width of `Z` and the local restriction: every genuine local point has
+    /// `log_2 k_j = gamma_l + gamma_r <= 2m` coordinates.
+    pub fn local_width(&self) -> usize {
+        2 * self.point_width
+    }
+
+    /// Width `ell = log_2 K` of `D_eta'` and the Packed EO point `y`.
+    pub fn offset_width(&self) -> usize {
+        self.global_log
     }
 
     pub fn validate_descriptor(
@@ -414,7 +448,7 @@ impl Section6Layout {
     ) -> Result<(), Section6DataError> {
         if descriptor.matrix_count() != self.matrix_count
             || descriptor.logical_len() != self.logical_len
-            || descriptor.physical_len() != self.active_len
+            || descriptor.layout().active_len() != self.active_len
             || descriptor.bucket_count() != self.bucket_count
             || descriptor.layout().bucket_sizes() != self.bucket_sizes
             || descriptor.layout().vector_lengths() != self.bucket_sizes
@@ -614,17 +648,29 @@ impl PrivateShapeMetadata {
                 )));
             }
             let source_shape = descriptor.matrix_shapes()[bucket.matrix()];
-            let row_end = bucket
+            let logical_row_end = bucket
                 .row_offset()
                 .checked_add(bucket.row_len())
                 .ok_or(Section6DataError::LengthOverflow)?;
-            let col_end = bucket
+            let logical_col_end = bucket
                 .col_offset()
                 .checked_add(bucket.col_len())
                 .ok_or(Section6DataError::LengthOverflow)?;
-            if row_end > source_shape.0 || col_end > source_shape.1 {
+            let physical_row_end = bucket
+                .row_offset()
+                .checked_add(bucket.physical_row_len())
+                .ok_or(Section6DataError::LengthOverflow)?;
+            let physical_col_end = bucket
+                .col_offset()
+                .checked_add(bucket.physical_col_len())
+                .ok_or(Section6DataError::LengthOverflow)?;
+            if bucket.row_offset() >= source_shape.0
+                || bucket.col_offset() >= source_shape.1
+                || physical_row_end != logical_row_end.min(source_shape.0)
+                || physical_col_end != logical_col_end.min(source_shape.1)
+            {
                 return Err(Section6DataError::InvalidMetadata(format!(
-                    "bucket {bucket_index} lies outside source matrix {}",
+                    "bucket {bucket_index} has an invalid physical intersection with source matrix {}",
                     bucket.matrix()
                 )));
             }
@@ -692,13 +738,13 @@ impl PrivateShapeMetadata {
         Ok(())
     }
 
-    /// Validate one bucket row against the fixed caps and the layout.
-    fn validate_fixed_bucket(
+    /// Validate one bucket row against the dynamic width `m = log_2 K`.
+    fn validate_bucket(
         &self,
         layout: &Section6Layout,
         bucket: usize,
     ) -> Result<(), Section6DataError> {
-        let m = SECTION6_FIXED_POINT_LOG;
+        let m = layout.point_log();
         let source = self.tau[bucket];
         if source == 0 || source > layout.matrix_count {
             return Err(Section6DataError::InvalidMetadata(format!(
@@ -731,7 +777,7 @@ impl PrivateShapeMetadata {
             .ok_or(Section6DataError::LengthOverflow)?;
         if row_end > 1 << m || col_end > 1 << m {
             return Err(Section6DataError::InvalidMetadata(format!(
-                "bucket {bucket} lies outside the fixed 2^{m} x 2^{m} matrix cover"
+                "bucket {bucket} lies outside the 2^{m} x 2^{m} point cover"
             )));
         }
         if !self.alpha_l[bucket].is_multiple_of(row_len)
@@ -744,9 +790,11 @@ impl PrivateShapeMetadata {
         Ok(())
     }
 
-    fn validate_fixed(&self, layout: &Section6Layout) -> Result<(), Section6DataError> {
+    pub(crate) fn validate_dynamic(
+        &self,
+        layout: &Section6Layout,
+    ) -> Result<(), Section6DataError> {
         layout.validate()?;
-        layout.validate_fixed_caps()?;
         self.validate_column_lengths()?;
         if self.tau.len() != layout.bucket_count {
             return Err(Section6DataError::InvalidMetadata(format!(
@@ -756,217 +804,206 @@ impl PrivateShapeMetadata {
             )));
         }
         for bucket in 0..layout.bucket_count {
-            self.validate_fixed_bucket(layout, bucket)?;
+            self.validate_bucket(layout, bucket)?;
         }
         Ok(())
     }
 
-    /// Little-endian `D_eta` bit at `(bucket, coordinate)`: column-offset bits
-    /// first, then row-offset bits, then the bits of `tau - 1`.
-    fn eta_mask_bit(&self, bucket: usize, coordinate: usize) -> bool {
-        let m = SECTION6_FIXED_POINT_LOG;
-        if coordinate < m {
+    /// Offset bit of `D_eta` at `(bucket, coordinate)`: the bits of `alpha_r`
+    /// occupy positions `[0, m)` and the bits of `alpha_l` positions
+    /// `[m, 2m)`, matching the column split `X = (X_r | X_l)`.
+    pub(crate) fn offset_bit(&self, bucket: usize, coordinate: usize, point_log: usize) -> bool {
+        if coordinate < point_log {
             (self.alpha_r[bucket] >> coordinate) & 1 == 1
-        } else if coordinate < SECTION6_FIXED_LOCAL_WIDTH {
-            (self.alpha_l[bucket] >> (coordinate - m)) & 1 == 1
         } else {
-            ((self.tau[bucket] - 1) >> (coordinate - SECTION6_FIXED_LOCAL_WIDTH)) & 1 == 1
+            (self.alpha_l[bucket] >> (coordinate - point_log)) & 1 == 1
         }
     }
 
-    /// `D_Z` bit at `(bucket, coordinate)`: varying column coordinates first,
-    /// then varying row coordinates.
-    fn local_mask_bit(&self, bucket: usize, coordinate: usize) -> bool {
-        let m = SECTION6_FIXED_POINT_LOG;
-        if coordinate < m {
+    /// Bit of `D_eta` at `(bucket, coordinate)` over the full `2m + d` row:
+    /// offset bits first, then the bits of the zero-based source index.
+    pub(crate) fn eta_bit(&self, bucket: usize, coordinate: usize, point_log: usize) -> bool {
+        if coordinate < 2 * point_log {
+            self.offset_bit(bucket, coordinate, point_log)
+        } else {
+            let bit = coordinate - 2 * point_log;
+            ((self.tau[bucket] - 1) >> bit) & 1 == 1
+        }
+    }
+
+    /// Bit of `D_Z` at `(bucket, coordinate)`: the prefix masks
+    /// `1^{gamma_r} 0..` then `1^{gamma_l} 0..`.
+    pub(crate) fn z_bit(&self, bucket: usize, coordinate: usize, point_log: usize) -> bool {
+        if coordinate < point_log {
             coordinate < self.gamma_r[bucket]
         } else {
-            coordinate - m < self.gamma_l[bucket]
+            coordinate - point_log < self.gamma_l[bucket]
         }
     }
 }
 
-/// The three registered Boolean mask matrices `D_eta`, `D_Z`, and `D_eta'`.
+/// A compact column-major Boolean matrix stored one byte per entry.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Section6RegisteredMasks<F: PrimeField> {
-    /// Fixed-coordinate selector, logical shape `T x (2m+d)`.
-    pub d_eta: PaddedFieldMatrix<F>,
-    /// Varying-coordinate selector, logical shape `T x 2m`.
-    pub d_z: PaddedFieldMatrix<F>,
-    /// Global-offset bits, logical shape `T x l`.
-    pub d_eta_prime: PaddedFieldMatrix<F>,
+pub struct BooleanMask {
+    pub rows: usize,
+    pub cols: usize,
+    bits: Vec<u8>,
 }
 
-impl<F: PrimeField> Section6RegisteredMasks<F> {
-    /// Construct the three registered masks over the shared bucket-row cover.
+impl BooleanMask {
+    pub fn from_fn(
+        rows: usize,
+        cols: usize,
+        mut bit: impl FnMut(usize, usize) -> bool,
+    ) -> Result<Self, Section6DataError> {
+        let len = rows
+            .checked_mul(cols)
+            .ok_or(Section6DataError::LengthOverflow)?;
+        let mut bits = vec![0_u8; len];
+        for col in 0..cols {
+            let start = col * rows;
+            for row in 0..rows {
+                bits[start + row] = u8::from(bit(row, col));
+            }
+        }
+        Ok(Self { rows, cols, bits })
+    }
+
+    pub fn bit(&self, row: usize, col: usize) -> bool {
+        self.bits[col * self.rows + row] != 0
+    }
+
+    /// One column materialized over the shared power-of-two row cover.
+    pub fn column_field_values<F: PrimeField>(
+        &self,
+        col: usize,
+        cover: usize,
+    ) -> Result<Vec<F>, Section6DataError> {
+        if col >= self.cols || cover < self.rows || !cover.is_power_of_two() {
+            return Err(Section6DataError::InvalidLayout(format!(
+                "mask column {col} does not fit cover {cover}"
+            )));
+        }
+        let start = col * self.rows;
+        let mut values = vec![F::zero(); cover];
+        for (row, value) in values[..self.rows].iter_mut().enumerate() {
+            if self.bits[start + row] != 0 {
+                *value = F::one();
+            }
+        }
+        Ok(values)
+    }
+}
+
+/// The two private registered shape masks `D_eta` and `D_Z`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Section6ShapeMasks {
+    /// `T x (2m + d)`: offset bits of `alpha_r`, `alpha_l`, then source bits.
+    pub d_eta: BooleanMask,
+    /// `T x 2m`: prefix masks `1^{gamma_r} 0..` then `1^{gamma_l} 0..`.
+    pub d_z: BooleanMask,
+}
+
+impl Section6ShapeMasks {
     pub fn from_metadata(
         layout: &Section6Layout,
         metadata: &PrivateShapeMetadata,
     ) -> Result<Self, Section6DataError> {
-        metadata.validate_fixed(layout)?;
+        metadata.validate_dynamic(layout)?;
         let rows = layout.bucket_count;
-        let cover = layout.row_cover()?;
-        let d_eta =
-            PaddedFieldMatrix::from_fn_with_cover(rows, cover, SECTION6_FIXED_ETA_WIDTH, |j, q| {
-                bool_to_field(metadata.eta_mask_bit(j, q))
-            })?;
-        let d_z = PaddedFieldMatrix::from_fn_with_cover(
-            rows,
-            cover,
-            SECTION6_FIXED_LOCAL_WIDTH,
-            |j, q| bool_to_field(metadata.local_mask_bit(j, q)),
-        )?;
+        let m = layout.point_log();
+        let d_eta = BooleanMask::from_fn(rows, layout.eta_width(), |row, col| {
+            metadata.eta_bit(row, col, m)
+        })?;
+        let d_z = BooleanMask::from_fn(rows, layout.pair_width(), |row, col| {
+            metadata.z_bit(row, col, m)
+        })?;
+        Ok(Self { d_eta, d_z })
+    }
+}
+
+/// The two public derived masks `D_eta'` and `D_Z'`, determined by the
+/// layout alone: global bucket-offset bits and bucket-size prefix masks.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Section6DerivedMasks {
+    /// `T x ell`: little-endian bits of the global bucket offsets.
+    pub d_eta_prime: BooleanMask,
+    /// `T x 2m`: prefix masks `1^{log_2 k_j} 0..`.
+    pub d_z_prime: BooleanMask,
+}
+
+impl Section6DerivedMasks {
+    pub fn from_layout(layout: &Section6Layout) -> Result<Self, Section6DataError> {
+        let rows = layout.bucket_count;
         let offsets = layout.bucket_offsets()?;
-        let d_eta_prime =
-            PaddedFieldMatrix::from_fn_with_cover(rows, cover, layout.global_log, |j, q| {
-                bool_to_field((offsets[j] >> q) & 1 == 1)
-            })?;
+        let gamma_prime = layout.gamma_prime();
+        let d_eta_prime = BooleanMask::from_fn(rows, layout.offset_width(), |row, bit| {
+            (offsets[row] >> bit) & 1 == 1
+        })?;
+        let d_z_prime =
+            BooleanMask::from_fn(rows, layout.pair_width(), |row, bit| bit < gamma_prime[row])?;
         Ok(Self {
-            d_eta,
-            d_z,
             d_eta_prime,
+            d_z_prime,
         })
     }
 }
 
-/// The public per-coordinate batching scalars `x_q = omega^{2^q}`, so that
-/// the induced tensor weight of matrix `tau` is `omega^{tau - 1}`.
-pub fn section6_batching_point<F: PrimeField>(omega: F) -> Vec<F> {
-    let mut powers = Vec::with_capacity(SECTION6_FIXED_MATRIX_LOG);
-    let mut current = omega;
-    for _ in 0..SECTION6_FIXED_MATRIX_LOG {
-        powers.push(current);
-        current = current * current;
-    }
-    powers
-}
-
 /// Per-opening point-compilation witness over the shared bucket-row cover.
+///
+/// Padding rows carry zero on `X'`, `Z`, and `gamma_r`, while the eta chain
+/// pads with ones (every masked factor degenerates to `1`); consumers mask
+/// padded rows with the public bucket indicator where it matters.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Section6MaskPointWitness<F: PrimeField> {
-    /// Point matrix `X = (X_r | X_l)`, logical `t x 2m`, committed pre-omega.
-    pub x: PaddedFieldMatrix<F>,
-    /// One-based source identifiers `tau`, logical length `T`.
-    pub tau: PaddedFieldVector<F>,
+pub struct Section6PointWitness<F: PrimeField> {
     /// Gathered source points `X' = X_{tau_j}`, logical `T x 2m`.
     pub x_selected: PaddedFieldMatrix<F>,
-    /// Running count of `D_Z` ones per row, logical `T x 2m`.
-    pub sigma: PaddedFieldMatrix<F>,
-    /// Masked ranks `sigma^ = D_Z o sigma`, logical `T x 2m`.
-    pub sigma_masked: PaddedFieldMatrix<F>,
-    /// Masked coordinates `Z~ = D_Z o X'`, logical `T x 2m`.
-    pub z_tilde: PaddedFieldMatrix<F>,
-    /// Compacted local points `Z`, logical `T x min(2m, l)`.
+    /// Compacted local points `Z`, logical `T x 2m`.
     pub z: PaddedFieldMatrix<F>,
-    /// Grand-product prefixes `P` of the eta factors, logical `T x (2m+d)`.
+    /// Grand-product prefixes of the eta chain, logical `T x (2m + d - 1)`.
     pub eta_prefix: PaddedFieldMatrix<F>,
-    /// Compiled TBV scales `eta` (copy of the last prefix column).
+    /// Compiled TBV scales `eta` (the closed chain, padding rows one).
     pub eta: PaddedFieldVector<F>,
-    /// Public batching scalars `x_q = omega^{2^q}`.
-    pub batching_point: Vec<F>,
-    /// `c = sum_tau omega^{tau-1} u_tau`.
+    /// Column prefix lengths `gamma_r = D_{Z,r} 1`, logical length `T`.
+    pub gamma_r: PaddedFieldVector<F>,
+    /// `c = sum_tau xi_tau u_tau` for the monomial batching weights.
     pub aggregated_claim: F,
 }
 
-impl<F: PrimeField> Section6MaskPointWitness<F> {
+impl<F: PrimeField> Section6PointWitness<F> {
     pub fn compile(
         layout: &Section6Layout,
         descriptor: &DenseBvaDescriptor,
         metadata: &PrivateShapeMetadata,
-        claims: &[Section6MaskMatrixClaim<F>],
-        omega: F,
+        claims: &[Section6MatrixClaim<F>],
+        batch_point: &[F],
     ) -> Result<Self, Section6DataError> {
         layout.validate_descriptor(descriptor)?;
         metadata.validate_against_descriptor(layout, descriptor)?;
-        metadata.validate_fixed(layout)?;
-        validate_fixed_claims(layout, claims)?;
-        if omega.is_zero() {
-            return Err(Section6DataError::InvalidPoint(
-                "omega must be nonzero".to_owned(),
-            ));
+        metadata.validate_dynamic(layout)?;
+        validate_claims(layout, claims)?;
+        if batch_point.len() != layout.tau_log() {
+            return Err(Section6DataError::InvalidPoint(format!(
+                "batching point must have d = {} coordinates",
+                layout.tau_log()
+            )));
         }
 
-        let m = SECTION6_FIXED_POINT_LOG;
+        let m = layout.point_log();
+        let pair = layout.pair_width();
+        let eta_width = layout.eta_width();
         let rows = layout.bucket_count;
         let cover = layout.row_cover()?;
-        let local_width = layout.public().local_width();
 
-        let x = PaddedFieldMatrix::from_fn_with_cover(
-            layout.matrix_count,
-            cover,
-            SECTION6_FIXED_LOCAL_WIDTH,
-            |row, col| {
-                if col < m {
-                    claims[row].right_point[col]
-                } else {
-                    claims[row].left_point[col - m]
-                }
-            },
-        )?;
-        let tau = PaddedFieldVector::from_logical_with_cover(
-            metadata
-                .tau
-                .iter()
-                .map(|&source| field_from_usize(source))
-                .collect(),
-            cover,
-        )?;
-        let x_selected = PaddedFieldMatrix::from_fn_with_cover(
-            rows,
-            cover,
-            SECTION6_FIXED_LOCAL_WIDTH,
-            |row, col| {
-                x.logical_value(metadata.tau[row] - 1, col)
-                    .expect("tau is a validated one-based source index")
-            },
-        )?;
-
-        // Columns are visited in increasing order for every row, so one
-        // per-row accumulator yields the running rank.
-        let mut rank_rows = vec![0_usize; rows];
-        let sigma = PaddedFieldMatrix::from_fn_with_cover(
-            rows,
-            cover,
-            SECTION6_FIXED_LOCAL_WIDTH,
-            |row, col| {
-                if col == 0 {
-                    rank_rows[row] = 0;
-                }
-                if metadata.local_mask_bit(row, col) {
-                    rank_rows[row] += 1;
-                }
-                field_from_usize(rank_rows[row])
-            },
-        )?;
-        let sigma_masked = PaddedFieldMatrix::from_fn_with_cover(
-            rows,
-            cover,
-            SECTION6_FIXED_LOCAL_WIDTH,
-            |row, col| {
-                if metadata.local_mask_bit(row, col) {
-                    sigma
-                        .logical_value(row, col)
-                        .expect("sigma covers the local width")
-                } else {
-                    F::zero()
-                }
-            },
-        )?;
-        let z_tilde = PaddedFieldMatrix::from_fn_with_cover(
-            rows,
-            cover,
-            SECTION6_FIXED_LOCAL_WIDTH,
-            |row, col| {
-                if metadata.local_mask_bit(row, col) {
-                    x_selected
-                        .logical_value(row, col)
-                        .expect("X' covers the local width")
-                } else {
-                    F::zero()
-                }
-            },
-        )?;
-        let z = PaddedFieldMatrix::from_fn_with_cover(rows, cover, local_width, |row, col| {
+        let x_selected = PaddedFieldMatrix::from_fn_with_cover(rows, cover, pair, |row, col| {
+            let source = metadata.tau[row] - 1;
+            if col < m {
+                claims[source].right_point[col]
+            } else {
+                claims[source].left_point[col - m]
+            }
+        })?;
+        let z = PaddedFieldMatrix::from_fn_with_cover(rows, cover, pair, |row, col| {
             let source = metadata.tau[row] - 1;
             if col < metadata.gamma_r[row] {
                 claims[source].right_point[col]
@@ -977,63 +1014,87 @@ impl<F: PrimeField> Section6MaskPointWitness<F> {
             }
         })?;
 
-        let batching_point = section6_batching_point(omega);
-        let mut prefix_rows = vec![vec![F::zero(); SECTION6_FIXED_ETA_WIDTH]; rows];
-        for (row, prefix_row) in prefix_rows.iter_mut().enumerate() {
-            let mut running = F::one();
-            for col in 0..SECTION6_FIXED_ETA_WIDTH {
-                if metadata.eta_mask_bit(row, col) {
-                    if col < SECTION6_FIXED_LOCAL_WIDTH {
-                        running *= x_selected
-                            .logical_value(row, col)
-                            .expect("X' covers the eta width prefix");
-                    } else {
-                        running *= batching_point[col - SECTION6_FIXED_LOCAL_WIDTH];
-                    }
+        // The eta chain multiplies the masked offset coordinates and the
+        // masked batching coordinates: factor_h = 1 - D_eta_h + D_eta_h * v_h
+        // with v_h = X'_h for h < 2m and v_h = x_{h-2m} afterwards. The chain
+        // is built column by column so no per-row buffers are materialized;
+        // padding rows stay one across the whole chain.
+        let prefix_cols = eta_width - 1;
+        let prefix_padded_cols = padded_dimension(prefix_cols)?;
+        let prefix_len = cover
+            .checked_mul(prefix_padded_cols)
+            .ok_or(Section6DataError::LengthOverflow)?;
+        let mut prefix_values = vec![F::zero(); prefix_len];
+        let chain_factor = |row: usize, col: usize| -> F {
+            if row < rows && metadata.eta_bit(row, col, m) {
+                if col < pair {
+                    x_selected
+                        .logical_value(row, col)
+                        .expect("X' covers the pair width")
+                } else {
+                    batch_point[col - pair]
                 }
-                prefix_row[col] = running;
+            } else {
+                F::one()
+            }
+        };
+        for col in 0..prefix_cols {
+            let column_start = col * cover;
+            let (before, tail) = prefix_values.split_at_mut(column_start);
+            let current = &mut tail[..cover];
+            if col == 0 {
+                for (row, value) in current.iter_mut().enumerate() {
+                    *value = chain_factor(row, 0);
+                }
+            } else {
+                let previous = &before[(col - 1) * cover..col * cover];
+                for (row, (value, prev)) in current.iter_mut().zip(previous).enumerate() {
+                    *value = *prev * chain_factor(row, col);
+                }
             }
         }
-        let eta_prefix = PaddedFieldMatrix::from_fn_with_cover(
-            rows,
-            cover,
-            SECTION6_FIXED_ETA_WIDTH,
-            |row, col| prefix_rows[row][col],
-        )?;
-        let eta = PaddedFieldVector::from_logical_with_cover(
-            prefix_rows
+        let eta_values = {
+            let last_prefix = &prefix_values[(prefix_cols - 1) * cover..prefix_cols * cover];
+            last_prefix
                 .iter()
-                .map(|row| row[SECTION6_FIXED_ETA_WIDTH - 1])
+                .enumerate()
+                .map(|(row, prev)| *prev * chain_factor(row, eta_width - 1))
+                .collect::<Vec<_>>()
+        };
+        let eta_prefix = PaddedFieldMatrix {
+            logical_rows: rows,
+            logical_cols: prefix_cols,
+            padded_rows: cover,
+            padded_cols: prefix_padded_cols,
+            values: prefix_values,
+        };
+        let eta = PaddedFieldVector {
+            logical_len: rows,
+            padded_len: cover,
+            values: eta_values,
+        };
+        let gamma_r = PaddedFieldVector::from_logical_with_cover(
+            metadata
+                .gamma_r
+                .iter()
+                .map(|&gamma| field_from_usize(gamma))
                 .collect(),
             cover,
         )?;
 
-        let mut omega_power = F::one();
         let mut aggregated_claim = F::zero();
-        for claim in claims {
-            aggregated_claim += claim.value * omega_power;
-            omega_power *= omega;
+        for (index, claim) in claims.iter().enumerate() {
+            aggregated_claim += claim.value * monomial_weight(batch_point, index);
         }
 
         Ok(Self {
-            x,
-            tau,
             x_selected,
-            sigma,
-            sigma_masked,
-            z_tilde,
             z,
             eta_prefix,
             eta,
-            batching_point,
+            gamma_r,
             aggregated_claim,
         })
-    }
-
-    /// The last eta-prefix entry of one bucket row (equal to `eta`).
-    pub fn prefix_last_column_value(&self, bucket: usize) -> Option<F> {
-        self.eta_prefix
-            .logical_value(bucket, SECTION6_FIXED_ETA_WIDTH - 1)
     }
 
     pub fn local_point(&self, bucket: usize, len: usize) -> Result<Vec<F>, Section6DataError> {
@@ -1053,8 +1114,7 @@ impl<F: PrimeField> Section6MaskPointWitness<F> {
         &self,
         layout: &Section6Layout,
     ) -> Result<TensorBasisVector<F>, Section6DataError> {
-        if self.eta.logical_len != layout.bucket_count
-            || self.z.logical_rows != layout.bucket_count
+        if self.eta.logical_len != layout.bucket_count || self.z.logical_rows != layout.bucket_count
         {
             return Err(Section6DataError::InvalidPoint(
                 "point witness dimensions do not match Section6Layout".to_owned(),
@@ -1078,128 +1138,150 @@ impl<F: PrimeField> Section6MaskPointWitness<F> {
 }
 
 /// Prover-only witness for the final TBV evaluation at the Packed EO point.
+///
+/// The restriction scales `eta'` and the restriction points
+/// `Z'_c = y_c [c < gamma'_j]` are committed inside `C_zeta'` and bound to
+/// their public piecewise-regular descriptions by plain identities, so the
+/// evaluation argument needs no grand-product chain of its own.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Section6MaskFinalWitness<F: PrimeField> {
-    /// Derived prefix mask `D_Z' = Prefix(D_Z 1)`, logical `T x min(2m, l)`.
-    pub d_z_prime: PaddedFieldMatrix<F>,
-    /// Grand-product prefixes of the eta' factors, logical `T x l`.
-    pub eta_prime_prefix: PaddedFieldMatrix<F>,
-    /// Restriction scales `eta'` (copy of the last prefix column).
+pub struct Section6FinalWitness<F: PrimeField> {
+    /// Restriction scales `eta'_j = prod_{bit of offset_j} y_bit`; padding
+    /// rows carry zero.
     pub eta_prime: PaddedFieldVector<F>,
-    /// Restriction points `Z' = D_Z' o (1 y^T)`, logical `T x min(2m, l)`.
+    /// Restriction points `Z'`, logical `T x 2m`; padding rows carry zero.
     pub z_prime: PaddedFieldMatrix<F>,
-    /// Product prefixes `Q` with `Q_0 = eta o eta'`, logical `T x (w+1)`.
-    pub v_prefix: PaddedFieldMatrix<F>,
+    /// Product prefixes, logical `T x (2m + 1)`: `P_0 = eta o eta'`, then
+    /// `P_{c+1} = P_c o (1 + Z_c o Z'_c)`; the last column is `v`.
+    pub p: PaddedFieldMatrix<F>,
     /// `b = sum_j v_j`, the claimed TBV evaluation.
     pub evaluation: F,
 }
 
-impl<F: PrimeField> Section6MaskFinalWitness<F> {
+impl<F: PrimeField> Section6FinalWitness<F> {
     pub fn compile(
         layout: &Section6Layout,
-        point: &Section6MaskPointWitness<F>,
+        point: &Section6PointWitness<F>,
         y: &[F],
     ) -> Result<Self, Section6DataError> {
         let rows = layout.bucket_count;
         let cover = layout.row_cover()?;
-        let local_width = layout.public().local_width();
-        if y.len() != layout.global_log {
+        let pair = layout.pair_width();
+        let ell = layout.offset_width();
+        if y.len() != ell {
             return Err(Section6DataError::InvalidPoint(format!(
-                "final point length mismatch: expected {}, got {}",
-                layout.global_log,
+                "final point length mismatch: expected {ell}, got {}",
                 y.len()
             )));
         }
         if point.eta.logical_len != rows
             || point.z.logical_rows != rows
-            || point.z.logical_cols != local_width
+            || point.z.logical_cols != pair
         {
             return Err(Section6DataError::InvalidPoint(
                 "final witness inputs do not match the layout".to_owned(),
             ));
         }
-        let gamma_prime = layout
-            .bucket_sizes
-            .iter()
-            .map(|size| size.ilog2() as usize)
-            .collect::<Vec<_>>();
-        if gamma_prime.iter().any(|&log| log > local_width) {
+        let gamma_prime = layout.gamma_prime();
+        if gamma_prime.iter().any(|&log| log > pair) {
             return Err(Section6DataError::InvalidPoint(
-                "a bucket exceeds the compiled local width".to_owned(),
+                "a bucket exceeds the compiled pair width".to_owned(),
             ));
         }
         let offsets = layout.bucket_offsets()?;
 
-        let d_z_prime =
-            PaddedFieldMatrix::from_fn_with_cover(rows, cover, local_width, |row, col| {
-                bool_to_field(col < gamma_prime[row])
-            })?;
-        let z_prime =
-            PaddedFieldMatrix::from_fn_with_cover(rows, cover, local_width, |row, col| {
-                if col < gamma_prime[row] {
-                    y[col]
-                } else {
-                    F::zero()
-                }
-            })?;
-        let mut eta_prime_rows = vec![vec![F::zero(); layout.global_log]; rows];
-        for (row, prefix_row) in eta_prime_rows.iter_mut().enumerate() {
-            let mut running = F::one();
-            for bit in 0..layout.global_log {
-                if (offsets[row] >> bit) & 1 == 1 {
-                    running *= y[bit];
-                }
-                prefix_row[bit] = running;
-            }
-        }
-        let eta_prime_prefix =
-            PaddedFieldMatrix::from_fn_with_cover(rows, cover, layout.global_log, |row, col| {
-                eta_prime_rows[row][col]
-            })?;
+        // eta'_j is the monomial weight of the bucket offset at y.
         let eta_prime = PaddedFieldVector::from_logical_with_cover(
-            eta_prime_rows
-                .iter()
-                .map(|row| row[layout.global_log - 1])
+            (0..rows)
+                .map(|row| {
+                    let mut product = F::one();
+                    for (bit, &coordinate) in y.iter().enumerate() {
+                        if (offsets[row] >> bit) & 1 == 1 {
+                            product *= coordinate;
+                        }
+                    }
+                    product
+                })
                 .collect(),
             cover,
         )?;
+        let z_prime = PaddedFieldMatrix::from_fn_with_cover(rows, cover, pair, |row, col| {
+            if col < gamma_prime[row] {
+                y[col]
+            } else {
+                F::zero()
+            }
+        })?;
 
-        let mut v_rows = vec![vec![F::zero(); local_width + 1]; rows];
-        for (row, v_row) in v_rows.iter_mut().enumerate() {
-            let mut running = point.eta.logical_values()[row] * eta_prime.logical_values()[row];
-            v_row[0] = running;
-            for col in 0..local_width {
-                let z = point
-                    .z
-                    .logical_value(row, col)
-                    .expect("validated Z bounds");
-                let z_prime_entry = z_prime
-                    .logical_value(row, col)
-                    .expect("constructed Z' bounds");
-                running *= F::one() + z * z_prime_entry;
-                v_row[col + 1] = running;
+        // P chain, built column by column: P_0 = eta o eta' and
+        // P_{c+1} = P_c o (1 + Z_c o Z'_c); padding rows stay zero because
+        // eta' pads with zero.
+        let p_cols = pair + 1;
+        let p_padded_cols = padded_dimension(p_cols)?;
+        let p_len = cover
+            .checked_mul(p_padded_cols)
+            .ok_or(Section6DataError::LengthOverflow)?;
+        let mut p_values = vec![F::zero(); p_len];
+        for col in 0..p_cols {
+            let column_start = col * cover;
+            let (before, tail) = p_values.split_at_mut(column_start);
+            let current = &mut tail[..cover];
+            if col == 0 {
+                for (row, value) in current.iter_mut().take(rows).enumerate() {
+                    *value = point.eta.values[row] * eta_prime.values[row];
+                }
+            } else {
+                let previous = &before[(col - 1) * cover..col * cover];
+                for (row, (value, prev)) in current.iter_mut().zip(previous).take(rows).enumerate()
+                {
+                    let z = point
+                        .z
+                        .logical_value(row, col - 1)
+                        .expect("validated Z bounds");
+                    let z_prime_value = if col - 1 < gamma_prime[row] {
+                        y[col - 1]
+                    } else {
+                        F::zero()
+                    };
+                    *value = *prev * (F::one() + z * z_prime_value);
+                }
             }
         }
-        let v_prefix =
-            PaddedFieldMatrix::from_fn_with_cover(rows, cover, local_width + 1, |row, col| {
-                v_rows[row][col]
-            })?;
-        let evaluation = v_rows.iter().map(|row| row[local_width]).sum();
+        let evaluation = p_values[pair * cover..pair * cover + rows]
+            .iter()
+            .copied()
+            .sum();
+        let p = PaddedFieldMatrix {
+            logical_rows: rows,
+            logical_cols: p_cols,
+            padded_rows: cover,
+            padded_cols: p_padded_cols,
+            values: p_values,
+        };
         Ok(Self {
-            d_z_prime,
-            eta_prime_prefix,
             eta_prime,
             z_prime,
-            v_prefix,
+            p,
             evaluation,
         })
     }
 }
 
-/// Validate fixed-width claims against the layout.
-pub fn validate_fixed_claims<F: PrimeField>(
+/// Monomial tensor weight of `index` at `point`: the product of the
+/// coordinates whose bit is set in `index`.
+pub fn monomial_weight<F: PrimeField>(point: &[F], index: usize) -> F {
+    let mut weight = F::one();
+    for (bit, coordinate) in point.iter().enumerate() {
+        if (index >> bit) & 1 == 1 {
+            weight *= *coordinate;
+        }
+    }
+    weight
+}
+
+/// Validate claims against the dynamic point width of the layout.
+pub fn validate_claims<F: PrimeField>(
     layout: &Section6Layout,
-    claims: &[Section6MaskMatrixClaim<F>],
+    claims: &[Section6MatrixClaim<F>],
 ) -> Result<(), Section6DataError> {
     if claims.len() != layout.matrix_count {
         return Err(Section6DataError::InvalidClaim(format!(
@@ -1209,7 +1291,7 @@ pub fn validate_fixed_claims<F: PrimeField>(
         )));
     }
     for claim in claims {
-        claim.validate()?;
+        claim.validate(layout.point_log())?;
     }
     Ok(())
 }
@@ -1228,7 +1310,7 @@ fn next_power_of_two(value: usize) -> Result<usize, Section6DataError> {
         .ok_or(Section6DataError::LengthOverflow)
 }
 
-fn bool_to_field<F: PrimeField>(bit: bool) -> F {
+pub(crate) fn bool_to_field<F: PrimeField>(bit: bool) -> F {
     if bit {
         F::one()
     } else {
@@ -1242,10 +1324,9 @@ pub(crate) fn field_from_usize<F: PrimeField>(value: usize) -> F {
 
 #[cfg(test)]
 mod tests {
-    use ark_ff::One;
+    use ark_ff::{Field, One};
 
     use super::*;
-    use crate::matrix_collection::MatrixMleClaim;
 
     fn field_values(start: u64, len: usize) -> Vec<Fr> {
         (0..len)
@@ -1253,413 +1334,209 @@ mod tests {
             .collect()
     }
 
-    fn asymmetric_fixture() -> (DenseBvaDescriptor, Vec<Section6MaskMatrixClaim<Fr>>) {
+    fn asymmetric_fixture() -> (
+        DenseBvaDescriptor,
+        Section6Layout,
+        PrivateShapeMetadata,
+        Vec<Section6MatrixClaim<Fr>>,
+    ) {
         let shapes = [(3, 5), (5, 2), (2, 7)];
         let descriptor = DenseBvaDescriptor::from_shapes(&shapes).unwrap();
+        let layout = Section6Layout::from_descriptor(&descriptor, 8).unwrap();
+        let metadata = PrivateShapeMetadata::from_descriptor(&layout, &descriptor).unwrap();
+        let m = layout.point_log();
         let claims = vec![
-            Section6MaskMatrixClaim::from_unpadded(
+            Section6MatrixClaim::from_unpadded(
+                m,
                 &field_values(11, 2),
                 &field_values(21, 3),
                 Fr::from(31_u64),
             )
             .unwrap(),
-            Section6MaskMatrixClaim::from_unpadded(
+            Section6MatrixClaim::from_unpadded(
+                m,
                 &field_values(41, 3),
                 &field_values(51, 1),
                 Fr::from(61_u64),
             )
             .unwrap(),
-            Section6MaskMatrixClaim::from_unpadded(
+            Section6MatrixClaim::from_unpadded(
+                m,
                 &field_values(71, 1),
                 &field_values(81, 3),
                 Fr::from(91_u64),
             )
             .unwrap(),
         ];
-        (descriptor, claims)
+        (descriptor, layout, metadata, claims)
     }
 
-    fn oracle_claims(
-        shapes: &[(usize, usize)],
-        claims: &[Section6MaskMatrixClaim<Fr>],
-    ) -> Vec<MatrixMleClaim<Fr>> {
-        shapes
-            .iter()
-            .zip(claims)
-            .map(|(&shape, claim)| {
-                let left_len = shape.0.next_power_of_two().ilog2() as usize;
-                let right_len = shape.1.next_power_of_two().ilog2() as usize;
-                MatrixMleClaim::new(
-                    shape,
-                    claim.left_point[..left_len].to_vec(),
-                    claim.right_point[..right_len].to_vec(),
-                    claim.value,
-                )
-                .unwrap()
-            })
+    fn batch_point(layout: &Section6Layout) -> Vec<Fr> {
+        (0..layout.tau_log())
+            .map(|bit| Fr::from((101 + bit * 3) as u64))
             .collect()
     }
 
     #[test]
-    fn registered_masks_encode_the_three_boolean_selectors() {
-        let (descriptor, _) = asymmetric_fixture();
-        let layout = Section6Layout::from_descriptor(&descriptor, 8).unwrap();
-        let metadata = PrivateShapeMetadata::from_descriptor(&layout, &descriptor).unwrap();
-        let masks = Section6RegisteredMasks::<Fr>::from_metadata(&layout, &metadata).unwrap();
-        let m = SECTION6_FIXED_POINT_LOG;
-        let one = Fr::one();
-        let cover = layout.row_cover().unwrap();
-        let offsets = layout.bucket_offsets().unwrap();
-
-        assert_eq!(
-            (masks.d_eta.logical_rows, masks.d_eta.logical_cols),
-            (layout.bucket_count, SECTION6_FIXED_ETA_WIDTH)
-        );
-        assert_eq!(
-            (masks.d_z.logical_rows, masks.d_z.logical_cols),
-            (layout.bucket_count, SECTION6_FIXED_LOCAL_WIDTH)
-        );
-        assert_eq!(
-            (
-                masks.d_eta_prime.logical_rows,
-                masks.d_eta_prime.logical_cols,
-            ),
-            (layout.bucket_count, layout.global_log)
-        );
-        assert!(masks.d_eta.padded_rows == cover && masks.d_z.padded_rows == cover);
-        assert!(masks.d_eta.padding_is_zero());
-        assert!(masks.d_z.padding_is_zero());
-        assert!(masks.d_eta_prime.padding_is_zero());
-
-        for bucket in 0..layout.bucket_count {
-            let eta_row = masks.d_eta.logical_row(bucket).unwrap();
-            let z_row = masks.d_z.logical_row(bucket).unwrap();
-            let prime_row = masks.d_eta_prime.logical_row(bucket).unwrap();
-            assert!(eta_row
-                .iter()
-                .chain(&z_row)
-                .chain(&prime_row)
-                .all(|entry| entry.is_zero() || *entry == one));
-
-            let decoded_alpha_r = (0..m).fold(0_usize, |value, bit| {
-                value | ((eta_row[bit] == one) as usize) << bit
-            });
-            let decoded_alpha_l = (0..m).fold(0_usize, |value, bit| {
-                value | ((eta_row[m + bit] == one) as usize) << bit
-            });
-            let decoded_tau = (0..SECTION6_FIXED_MATRIX_LOG).fold(0_usize, |value, bit| {
-                value | ((eta_row[SECTION6_FIXED_LOCAL_WIDTH + bit] == one) as usize) << bit
-            });
-            assert_eq!(decoded_alpha_r, metadata.alpha_r[bucket]);
-            assert_eq!(decoded_alpha_l, metadata.alpha_l[bucket]);
-            assert_eq!(decoded_tau + 1, metadata.tau[bucket]);
-
-            for coordinate in 0..SECTION6_FIXED_LOCAL_WIDTH {
-                let expected = if coordinate < m {
-                    coordinate < metadata.gamma_r[bucket]
-                } else {
-                    coordinate - m < metadata.gamma_l[bucket]
-                };
-                assert_eq!(z_row[coordinate] == one, expected);
-                // Alignment keeps the varying coordinates disjoint from the
-                // fixed offset bits.
-                assert!(!(z_row[coordinate] == one && eta_row[coordinate] == one));
-            }
-
-            let decoded_offset = (0..layout.global_log).fold(0_usize, |value, bit| {
-                value | ((prime_row[bit] == one) as usize) << bit
-            });
-            assert_eq!(decoded_offset, offsets[bucket]);
-        }
-    }
-
-    #[test]
-    fn point_witness_matches_dense_descriptor_compiler() {
-        let (descriptor, claims) = asymmetric_fixture();
-        let layout = Section6Layout::from_descriptor(&descriptor, 8).unwrap();
-        let metadata = PrivateShapeMetadata::from_descriptor(&layout, &descriptor).unwrap();
-        let omega = Fr::from(7_u64);
-        let point =
-            Section6MaskPointWitness::compile(&layout, &descriptor, &metadata, &claims, omega)
-                .unwrap();
-        let oracle = descriptor
-            .compile_with_omega(&oracle_claims(&[(3, 5), (5, 2), (2, 7)], &claims), omega, 8)
-            .unwrap();
-
-        assert_eq!(point.aggregated_claim, oracle.claimed);
-        assert_eq!(point.reconstruct_tbv(&layout).unwrap(), oracle.tbv);
-
-        // eta equals the last prefix column, and the batching point encodes
-        // omega^{tau-1} through the eta-mask tau bits.
-        for bucket in 0..layout.bucket_count {
-            assert_eq!(
-                point.eta.logical_values()[bucket],
-                point
-                    .prefix_last_column_value(bucket)
-                    .expect("bucket is in bounds")
-            );
-        }
-
-        let y = field_values(101, layout.global_log);
-        let final_witness = Section6MaskFinalWitness::compile(&layout, &point, &y).unwrap();
-        assert_eq!(
-            final_witness.evaluation,
-            oracle.tbv.fold_to_scalar(&y).unwrap(),
-        );
-        assert!(final_witness.d_z_prime.padding_is_zero());
-        assert!(final_witness.z_prime.padding_is_zero());
-        assert!(final_witness.eta_prime_prefix.padding_is_zero());
-        assert!(final_witness.v_prefix.padding_is_zero());
-
-        // The v recurrence terminates at the row sum claimed by the packed
-        // reduction.
-        let width = layout.public().local_width();
-        let mut total = Fr::zero();
-        for bucket in 0..layout.bucket_count {
-            total += final_witness.v_prefix.logical_value(bucket, width).unwrap();
-        }
-        assert_eq!(total, final_witness.evaluation);
-    }
-
-    #[test]
-    fn point_witness_rows_follow_fixed_width_conventions() {
-        let (descriptor, claims) = asymmetric_fixture();
-        let layout = Section6Layout::from_descriptor(&descriptor, 8).unwrap();
-        let metadata = PrivateShapeMetadata::from_descriptor(&layout, &descriptor).unwrap();
-        let omega = Fr::from(7_u64);
-        let point =
-            Section6MaskPointWitness::compile(&layout, &descriptor, &metadata, &claims, omega)
-                .unwrap();
-        let m = SECTION6_FIXED_POINT_LOG;
-        let cover = layout.row_cover().unwrap();
-
-        assert_eq!((layout.active_len, layout.logical_len), (39, 64));
-        assert_eq!(
-            (point.x.logical_rows, point.x.logical_cols),
-            (3, SECTION6_FIXED_LOCAL_WIDTH)
-        );
-        assert_eq!((point.x.padded_rows, point.x.padded_cols), (cover, 32));
-        assert!(point.x.padding_is_zero());
-        assert!(point.tau.padding_is_zero());
-        assert!(point.x_selected.padding_is_zero());
-        assert!(point.sigma.padding_is_zero());
-        assert!(point.sigma_masked.padding_is_zero());
-        assert!(point.z_tilde.padding_is_zero());
-        assert!(point.z.padding_is_zero());
-        assert!(point.eta_prefix.padding_is_zero());
-        assert!(point.eta.padding_is_zero());
-
-        // X' rows are exact copies of the source (X_r || X_l) rows, and the
-        // masked ranks enumerate the D_Z selections in column order.
-        for bucket in 0..layout.bucket_count {
-            let source = metadata.tau[bucket] - 1;
-            let row = point.x_selected.logical_row(bucket).unwrap();
-            assert_eq!(&row[..m], &claims[source].right_point[..]);
-            assert_eq!(&row[m..], &claims[source].left_point[..]);
-
-            let sigma_row = point.sigma.logical_row(bucket).unwrap();
-            let masked_row = point.sigma_masked.logical_row(bucket).unwrap();
-            let z_tilde_row = point.z_tilde.logical_row(bucket).unwrap();
-            let mut rank = 0_usize;
-            for coordinate in 0..SECTION6_FIXED_LOCAL_WIDTH {
-                let selected = if coordinate < m {
-                    coordinate < metadata.gamma_r[bucket]
-                } else {
-                    coordinate - m < metadata.gamma_l[bucket]
-                };
-                if selected {
-                    rank += 1;
-                    assert_eq!(masked_row[coordinate], Fr::from(rank as u64));
-                    assert_eq!(z_tilde_row[coordinate], row[coordinate]);
-                    // The compacted matrix holds the same value at the rank.
-                    assert_eq!(
-                        point.z.logical_value(bucket, rank - 1).unwrap(),
-                        row[coordinate]
-                    );
-                } else {
-                    assert!(masked_row[coordinate].is_zero());
-                    assert!(z_tilde_row[coordinate].is_zero());
+    fn shape_masks_encode_the_metadata_bits() {
+        let (_descriptor, layout, metadata, _claims) = asymmetric_fixture();
+        let masks = Section6ShapeMasks::from_metadata(&layout, &metadata).unwrap();
+        let m = layout.point_log();
+        for j in 0..layout.bucket_count {
+            let mut alpha_r = 0_usize;
+            let mut alpha_l = 0_usize;
+            let mut tau = 0_usize;
+            for h in 0..m {
+                if masks.d_eta.bit(j, h) {
+                    alpha_r += 1 << h;
                 }
-                assert_eq!(sigma_row[coordinate], Fr::from(rank as u64));
+                if masks.d_eta.bit(j, m + h) {
+                    alpha_l += 1 << h;
+                }
             }
-            let gamma = metadata.gamma_r[bucket] + metadata.gamma_l[bucket];
-            for col in gamma..layout.public().local_width() {
-                assert!(point.z.logical_value(bucket, col).unwrap().is_zero());
+            for h in 0..layout.tau_log() {
+                if masks.d_eta.bit(j, 2 * m + h) {
+                    tau += 1 << h;
+                }
+            }
+            assert_eq!(alpha_r, metadata.alpha_r[j]);
+            assert_eq!(alpha_l, metadata.alpha_l[j]);
+            assert_eq!(tau + 1, metadata.tau[j]);
+            for h in 0..m {
+                assert_eq!(masks.d_z.bit(j, h), h < metadata.gamma_r[j]);
+                assert_eq!(masks.d_z.bit(j, m + h), h < metadata.gamma_l[j]);
+                // Alignment: offset bits vanish on the varying coordinates.
+                if masks.d_z.bit(j, h) {
+                    assert!(!masks.d_eta.bit(j, h));
+                }
+                if masks.d_z.bit(j, m + h) {
+                    assert!(!masks.d_eta.bit(j, m + h));
+                }
             }
         }
-
-        let interior = descriptor
-            .buckets()
-            .iter()
-            .position(|bucket| {
-                bucket.matrix() == 0
-                    && bucket.row_offset() == 0
-                    && bucket.row_len() == 2
-                    && bucket.col_offset() == 0
-                    && bucket.col_len() == 4
-            })
-            .unwrap();
-        assert_eq!(metadata.tau[interior], 1);
-        assert_eq!(metadata.gamma_l[interior], 1);
-        assert_eq!(metadata.gamma_r[interior], 2);
-        let mut expected_z = vec![Fr::from(0_u64); layout.public().local_width()];
-        expected_z[..3].copy_from_slice(&[Fr::from(21_u64), Fr::from(22_u64), Fr::from(11_u64)]);
-        assert_eq!(point.z.logical_row(interior).unwrap(), expected_z);
-        assert_eq!(point.eta.logical_values()[interior], Fr::from(1_u64));
-
-        let fixed = descriptor
-            .buckets()
-            .iter()
-            .position(|bucket| {
-                bucket.matrix() == 0
-                    && bucket.row_offset() == 2
-                    && bucket.row_len() == 1
-                    && bucket.col_offset() == 4
-                    && bucket.col_len() == 1
-            })
-            .unwrap();
-        assert_eq!(metadata.tau[fixed], 1);
-        assert_eq!((metadata.alpha_l[fixed], metadata.alpha_r[fixed]), (2, 4));
-        assert_eq!((metadata.gamma_l[fixed], metadata.gamma_r[fixed]), (0, 0));
-        assert!(point
-            .z
-            .logical_row(fixed)
-            .unwrap()
-            .iter()
-            .all(Zero::is_zero));
-        assert_eq!(
-            point.eta.logical_values()[fixed],
-            Fr::from(23_u64) * Fr::from(12_u64)
-        );
     }
 
     #[test]
-    fn oracle_matches_for_multiple_asymmetric_non_power_of_two_shape_sets() {
-        let shape_sets = [
-            vec![(6, 3), (1, 9), (7, 1), (3, 6)],
-            vec![(9, 5), (2, 11), (5, 3)],
-        ];
-        for (case, shapes) in shape_sets.iter().enumerate() {
-            let descriptor = DenseBvaDescriptor::from_shapes(shapes).unwrap();
-            let claims = shapes
-                .iter()
-                .enumerate()
-                .map(|(matrix, &shape)| {
-                    let left_len = shape.0.next_power_of_two().ilog2() as usize;
-                    let right_len = shape.1.next_power_of_two().ilog2() as usize;
-                    let base = 200 + (case * 100 + matrix * 20) as u64;
-                    Section6MaskMatrixClaim::from_unpadded(
-                        &field_values(base, left_len),
-                        &field_values(base + 10, right_len),
-                        Fr::from(base + 19),
-                    )
-                    .unwrap()
-                })
-                .collect::<Vec<_>>();
-            let layout = Section6Layout::from_descriptor(&descriptor, 4).unwrap();
-            let metadata = PrivateShapeMetadata::from_descriptor(&layout, &descriptor).unwrap();
-            let omega = Fr::from(13_u64 + case as u64);
-            let point =
-                Section6MaskPointWitness::compile(&layout, &descriptor, &metadata, &claims, omega)
-                    .unwrap();
-            let oracle = descriptor
-                .compile_with_omega(&oracle_claims(shapes, &claims), omega, 4)
-                .unwrap();
-            assert_eq!(point.aggregated_claim, oracle.claimed);
-            assert_eq!(point.reconstruct_tbv(&layout).unwrap(), oracle.tbv);
+    fn derived_masks_encode_the_public_layout() {
+        let (_descriptor, layout, _metadata, _claims) = asymmetric_fixture();
+        let derived = Section6DerivedMasks::from_layout(&layout).unwrap();
+        let offsets = layout.bucket_offsets().unwrap();
+        for j in 0..layout.bucket_count {
+            let mut offset = 0_usize;
+            for bit in 0..layout.offset_width() {
+                if derived.d_eta_prime.bit(j, bit) {
+                    offset += 1 << bit;
+                }
+            }
+            assert_eq!(offset, offsets[j]);
+            let mut size = 1_usize;
+            for bit in 0..layout.pair_width() {
+                if derived.d_z_prime.bit(j, bit) {
+                    assert!(bit == 0 || derived.d_z_prime.bit(j, bit - 1));
+                    size += 1 << bit;
+                }
+            }
+            assert_eq!(size, layout.bucket_sizes[j]);
+        }
+    }
 
-            let y = field_values(401 + 50 * case as u64, layout.global_log);
-            let final_witness = Section6MaskFinalWitness::compile(&layout, &point, &y).unwrap();
+    #[test]
+    fn point_witness_compiles_the_tbv_scales() {
+        let (descriptor, layout, metadata, claims) = asymmetric_fixture();
+        let point = batch_point(&layout);
+        let witness =
+            Section6PointWitness::compile(&layout, &descriptor, &metadata, &claims, &point)
+                .unwrap();
+        let m = layout.point_log();
+        for j in 0..layout.bucket_count {
+            let source = metadata.tau[j] - 1;
+            let mut expected = monomial_weight(&point, source);
+            for h in 0..layout.pair_width() {
+                if metadata.offset_bit(j, h, m) {
+                    let coordinate = if h < m {
+                        claims[source].right_point[h]
+                    } else {
+                        claims[source].left_point[h - m]
+                    };
+                    expected *= coordinate;
+                }
+            }
+            assert_eq!(witness.eta.logical_values()[j], expected);
+            // Z holds the varying coordinates, column side first.
+            for c in 0..metadata.gamma_r[j] {
+                assert_eq!(
+                    witness.z.logical_value(j, c).unwrap(),
+                    claims[source].right_point[c]
+                );
+            }
+            for c in 0..metadata.gamma_l[j] {
+                assert_eq!(
+                    witness.z.logical_value(j, metadata.gamma_r[j] + c).unwrap(),
+                    claims[source].left_point[c]
+                );
+            }
+        }
+        let expected_claim = claims
+            .iter()
+            .enumerate()
+            .map(|(index, claim)| claim.value * monomial_weight(&point, index))
+            .sum::<Fr>();
+        assert_eq!(witness.aggregated_claim, expected_claim);
+    }
+
+    #[test]
+    fn final_witness_matches_the_dense_tensor_oracle() {
+        let (descriptor, layout, metadata, claims) = asymmetric_fixture();
+        let point = batch_point(&layout);
+        let witness =
+            Section6PointWitness::compile(&layout, &descriptor, &metadata, &claims, &point)
+                .unwrap();
+        let y = field_values(101, layout.offset_width());
+        let final_witness = Section6FinalWitness::compile(&layout, &witness, &y).unwrap();
+
+        // Oracle: expand the compiled TBV into its dense monomial-basis
+        // vector and evaluate sum_i tbv_i prod_{bit set in i} y_bit.
+        let offsets = layout.bucket_offsets().unwrap();
+        let mut expected = Fr::zero();
+        for j in 0..layout.bucket_count {
+            let local_log = layout.bucket_sizes[j].ilog2() as usize;
+            let local = witness.local_point(j, local_log).unwrap();
+            let eta = witness.eta.logical_values()[j];
+            for index in 0..layout.bucket_sizes[j] {
+                let mut weight = eta;
+                for (bit, coordinate) in local.iter().enumerate() {
+                    if (index >> bit) & 1 == 1 {
+                        weight *= *coordinate;
+                    }
+                }
+                let global = offsets[j] + index;
+                for (bit, coordinate) in y.iter().enumerate() {
+                    if (global >> bit) & 1 == 1 {
+                        weight *= *coordinate;
+                    }
+                }
+                expected += weight;
+            }
+        }
+        assert_eq!(final_witness.evaluation, expected);
+
+        // The committed prefix matrix ends in v and pads with zeros.
+        assert_eq!(final_witness.p.logical_cols, layout.local_width() + 1);
+        assert!(final_witness.p.padding_is_zero());
+
+        // eta' matches the offset-bit product of the Packed EO point.
+        for j in 0..layout.bucket_count {
             assert_eq!(
-                final_witness.evaluation,
-                oracle.tbv.fold_to_scalar(&y).unwrap()
+                final_witness.eta_prime.logical_values()[j],
+                monomial_weight(&y, offsets[j])
             );
         }
     }
 
     #[test]
-    fn fixed_caps_reject_oversized_collections() {
-        let (descriptor, _) = asymmetric_fixture();
-        let layout = Section6Layout::from_descriptor(&descriptor, 8).unwrap();
-        layout.validate_fixed_caps().unwrap();
-        let mut public = layout.public();
-        public.validate().unwrap();
-        public.matrix_count = (1 << SECTION6_FIXED_MATRIX_LOG) + 1;
-        assert!(public.validate_fixed_caps().is_err());
-    }
-
-    #[test]
-    fn public_layout_hides_bucket_sizes_but_keeps_the_covers() {
-        let (descriptor, _) = asymmetric_fixture();
-        let layout = Section6Layout::from_descriptor(&descriptor, 8).unwrap();
-        let public = layout.public();
-        public.validate().unwrap();
-        assert_eq!(public.bucket_count, layout.bucket_count);
-        assert_eq!(public.row_cover().unwrap(), layout.row_cover().unwrap());
-        assert_eq!(public.local_width(), layout.global_log.min(30));
-        assert_eq!(public.global_log, layout.global_log);
-    }
-
-    #[test]
-    fn prover_layout_rejects_increasing_or_materialized_suffix_buckets() {
-        assert!(Section6Layout::new(1, 8, 6, vec![2, 4], 8).is_err());
-        assert!(Section6Layout::new(1, 8, 6, vec![4, 2, 2], 8).is_err());
-        assert!(Section6Layout::new(1, 8, 6, vec![4, 2], 0).is_err());
-    }
-
-    #[test]
-    fn prover_layout_validation_rejects_mutated_derived_fields() {
-        let layout = Section6Layout::new(2, 8, 6, vec![4, 2], 8).unwrap();
-        layout.validate().unwrap();
-
-        let mut wrong_bucket_count = layout.clone();
-        wrong_bucket_count.bucket_count += 1;
-        assert!(wrong_bucket_count.validate().is_err());
-
-        let mut wrong_global_log = layout.clone();
-        wrong_global_log.global_log += 1;
-        assert!(wrong_global_log.validate().is_err());
-
-        let mut increasing = layout;
-        increasing.bucket_sizes.swap(0, 1);
-        assert!(increasing.validate().is_err());
-    }
-
-    #[test]
-    fn padded_section6_matrix_uses_column_major_order() {
-        let matrix =
-            PaddedFieldMatrix::<Fr>::from_fn(2, 3, |row, col| Fr::from((10 * row + col) as u64))
-                .unwrap();
-
-        assert_eq!(matrix.padded_rows, 2);
-        assert_eq!(matrix.padded_cols, 4);
-        assert_eq!(
-            matrix.values,
-            vec![
-                Fr::from(0_u64),
-                Fr::from(10_u64),
-                Fr::from(1_u64),
-                Fr::from(11_u64),
-                Fr::from(2_u64),
-                Fr::from(12_u64),
-                Fr::from(0_u64),
-                Fr::from(0_u64),
-            ]
-        );
-        assert_eq!(matrix.logical_value(1, 2), Some(Fr::from(12_u64)));
-        assert_eq!(
-            matrix.padded_column(2).unwrap(),
-            &[Fr::from(2_u64), Fr::from(12_u64)]
-        );
-        assert!(matrix.padding_is_zero());
-
-        let covered = PaddedFieldMatrix::<Fr>::from_fn_with_cover(2, 8, 3, |row, col| {
-            Fr::from((10 * row + col) as u64)
-        })
-        .unwrap();
-        assert_eq!(covered.padded_rows, 8);
-        assert_eq!(covered.padded_column(1).unwrap()[1], Fr::from(11_u64));
-        assert!(covered.padded_column(1).unwrap()[2..].iter().all(Zero::is_zero));
-        assert!(covered.padding_is_zero());
+    fn claims_must_match_the_dynamic_point_width() {
+        let (_descriptor, layout, _metadata, mut claims) = asymmetric_fixture();
+        claims[0].left_point.push(Fr::one());
+        assert!(validate_claims(&layout, &claims).is_err());
     }
 }

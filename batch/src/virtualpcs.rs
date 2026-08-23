@@ -1539,6 +1539,10 @@ mod tests {
             &self.layout
         }
 
+        fn indexed_vectors(&self) -> Option<Vec<&[i8]>> {
+            Some(self.vectors.iter().map(Vec::as_slice).collect())
+        }
+
         fn for_each_vector(
             &mut self,
             visit: &mut dyn FnMut(usize, &[i8]),
@@ -1876,8 +1880,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(proof.packed_eo.packing_stride, 32);
-        assert_eq!(profile.commitment.physical_entries, lengths.iter().sum());
+        assert_eq!(proof.packed_eo.packing_stride, 64);
+        assert_eq!(
+            profile.commitment.physical_entries,
+            lengths.iter().sum::<usize>()
+        );
         assert_eq!(profile.commitment.materialized_padding_entries, 0);
         assert!(profile.commitment.max_live_group_contributions <= 1 << 8);
         assert_eq!(profile.packed_eo_padding.materialized_padding_entries, 0);

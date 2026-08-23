@@ -461,6 +461,7 @@ dependencies = [
  "ark-std 0.5.0",
  "atomic_proof",
  "bincode",
+ "bytemuck",
  "crossbeam-channel",
  "fs",
  "jolt-blindfold",
@@ -477,6 +478,7 @@ dependencies = [
  "rand 0.9.2",
  "rayon",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
  "tempfile",
 ]
@@ -537,6 +539,12 @@ name = "bumpalo"
 version = "3.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46c5e41b57b8bba42a04676d81cb89e9ee8e859a1a66f80a5a72e1cb76b34d43"
+
+[[package]]
+name = "bytemuck"
+version = "1.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
 
 [[package]]
 name = "byteorder"

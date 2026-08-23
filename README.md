@@ -1,107 +1,233 @@
 # ParComm
 
-ParComm is a collection commitment for decreasing-size heterogeneous vectors.
-The current implementation keeps low-bit-width witnesses in native storage,
-uses one real bucket per input vector, and applies packed EO-LiteBullet before
-opening the resulting dense byte BVA with Jolt's CPU Dory PCS over BN254.
+One commitment for heterogeneous low-bit-width matrix collections.
 
-## Workspace
+ParComm is an experimental research implementation of collection commitments
+for heterogeneously shaped matrices. The current benchmark stores matrix
+entries and their padded coordinates in one contiguous, native-width Boolean
+Vector Assembly (BVA), avoiding an input-sized field-element expansion. It
+represents MLE queries with compact Tensor Basis Vectors (TBVs), proves the
+resulting inner product with Packed EO-LiteBullet, and uses Jolt's CPU Dory PCS
+over BN254 for terminal polynomial openings.
 
-- `atomic_proof/`: atomic proof protocols and shared reduction types.
-- `batch/`: decreasing BVA, packed EO-LiteBullet, and the end-to-end ParComm flow.
-- `fs/`: Fiat-Shamir transcript primitives.
-- `mat/`: matrix and multilinear-evaluation utilities.
-- `poly-commit/`: the legacy SmartPC implementation retained for compatibility.
+## Resources
 
-## Prerequisites
+### Paper
 
-- Rust toolchain `1.95`.
-- Ubuntu or WSL2 for benchmark runs.
-- An explicit `RAYON_NUM_THREADS` value for reproducible experiments.
+[ParComm: Padding-Free Shape-Private Commitments to Low-Bit-Width Matrix
+Collections](./latex/main.tex)
 
-Install the pinned toolchain if needed:
+_Anonymous USENIX Security 2027 submission._
 
-```bash
-rustup toolchain install 1.95
-```
+The paper source is in [`latex/`](./latex/), and standalone protocol listings
+are in [`algorithm/`](./algorithm/).
 
-## Build and Test
+## Quickstart
 
-```bash
-CARGO_TARGET_DIR=/tmp/parcomm-target \
-  cargo +1.95 build --locked --workspace --release
+> [!NOTE]
+> ParComm is a research prototype and has not been audited for production use.
 
-CARGO_TARGET_DIR=/tmp/parcomm-target \
-  cargo +1.95 test --locked --workspace --release
-```
-
-## Local End-to-End Run
-
-This run uses square matrices with sides `2^7-1, 2^6-1, ..., 2^2-1`.
-It first commits the padded `alpha = (matrix, row offset, column offset)` and
-`gamma = (row log, column log)` shape tables, then commits the contiguous dense
-BVA. Verification opens the BVA, checks the terminal TBV inner product, and
-finally checks the committed shape encoding against the public descriptor and
-matrix evaluation points. The complete proof, including both shape openings,
-is exactly decoded before verification.
+Run a small end-to-end experiment from the repository root:
 
 ```bash
-RAYON_NUM_THREADS=8 CARGO_TARGET_DIR=/tmp/parcomm-target \
-  cargo +1.95 run --locked --release -p batch \
-  --example parcomm_e2e -- \
-  --max-log 7
+RAYON_NUM_THREADS=8 cargo bench --quiet -p batch --bench experiment -- \
+  homogeneous \
+  --matrix-count 2 \
+  --rows 3 \
+  --cols 3 \
+  --allow-non-64-threads \
+  --summary-only
 ```
 
-The output reports stage timings, proof size and SHA-256, physical i8 storage,
-the maximum live packed-field state, one materialized Dory projection vector,
-zero-padding counters, the derived Dory setup size, separate BVA-opening/TBV-IP/
-shape-consistency results, and the final verification result. Add
-`--dense-witness-oracle` to independently
-recompute the final MLE from the contiguous dense i8 witness. This diagnostic is
-kept outside the formal consistency timing and is disabled for large runs.
+A successful run decodes and verifies the serialized proof, rejects trailing
+bytes, prints four summary tables, and finishes with:
 
-The packed EO-LiteBullet layer can also be measured without Dory:
+```text
+verified_marker=SECTION6_E2E_VERIFIED
+```
+
+## Installation
+
+ParComm requires the Rust toolchain pinned in
+[`rust-toolchain.toml`](./rust-toolchain.toml). With `rustup` installed, Cargo
+selects it automatically on the first invocation.
+
+Clone the repository and confirm the active toolchain:
 
 ```bash
-RAYON_NUM_THREADS=8 CARGO_TARGET_DIR=/tmp/parcomm-target \
-  cargo +1.95 run --locked --release -p batch \
-  --example packed_eo -- \
-  --geometric-max-log 12 --allow-non-64-threads
+git clone git@github.com:mirandaprivate/parcomm.git
+cd parcomm
+rustup show
 ```
 
-## 64-Thread Experiment
+Ubuntu or WSL is recommended for reproducible experiment runs. Large formal
+experiments also require an explicit Rayon thread count and sufficient RAM for
+the selected workload.
 
-The full matrix workload uses sides `2^15-1, 2^14-1, ..., 2^2-1` and requires
-multi-GiB memory. Its dense BVA has 1,431,524,710 physical i8 entries and a
-`2^31` logical length. Jolt canonicalizes its requested 31-variable Dory setup
-to 32 variables and automatically reuses the dory-pcs disk cache.
+## Build
+
+Build the complete Rust workspace:
 
 ```bash
-RAYON_NUM_THREADS=64 CARGO_TARGET_DIR=/tmp/parcomm-target \
-  cargo +1.95 run --locked --release -p batch --example gen_params -- \
-  --pp-log 31
-
-RAYON_NUM_THREADS=64 CARGO_TARGET_DIR=/tmp/parcomm-target \
-  cargo +1.95 run --locked --release -p batch \
-  --example parcomm_e2e -- --max-log 15
+cargo build --locked --workspace --release
 ```
 
-Generated parameters, proofs, logs, and experiment results are ignored by Git.
+For a faster development check of the main experiment target:
 
-## Limitations
+```bash
+cargo check --locked -p batch --bench experiment
+```
 
-- Proof generation uses fresh opening randomness, so the proof SHA-256 identifies
-  one run and is not expected to remain constant across runs.
-- The CPU Dory verifier is terminal: it performs pairings immediately and does
-  not yet emit the recursive sparse verifier equation used by legacy SmartPC.
-- The GPU path remains unchanged and is not wired to the Dory backend.
-- The current CPU path proves that committed shape tables equal the public
-  canonical descriptor. It does not yet hide shapes: the hidden-shape Section 6
-  lookup, grand-product, and committed-evaluation relation proofs remain future
-  work.
-- Reported witness and materialized-field byte counts exclude public
-  parameters, group state, allocator metadata, and the proof object.
+## Test
 
-## License
+Run the focused Packed EO and matrix-collection end-to-end tests:
 
-Licensed under either the Apache License, Version 2.0, or the MIT license.
+```bash
+cargo test --locked -p batch --test packed_eo_short_int
+cargo test --locked -p batch --test matrix_collection_e2e -- --test-threads=1
+```
+
+Run the complete workspace test suite when sufficient memory is available:
+
+```bash
+cargo test --locked --workspace -- --test-threads=1
+```
+
+## Experiments
+
+The `experiment` benchmark supports generated homogeneous matrices and
+preconverted model BVA artifacts. Formal measurements require 64 Rayon threads;
+local smoke tests must pass `--allow-non-64-threads` explicitly.
+
+### Homogeneous matrices
+
+Specify the number of matrices and their common shape:
+
+```bash
+RAYON_NUM_THREADS=64 cargo bench --quiet -p batch --bench experiment -- \
+  homogeneous \
+  --matrix-count 1024 \
+  --rows 4095 \
+  --cols 4095 \
+  --target-log 34 \
+  --summary-only
+```
+
+This workload contains 1,024 matrices of shape `4095 x 4095` and stores a
+`2^34`-entry native-i8 BVA, including its padded coordinates. It is a
+large-memory experiment; reserve at least 40 GiB of available memory.
+Shape-validity proving is optional and disabled by default.
+
+### Converted model matrices
+
+The CPU end-to-end experiment currently accepts native-i8 BVA artifacts for
+the Llama 8B and Llama 70B presets. By default, manifests and BVA files are
+loaded from `../model-data` relative to the workspace.
+
+```bash
+RAYON_NUM_THREADS=64 cargo bench --quiet -p batch --bench experiment -- \
+  llama8b-i8 \
+  --summary-only
+
+RAYON_NUM_THREADS=64 cargo bench --quiet -p batch --bench experiment -- \
+  llama70b-i8 \
+  --summary-only
+```
+
+Use `--model-data-dir`, `--manifest`, or `--bva` to override the artifact
+locations. Input SHA-256 verification is enabled by default.
+
+To prepare the canonical BVA from the safetensors checkpoint and then run the
+same end-to-end experiment through one direct Cargo command, use:
+
+```bash
+RAYON_NUM_THREADS=64 cargo bench --quiet -p batch --bench experiment_llama -- \
+  llama8b-i8 \
+  --summary-only
+```
+
+The benchmark invokes `python3 preprocessing/modelconvert.py` directly. It
+uses `../model-data/Llama-3.1-8B-W8A8` by default, reuses a complete canonical
+conversion when present, and then verifies its manifest and BVA before proving.
+Pass `--force-conversion` only when the existing conversion must be replaced.
+The converter requires NumPy in the selected Python environment. Llama 70B i8
+uses the same command with `llama70b-i8`.
+
+### Options
+
+```text
+--target-log N           Assert the exact logical BVA domain
+--seed N                 Set the deterministic prover seed
+--model-data-dir PATH    Select the converted model-data root
+--manifest PATH          Override a model manifest
+--bva PATH               Override the BVA file
+--skip-input-hash        Skip the model BVA SHA-256 pass
+--allow-non-64-threads   Permit a local smoke run
+--shape-validity-proof   Include the optional shape-validity proof
+--summary-only           Print benchmark stages and final tables only
+```
+
+Print the complete command-line help with:
+
+```bash
+cargo bench --quiet -p batch --bench experiment -- --help
+```
+
+## Benchmark output
+
+The end-to-end benchmark reports four groups of measurements:
+
+| Group | Contents |
+| --- | --- |
+| Workload | Matrix count and shape, logical entries, bucket count, threads, packing stride, and shape-validity mode |
+| Timing | Input preparation, Dory setup, commitments, Packed EO sub-stages, BVA and auxiliary openings, prover, verifier, and end-to-end time |
+| Proof | Total and component proof sizes, Dory proof count, and proof SHA-256 |
+| Verification and memory | Exact decoding, trailing-byte rejection, acceptance markers, and peak RSS |
+
+The final `VERIFIED` result is printed only after proof serialization,
+independent decoding, and verification have all succeeded.
+
+Omit `--summary-only` when collecting the complete machine-readable
+`key=value` metric stream in addition to the stage messages and final tables.
+
+## Performance profiling
+
+Measure Packed EO-LiteBullet independently of the Dory opening path:
+
+```bash
+RAYON_NUM_THREADS=8 cargo bench --quiet -p batch --bench packed_eo_ab -- \
+  --bucket-count 1024 \
+  --bucket-log 18 \
+  --repetitions 3
+```
+
+The benchmark reports Packed Cross Terms, First Fold, Reduced Check, and the
+subsequent full-width binary folding stages separately.
+
+Validated experiment CSV files can be plotted with:
+
+```bash
+python3 python/plot.py \
+  --input python/result.csv \
+  --output python/result.png
+```
+
+## Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| [`batch/`](./batch/) | BVA construction, Packed EO-LiteBullet, Dory integration, and end-to-end experiments |
+| [`atomic_proof/`](./atomic_proof/) | Atomic matrix protocols and shared reduction types |
+| [`mat/`](./mat/) | Matrix storage, low-bit-width values, and MLE utilities |
+| [`fs/`](./fs/) | Fiat-Shamir transcript utilities |
+| [`poly-commit/`](./poly-commit/) | Polynomial-commitment primitives retained by the workspace |
+| [`gpu/`](./gpu/) | Separate experimental four-GPU SmartPC commitment path |
+| [`latex/`](./latex/) | Paper source |
+| [`python/`](./python/) | Result collection and plotting utilities |
+
+## Acknowledgements
+
+The CPU terminal PCS integrates the Dory implementation from
+[Jolt](https://github.com/a16z/jolt). Field and elliptic-curve arithmetic are
+provided by Arkworks; the local Arkworks patch is documented in
+[`vendor/ark-ec/PATCHES.md`](./vendor/ark-ec/PATCHES.md).

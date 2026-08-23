@@ -433,8 +433,8 @@ fn batch_binding_item(
             .iter()
             .map(|table| {
                 Ok(BatchPublicBindingTable {
-                    digest: public_table_digest(table.values)?,
-                    logical_len: table.values.len(),
+                    digest: table.transcript_digest()?,
+                    logical_len: table.logical_len(),
                 })
             })
             .collect::<Result<Vec<_>, HiddenRelationError>>()?,
@@ -1161,12 +1161,8 @@ mod tests {
                 committed: &committed_second_product,
             },
         ];
-        let first_public_tables = [PublicRelationTable {
-            values: &first_public,
-        }];
-        let second_public_tables = [PublicRelationTable {
-            values: &second_public,
-        }];
+        let first_public_tables = [PublicRelationTable::Dense(&first_public)];
+        let second_public_tables = [PublicRelationTable::Dense(&second_public)];
         let expression = RelationExpression::table(0)
             .mul(RelationExpression::table(2))
             .sub(RelationExpression::table(1));
@@ -1223,9 +1219,7 @@ mod tests {
 
         let mut tampered_public = second_public;
         tampered_public[3] += Fr::one();
-        let tampered_public_tables = [PublicRelationTable {
-            values: &tampered_public,
-        }];
+        let tampered_public_tables = [PublicRelationTable::Dense(&tampered_public)];
         let tampered_items = [
             HiddenRelationBatchVerifierItem {
                 tables: &first_statements,

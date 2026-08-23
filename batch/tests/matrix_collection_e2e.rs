@@ -55,11 +55,16 @@ fn run_family(max_log: usize, run_witness_oracle: bool) {
         .iter()
         .map(|&(rows, cols)| rows * cols)
         .sum::<usize>();
-    let expected_buckets = (2..=max_log).map(|log| log * log).sum::<usize>();
+    let expected_buckets = (2..=max_log)
+        .map(|log| log.min(DenseBvaDescriptor::SPLITTING_BUDGET).pow(2))
+        .sum::<usize>();
     assert_eq!(descriptor.physical_len(), expected_physical);
     assert_eq!(descriptor.bucket_count(), expected_buckets);
-    assert_eq!(source.values().len(), expected_physical);
-    assert_eq!(descriptor.materialized_padding_entries(), 0);
+    assert_eq!(source.values().len(), descriptor.logical_len());
+    assert_eq!(
+        descriptor.materialized_padding_entries(),
+        descriptor.logical_len() - expected_physical
+    );
     assert!(descriptor.bucket_ranges_are_a_partition());
 
     let (prover_parameters, verifier_parameters) =
@@ -79,10 +84,22 @@ fn run_family(max_log: usize, run_witness_oracle: bool) {
         proof.packed.packed_eo.packing_stride,
         32.min(descriptor.logical_len())
     );
-    assert_eq!(profile.commitment.physical_entries, expected_physical);
-    assert_eq!(profile.commitment.materialized_padding_entries, 0);
-    assert_eq!(profile.packed_eo_padding.materialized_padding_entries, 0);
-    assert_eq!(profile.opening.materialized_padding_entries, 0);
+    assert_eq!(
+        profile.commitment.physical_entries,
+        descriptor.logical_len()
+    );
+    assert_eq!(
+        profile.commitment.materialized_padding_entries,
+        descriptor.materialized_padding_entries()
+    );
+    assert_eq!(
+        profile.packed_eo_padding.materialized_padding_entries,
+        descriptor.materialized_padding_entries() as u64
+    );
+    assert_eq!(
+        profile.opening.materialized_padding_entries,
+        descriptor.materialized_padding_entries()
+    );
 
     let proof_bytes = proof.to_bytes().unwrap();
     let proof_sha256 = Sha256::digest(&proof_bytes)
@@ -181,15 +198,73 @@ fn heterogeneous_matrix_collection_small_end_to_end() {
 }
 
 #[test]
+fn capped_split_stores_a_padded_1023_square_in_sixteen_buckets() {
+    let shapes = [(1023, 1023)];
+    let descriptor = DenseBvaDescriptor::from_shapes(&shapes).unwrap();
+
+    assert_eq!(descriptor.bucket_count(), 16);
+    assert_eq!(descriptor.physical_len(), 1023 * 1023);
+    assert_eq!(descriptor.layout().active_len(), 1024 * 1024);
+    assert_eq!(descriptor.logical_len(), 1024 * 1024);
+    assert_eq!(descriptor.materialized_padding_entries(), 2047);
+    assert!(descriptor.bucket_ranges_are_a_partition());
+
+    let row_intervals = descriptor
+        .buckets()
+        .iter()
+        .map(|bucket| (bucket.row_offset(), bucket.row_len()))
+        .collect::<std::collections::BTreeSet<_>>();
+    let col_intervals = descriptor
+        .buckets()
+        .iter()
+        .map(|bucket| (bucket.col_offset(), bucket.col_len()))
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected = [(0, 512), (512, 256), (768, 128), (896, 128)]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(row_intervals, expected);
+    assert_eq!(col_intervals, expected);
+
+    let source = DenseMatrixBva::from_fn(&shapes, |_, row, col| {
+        assert!(row < 1023);
+        assert!(col < 1023);
+        7
+    })
+    .unwrap();
+    assert_eq!(source.values().len(), 1024 * 1024);
+    assert_eq!(
+        source.values().iter().filter(|&&value| value == 0).count(),
+        2047
+    );
+}
+
+#[test]
+fn capped_split_uses_at_most_sixteen_buckets_per_matrix() {
+    let shapes = [(31, 13), (15, 15), (1023, 511), (1, 1)];
+    let descriptor = DenseBvaDescriptor::from_shapes(&shapes).unwrap();
+    let mut counts = vec![0_usize; shapes.len()];
+    for bucket in descriptor.buckets() {
+        counts[bucket.matrix()] += 1;
+    }
+    assert_eq!(counts, vec![12, 16, 16, 1]);
+    assert!(counts.into_iter().all(|count| count <= 16));
+}
+
+#[test]
 fn heterogeneous_matrix_collection_full_descriptor_is_exact() {
     let descriptor = DenseBvaDescriptor::from_shapes(&family_shapes(15)).unwrap();
     assert_eq!(descriptor.matrix_count(), 14);
     assert_eq!(descriptor.physical_len(), 1_431_524_710);
-    assert_eq!(descriptor.bucket_count(), 1_239);
+    assert_eq!(descriptor.layout().active_len(), 1_431_655_707);
+    assert_eq!(descriptor.bucket_count(), 205);
     assert_eq!(descriptor.logical_len(), 1_usize << 31);
-    assert_eq!(descriptor.conceptual_final_zeros(), 715_958_938);
+    assert_eq!(descriptor.conceptual_boundary_zeros(), 130_997);
+    assert_eq!(descriptor.conceptual_final_zeros(), 715_827_941);
     assert_eq!(descriptor.required_dory_log(), 31);
-    assert_eq!(descriptor.materialized_padding_entries(), 0);
+    assert_eq!(
+        descriptor.materialized_padding_entries(),
+        descriptor.logical_len() - descriptor.physical_len()
+    );
     assert!(descriptor.bucket_ranges_are_a_partition());
 }
 
@@ -203,8 +278,13 @@ fn heterogeneous_matrix_collection_2pow30_end_to_end() {
         .sum::<usize>();
     assert_eq!(shapes.len(), 14);
     assert_eq!(physical, 1_431_524_710);
-    assert_eq!((2..=15).map(|log| log * log).sum::<usize>(), 1_239);
+    assert_eq!(
+        (2_usize..=15)
+            .map(|log| log.min(DenseBvaDescriptor::SPLITTING_BUDGET).pow(2))
+            .sum::<usize>(),
+        205
+    );
     assert_eq!(physical.next_power_of_two(), 1_usize << 31);
-    assert_eq!((1_usize << 31) - physical, 715_958_938);
+    assert_eq!((1_usize << 31) - 1_431_655_707, 715_827_941);
     run_family(15, false);
 }
