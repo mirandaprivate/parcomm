@@ -58,7 +58,6 @@ __pycache__/
 /data/generated/
 /srs/
 /parameters/
-*.log
 *.pid
 *.exit
 *.tmp
