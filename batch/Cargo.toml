@@ -21,15 +21,15 @@ fs = { path = "../fs" }
 atomic_proof = { path = "../atomic_proof" }
 rand = "0.9"
 sha2 = "0.10.8"
-jolt-crypto = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
-jolt-blindfold = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
-jolt-claims = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
-jolt-dory = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
-jolt-field = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
-jolt-openings = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
-jolt-poly = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
-jolt-sumcheck = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
-jolt-transcript = { git = "https://github.com/a16z/jolt", rev = "f823a9f854f017d87d5ba0233b9729e36896c9fb" }
+jolt-crypto = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
+jolt-blindfold = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
+jolt-claims = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
+jolt-dory = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
+jolt-field = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
+jolt-openings = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
+jolt-poly = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
+jolt-sumcheck = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
+jolt-transcript = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bincode = "1.3"
@@ -44,6 +44,11 @@ name = "experiment_llama"
 harness = false
 
 [[bench]]
+name = "experiment_llama8B_8bit"
+path = "benches/experiment_llama8B_8bit.rs"
+harness = false
+
+[[bench]]
 name = "experiment_llama8B_16bit"
 path = "benches/experiment_llama8B_16bit.rs"
 harness = false
@@ -51,6 +56,11 @@ harness = false
 [[bench]]
 name = "experiment_llama70B_8bit"
 path = "benches/experiment_llama70B_8bit.rs"
+harness = false
+
+[[bench]]
+name = "experiment_llama70B_16bit"
+path = "benches/experiment_llama70B_16bit.rs"
 harness = false
 
 [[bench]]

@@ -36,6 +36,7 @@ pub enum ModelPreset {
     Llama8bI8,
     Llama8bI16,
     Llama70bI8,
+    Llama70bI16,
 }
 
 impl ModelPreset {
@@ -44,6 +45,7 @@ impl ModelPreset {
             Self::Llama8bI8 => "llama8b-i8",
             Self::Llama8bI16 => "llama8b-i16",
             Self::Llama70bI8 => "llama70b-i8",
+            Self::Llama70bI16 => "llama70b-i16",
         }
     }
 
@@ -58,20 +60,23 @@ impl ModelPreset {
             Self::Llama70bI8 => {
                 Path::new("Llama-3.1-70B-W8A8/parcomm-i8/llama-3.1-70b-w8a8.manifest.json")
             }
+            Self::Llama70bI16 => {
+                Path::new("Llama-3.1-70B/parcomm-bf16-bits/llama-3.1-70b-bf16-bits.manifest.json")
+            }
         }
     }
 
     fn storage_dtype(self) -> &'static str {
         match self {
             Self::Llama8bI8 | Self::Llama70bI8 => "i8",
-            Self::Llama8bI16 => "i16",
+            Self::Llama8bI16 | Self::Llama70bI16 => "i16",
         }
     }
 
     fn bit_width(self) -> usize {
         match self {
             Self::Llama8bI8 | Self::Llama70bI8 => 8,
-            Self::Llama8bI16 => 16,
+            Self::Llama8bI16 | Self::Llama70bI16 => 16,
         }
     }
 }
@@ -93,6 +98,9 @@ impl FromStr for ModelPreset {
             }
             "llama70b-i8" | "llama70b-8bit" | "llama-70b-i8" | "llama-70b-8bit" => {
                 Ok(Self::Llama70bI8)
+            }
+            "llama70b-i16" | "llama70b-16bit" | "llama-70b-i16" | "llama-70b-16bit" => {
+                Ok(Self::Llama70bI16)
             }
             _ => Err(ModelBvaError::UnknownPreset(value.to_owned())),
         }
@@ -302,12 +310,12 @@ impl ModelBvaManifest {
         let allocation_started = Instant::now();
         let mut values = Vec::<Integer>::new();
         values
-            .try_reserve_exact(self.logical_entries)
+            .try_reserve_exact(self.active_entries)
             .map_err(|source| ModelBvaError::Allocation {
-                entries: self.logical_entries,
+                entries: self.active_entries,
                 message: source.to_string(),
             })?;
-        values.resize(self.logical_entries, Integer::from(false));
+        values.resize(self.active_entries, Integer::from(false));
         let allocation_seconds = allocation_started.elapsed().as_secs_f64();
 
         let read_started = Instant::now();
@@ -697,7 +705,7 @@ fn validate_scalar_metadata(preset: ModelPreset, raw: &RawManifest) -> Result<()
             ),
         ));
     }
-    if preset == ModelPreset::Llama8bI16 {
+    if matches!(preset, ModelPreset::Llama8bI16 | ModelPreset::Llama70bI16) {
         validate_bf16_bitcast_metadata(raw)?;
     }
     validate_sha256(&raw.layout.bva_sha256)
@@ -867,7 +875,7 @@ fn validate_layout(
         RANK1_MATRIX_MAPPING,
     )?;
     let expected_size = raw
-        .logical_entries
+        .active_entries
         .checked_mul((preset.bit_width() / 8) as u64)
         .ok_or_else(|| ModelBvaError::invalid("layout.bva_size_bytes", "size overflow"))?;
     expect_eq("layout.bva_size_bytes", raw.bva_size_bytes, expected_size)
@@ -990,6 +998,10 @@ mod tests {
         assert_eq!(
             "llama70b-i8".parse::<ModelPreset>().unwrap(),
             ModelPreset::Llama70bI8
+        );
+        assert_eq!(
+            "llama70b-i16".parse::<ModelPreset>().unwrap(),
+            ModelPreset::Llama70bI16
         );
     }
 
@@ -1184,7 +1196,11 @@ mod tests {
             };
             let mut manifest = json!({
                 "format": format!("parcomm-dense-{}-bva", preset.storage_dtype()),
-                "version": if preset == ModelPreset::Llama8bI16 { 2 } else { 1 },
+                "version": if matches!(preset, ModelPreset::Llama8bI16 | ModelPreset::Llama70bI16) {
+                    2
+                } else {
+                    1
+                },
                 "quantization": {
                     "storage_dtype": preset.storage_dtype(),
                     "storage_encoding": encoding,
@@ -1217,7 +1233,7 @@ mod tests {
                 }],
                 "buckets": buckets,
             });
-            if preset == ModelPreset::Llama8bI16 {
+            if matches!(preset, ModelPreset::Llama8bI16 | ModelPreset::Llama70bI16) {
                 manifest["source"] = json!({ "model_family": "llama-bf16" });
                 manifest["quantization"]["scheme"] = json!(BF16_BITCAST_SCHEME);
                 manifest["quantization"]["native_i8_tensor_count"] = json!(0);

@@ -33,7 +33,7 @@ const DEFAULT_MAX_LOG: usize = 15;
 const MAX_SUPPORTED_LOG: usize = 17;
 const MIN_LOG: usize = 2;
 const DEFAULT_SEED: u64 = 0x5345_4354_494f_4e36;
-const PROOF_MAGIC: [u8; 8] = *b"S6VALID1";
+const PROOF_MAGIC: [u8; 8] = *b"S6VALID2";
 
 #[derive(Debug)]
 struct Arguments {
@@ -493,7 +493,7 @@ fn main() -> Result<()> {
     let packed_field_bytes = packed_field_entries
         .checked_mul(size_of::<Fr>())
         .context("packed field byte estimate overflowed")?;
-    let stored_i8_entries = layout.logical_len;
+    let stored_i8_entries = layout.active_len;
     let materialized_padding_entries = stored_i8_entries - physical_entries;
     let witness_plus_packed_bytes = stored_i8_entries
         .checked_add(packed_field_bytes)
@@ -1040,7 +1040,7 @@ mod tests {
         assert_eq!(descriptor.conceptual_boundary_zeros(), 163_675);
         assert_eq!(descriptor.conceptual_final_zeros(), 135);
         assert_eq!(descriptor.bucket_count(), 383);
-        assert_eq!(descriptor.materialized_padding_entries(), 163_810);
+        assert_eq!(descriptor.materialized_padding_entries(), 163_675);
     }
 
     #[test]
@@ -1059,7 +1059,7 @@ mod tests {
         assert_eq!(descriptor.conceptual_boundary_zeros(), 655_191);
         assert_eq!(descriptor.conceptual_final_zeros(), 135);
         assert_eq!(descriptor.bucket_count(), 447);
-        assert_eq!(descriptor.materialized_padding_entries(), 655_326);
+        assert_eq!(descriptor.materialized_padding_entries(), 655_191);
     }
 
     #[test]

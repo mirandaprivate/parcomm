@@ -121,7 +121,8 @@ Shape-validity proving is optional and disabled by default.
 ### Converted model matrices
 
 The CPU end-to-end experiment accepts native-i8 BVA artifacts for the Llama 8B
-and Llama 70B presets and bit-preserving 16-bit BVA artifacts for Llama 8B BF16.
+and Llama 70B presets and bit-preserving 16-bit BVA artifacts for Llama 8B and
+Llama 70B BF16.
 By default, manifests and BVA files are loaded from `../model-data` relative to
 the workspace.
 
@@ -150,30 +151,35 @@ conversion when present, and then verifies its manifest and BVA before proving.
 Pass `--force-conversion` only when the existing conversion must be replaced.
 The converter requires NumPy in the selected Python environment.
 
-Llama 70B uses a dedicated no-artifact path because its padded BVA contains
-`2^37` i8 entries. The converter streams only the active BVA prefix through a
-pipe into the final zero-initialized Rust allocation; the power-of-two suffix
-remains materialized as i8 zeros in memory. No `.bva`, manifest, or partial
-conversion file is written:
+Llama 8B and Llama 70B also provide dedicated no-artifact paths. The converter
+streams only the active BVA prefix through a pipe into the final Rust
+allocation. The power-of-two suffix remains implicit in the BVA, Packed EO,
+and Jolt Dory commit/open paths. No `.bva`, manifest, or partial conversion file
+is written:
 
 ```bash
 RAYON_NUM_THREADS=64 cargo bench --locked -p batch \
+  --bench experiment_llama8B_8bit
+
+RAYON_NUM_THREADS=64 cargo bench --locked -p batch \
+  --bench experiment_llama8B_16bit
+
+RAYON_NUM_THREADS=64 cargo bench --locked -p batch \
   --bench experiment_llama70B_8bit
+
+RAYON_NUM_THREADS=64 cargo bench --locked -p batch \
+  --bench experiment_llama70B_16bit
 ```
 
-The default checkpoint is
-`../model-data/Llama-3.1-70B-W8A8`. Use `--input PATH` to select another
-compatible sharded checkpoint. Formal runs require at least 320 GiB of
-available memory before allocation begins.
+The default 8B checkpoints are `../model-data/Llama-3.1-8B-W8A8` and
+`../model-data/Llama-3.1-8B-BF16`. The default 70B checkpoints are
+`../model-data/Llama-3.1-70B-W8A8` and `../model-data/Llama-3.1-70B`.
+Use `--input PATH` to select another compatible sharded checkpoint. Formal 70B
+runs require at least 320 GiB of available memory before allocation begins.
 
 For BF16, the dedicated benchmark copies each source BF16 payload directly into
 one 16-bit BVA word. It does not decode the floating-point value and does not
 apply scaling, rounding, clipping, or numeric i16 quantization:
-
-```bash
-RAYON_NUM_THREADS=64 cargo bench --quiet -p batch \
-  --bench experiment_llama8B_16bit
-```
 
 The resulting two bytes are identical to the source BF16 bytes. The native
 ShortInt proof path subsequently interprets that preserved word as a signed

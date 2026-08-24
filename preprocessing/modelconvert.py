@@ -638,11 +638,9 @@ def write_dense_bva(
     output_dtype, item_size, quantization_min, quantization_max = STORAGE_INFO[
         storage_dtype
     ]
-    partial = prepare_output(
-        output_path, summary.logical_entries * item_size, force
-    )
+    partial = prepare_output(output_path, summary.active_entries * item_size, force)
     output = np.memmap(
-        partial, dtype=output_dtype, mode="r+", shape=(summary.logical_entries,)
+        partial, dtype=output_dtype, mode="r+", shape=(summary.active_entries,)
     )
     started = time.monotonic()
     processed = 0
@@ -843,14 +841,14 @@ def verify_layout_samples(
     storage_dtype: str,
 ) -> int:
     output_dtype, item_size, _, _ = STORAGE_INFO[storage_dtype]
-    expected_size = summary.logical_entries * item_size
+    expected_size = summary.active_entries * item_size
     if bva_path.stat().st_size != expected_size:
         raise ConversionError(
             f"BVA file has {bva_path.stat().st_size} bytes, "
             f"expected {expected_size}"
         )
     output = np.memmap(
-        bva_path, dtype=output_dtype, mode="r", shape=(summary.logical_entries,)
+        bva_path, dtype=output_dtype, mode="r", shape=(summary.active_entries,)
     )
     checked = 0
     for bucket in buckets:
@@ -920,10 +918,6 @@ def verify_layout_samples(
         ):
             raise ConversionError(f"nonzero bottom padding in bucket {bucket.index}")
 
-    chunk = 64 << 20
-    for start in range(summary.active_entries, summary.logical_entries, chunk):
-        if bool(np.any(output[start : min(summary.logical_entries, start + chunk)])):
-            raise ConversionError("the final BVA zero suffix contains nonzero bytes")
     del output
     return checked
 
@@ -1090,8 +1084,9 @@ def make_manifest(
         "verification": {
             "layout_sample_count": sample_count,
             "internal_padding_zero": True,
-            "final_suffix_zero": True,
-            "file_size_matches_logical_entries": True,
+            "final_suffix_implicit_zero": True,
+            "final_suffix_materialized": False,
+            "file_size_matches_active_entries": True,
         },
     }
 
@@ -1144,7 +1139,7 @@ def inspect_checkpoint(
     print(f"active_entries={summary.active_entries}")
     print(f"logical_entries={summary.logical_entries}")
     item_size = STORAGE_INFO[storage_dtype][1]
-    bva_size_bytes = summary.logical_entries * item_size
+    bva_size_bytes = summary.active_entries * item_size
     print(f"storage_dtype={storage_dtype}")
     print(f"bva_size_bytes={bva_size_bytes}")
     print(f"bva_size_gib={bva_size_bytes / (1 << 30):.6f}")
@@ -1341,7 +1336,7 @@ def convert_checkpoint(arguments: argparse.Namespace) -> None:
         print(f"logical_entries={summary.logical_entries}")
         print(f"storage_dtype={storage_dtype}")
         print(
-            f"bva_size_bytes={summary.logical_entries * STORAGE_INFO[storage_dtype][1]}"
+            f"bva_size_bytes={summary.active_entries * STORAGE_INFO[storage_dtype][1]}"
         )
         print("stage=source_sha256", flush=True)
         source_files, source_sha256 = source_checksums(source)

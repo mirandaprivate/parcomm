@@ -1880,7 +1880,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(proof.packed_eo.packing_stride, 64);
+        assert_eq!(
+            proof.packed_eo.packing_stride,
+            packing_stride_for_bit_width::<Fr>(source.layout.logical_len(), 8).unwrap()
+        );
         assert_eq!(
             profile.commitment.physical_entries,
             lengths.iter().sum::<usize>()

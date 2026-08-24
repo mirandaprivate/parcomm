@@ -173,7 +173,7 @@ fn main() {
     assert_eq!(packing_stride, 64.min(source.layout.logical_len()));
     assert_eq!(
         profile.maximum_live_vector_entries,
-        2 * (source.layout.logical_len() / packing_stride)
+        2 * source.layout.active_len().div_ceil(packing_stride)
     );
     assert_eq!(counters.materialized_padding_entries, 0);
 

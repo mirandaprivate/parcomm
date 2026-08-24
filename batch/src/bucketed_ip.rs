@@ -2269,7 +2269,7 @@ fn compress_indexed_integer_and_tbv_flat<F: PrimeField, Entry: BvaInteger>(
         destination_sources[destinations[vector_index].bucket_index].push(vector_index);
     }
 
-    let flat_len = layout.logical_len / stride;
+    let flat_len = layout.active_len().div_ceil(stride);
     let mut witness = vec![F::zero(); flat_len];
     let mut basis = vec![F::zero(); flat_len];
     let mut witness_tail = witness.as_mut_slice();
@@ -2382,7 +2382,6 @@ fn flat_inner_product<F: PrimeField>(left: &[F], right: &[F]) -> (F, u64) {
 
 fn flat_eo_cross_inner_products<F: PrimeField>(witness: &[F], basis: &[F]) -> (F, F, u64) {
     debug_assert_eq!(witness.len(), basis.len());
-    debug_assert_eq!(witness.len() % 2, 0);
     let (iota, rho) = witness
         .par_chunks_exact(2)
         .zip(basis.par_chunks_exact(2))
@@ -2406,18 +2405,18 @@ fn flat_eo_fold_pair_in_place<F: PrimeField>(
     challenge_inv: F,
 ) -> u64 {
     debug_assert_eq!(witness.len(), basis.len());
-    debug_assert!(witness.len().is_power_of_two());
     let old_len = witness.len();
     if old_len <= 1 {
         return 0;
     }
-    let next_len = old_len / 2;
+    let pair_count = old_len / 2;
+    let next_len = old_len.div_ceil(2);
     witness[0] = witness[0] + challenge_inv * witness[1];
     basis[0] = basis[0] + challenge * basis[1];
 
     let mut start = 1_usize;
-    while start < next_len {
-        let end = (2 * start).min(next_len);
+    while start < pair_count {
+        let end = (2 * start).min(pair_count);
         let (witness_prefix, witness_inputs) = witness.split_at_mut(2 * start);
         let (basis_prefix, basis_inputs) = basis.split_at_mut(2 * start);
         witness_prefix[start..end]
@@ -2431,9 +2430,13 @@ fn flat_eo_fold_pair_in_place<F: PrimeField>(
             });
         start = end;
     }
+    if old_len % 2 == 1 {
+        witness[pair_count] = witness[old_len - 1];
+        basis[pair_count] = basis[old_len - 1];
+    }
     witness.truncate(next_len);
     basis.truncate(next_len);
-    4 * next_len as u64
+    4 * pair_count as u64
 }
 
 impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
@@ -4082,7 +4085,7 @@ mod tests {
         assert_eq!(profile.total_visited_entries, 18);
         assert_eq!(
             profile.maximum_live_vector_entries,
-            2 * (layout.logical_len() / proof.packing_stride)
+            2 * layout.active_len().div_ceil(proof.packing_stride)
         );
         assert_eq!(profile.materialized_padding_entries, 0);
         assert_eq!(counters.materialized_padding_entries, 0);
@@ -4257,7 +4260,7 @@ mod tests {
         );
         assert_eq!(
             profile.maximum_live_vector_entries,
-            2 * (layout.logical_len() / 64)
+            2 * layout.active_len().div_ceil(64)
         );
         assert_eq!(profile.materialized_padding_entries, 0);
         assert_eq!(counters.materialized_padding_entries, 0);

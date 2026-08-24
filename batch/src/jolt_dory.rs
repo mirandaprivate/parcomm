@@ -1227,6 +1227,7 @@ pub fn commit_bva_i8_streaming<S: DenseI8BvaSource>(
     validate_values(values, bit_width)?;
     let dense = dense_i8_polynomial(source)?;
     let (commitment, hint) = commit_dense_i8_zk(&dense, &parameters.pcs);
+    let row_commitments = hint.row_commitment_count();
     let sigma = dense.num_vars().div_ceil(2);
     let row_width = 1_usize << sigma;
     Ok(CommittedDoryBva {
@@ -1236,7 +1237,7 @@ pub fn commit_bva_i8_streaming<S: DenseI8BvaSource>(
             physical_entries: values.len(),
             nonzero_entries: values.par_iter().filter(|&&value| value != 0).count(),
             logical_entries: logical_len,
-            row_commitments: logical_len / row_width,
+            row_commitments,
             physical_rows: values.len().div_ceil(row_width),
             materialized_field_entries: 0,
             materialized_padding_entries: source.materialized_padding_entries(),
@@ -1257,6 +1258,7 @@ pub fn commit_bva_i16_streaming<S: DenseI16BvaSource>(
     validate_i16_values(values, bit_width)?;
     let dense = dense_i16_polynomial(source)?;
     let (commitment, hint) = commit_dense_i16_zk(&dense, &parameters.pcs);
+    let row_commitments = hint.row_commitment_count();
     let sigma = dense.num_vars().div_ceil(2);
     let row_width = 1_usize << sigma;
     Ok(CommittedDoryBva {
@@ -1266,7 +1268,7 @@ pub fn commit_bva_i16_streaming<S: DenseI16BvaSource>(
             physical_entries: values.len(),
             nonzero_entries: values.par_iter().filter(|&&value| value != 0).count(),
             logical_entries: logical_len,
-            row_commitments: logical_len / row_width,
+            row_commitments,
             physical_rows: values.len().div_ceil(row_width),
             materialized_field_entries: 0,
             materialized_padding_entries: source.materialized_padding_entries(),
@@ -1746,6 +1748,7 @@ mod tests {
     use jolt_transcript::{Blake2bTranscript, Transcript};
 
     use crate::bucketed_ip::{BvaI16Source, BvaI8Source, BvaLayout, TensorBasisVector};
+    use crate::jolt_dory_adapter::{DenseI16Prefix, DenseI8Prefix};
 
     use super::{
         commit_field_matrix_columns_zk, commit_field_vector_zk, evaluate_field_vector_standard,
@@ -1880,6 +1883,35 @@ mod tests {
         fn dense_values(&self) -> &[i16] {
             &self.dense
         }
+    }
+
+    #[test]
+    fn jolt_integer_prefix_matches_the_fully_padded_reference_polynomial() {
+        let point = [
+            JoltFr::from(2_u64),
+            JoltFr::from(3_u64),
+            JoltFr::from(5_u64),
+            JoltFr::from(7_u64),
+        ];
+        let active_i8 = [3_i8, -2, 7, 1, -8];
+        let mut padded_i8 = active_i8.to_vec();
+        padded_i8.resize(16, 0);
+        let active_i8 = DenseI8Prefix::new(&active_i8, 16).unwrap();
+        let padded_i8 = DenseI8Prefix::new(&padded_i8, 16).unwrap();
+        assert_eq!(
+            active_i8.evaluate_monomial_low(&point).unwrap(),
+            padded_i8.evaluate_monomial_low(&point).unwrap()
+        );
+
+        let active_i16 = [i16::MIN, 30_000, -1_024, 17_000, 12_345];
+        let mut padded_i16 = active_i16.to_vec();
+        padded_i16.resize(16, 0);
+        let active_i16 = DenseI16Prefix::new(&active_i16, 16).unwrap();
+        let padded_i16 = DenseI16Prefix::new(&padded_i16, 16).unwrap();
+        assert_eq!(
+            active_i16.evaluate_monomial_low(&point).unwrap(),
+            padded_i16.evaluate_monomial_low(&point).unwrap()
+        );
     }
 
     #[test]
@@ -2248,6 +2280,9 @@ mod tests {
 
         assert_eq!(proof.packed_eo.packing_stride, 32);
         assert_eq!(profile.commitment.physical_entries, 48);
+        assert_eq!(profile.commitment.logical_entries, 64);
+        assert_eq!(profile.commitment.physical_rows, 6);
+        assert_eq!(profile.commitment.row_commitments, 6);
         assert_eq!(profile.commitment.materialized_field_entries, 0);
         assert!(verify_packed_i16_parcomm(&verifier, &tbv, claimed, 16, &proof).unwrap());
 
@@ -2274,6 +2309,9 @@ mod tests {
         let (prover, verifier) = setup_dory_parameters(4);
         let (proof, profile) =
             prove_packed_i8_parcomm(&prover, &mut source, &tbv, claimed, 8).unwrap();
+        assert_eq!(profile.commitment.physical_entries, 12);
+        assert_eq!(profile.commitment.logical_entries, 16);
+        assert_eq!(profile.commitment.physical_rows, 3);
         assert_eq!(profile.commitment.materialized_field_entries, 0);
         assert_eq!(profile.commitment.materialized_padding_entries, 0);
 

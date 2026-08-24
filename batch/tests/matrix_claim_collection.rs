@@ -37,7 +37,7 @@ fn witness_matrix_is_column_major_but_each_bva_bucket_is_row_major() {
     );
 
     let dense_bva = DenseMatrixBva::from_matrices(&[matrix]).unwrap();
-    assert_eq!(dense_bva.values(), &[1, 3, 2, 4, 5, 6, 0, 0]);
+    assert_eq!(dense_bva.values(), &[1, 3, 2, 4, 5, 6]);
 }
 
 #[test]
@@ -119,10 +119,10 @@ fn public_matrix_claim_collection_binds_dense_bva_opening_and_rejects_tampering(
 
     let mut dense_bva = DenseMatrixBva::from_matrices(&matrices).unwrap();
     let descriptor = dense_bva.descriptor().clone();
-    assert_eq!(dense_bva.values().len(), 32);
+    assert_eq!(dense_bva.values().len(), descriptor.layout().active_len());
     assert_eq!(descriptor.physical_len(), 31);
     assert_eq!(descriptor.logical_len(), 32);
-    assert_eq!(descriptor.materialized_padding_entries(), 1);
+    assert_eq!(descriptor.materialized_padding_entries(), 0);
     assert!(descriptor.bucket_ranges_are_a_partition());
     assert_eq!(descriptor.matrix_count(), claims.len());
 
@@ -151,11 +151,11 @@ fn public_matrix_claim_collection_binds_dense_bva_opening_and_rejects_tampering(
     assert_eq!(proof.packed.matrix_commitment, commitments.bva);
     assert_eq!(
         profile.commitment.physical_entries,
-        descriptor.logical_len()
+        descriptor.layout().active_len()
     );
-    assert_eq!(profile.commitment.materialized_padding_entries, 1);
-    assert_eq!(profile.packed_eo_padding.materialized_padding_entries, 1);
-    assert_eq!(profile.opening.materialized_padding_entries, 1);
+    assert_eq!(profile.commitment.materialized_padding_entries, 0);
+    assert_eq!(profile.packed_eo_padding.materialized_padding_entries, 0);
+    assert_eq!(profile.opening.materialized_padding_entries, 0);
 
     let bytes = proof.to_bytes().unwrap();
     let decoded = RegisteredMatrixCollectionProof::from_bytes_exact(&bytes).unwrap();
@@ -385,7 +385,7 @@ fn public_matrix_claim_collection_binds_dense_bva_opening_and_rejects_tampering(
 }
 
 #[test]
-fn dense_bva_oracle_uses_one_contiguous_padded_i8_vector() {
+fn dense_bva_oracle_uses_one_contiguous_active_i8_prefix() {
     let shapes = [(3, 5), (5, 2), (2, 3)];
     let dense_bva = DenseMatrixBva::from_fn(&shapes, |matrix, row, col| {
         let magnitude = ((matrix * 17 + row * 5 + col + 1) % 31 + 1) as i8;
@@ -396,10 +396,13 @@ fn dense_bva_oracle_uses_one_contiguous_padded_i8_vector() {
         }
     })
     .unwrap();
-    assert_eq!(dense_bva.values().len(), 32);
-    assert_eq!(dense_bva.values().last(), Some(&0));
+    assert_eq!(
+        dense_bva.values().len(),
+        dense_bva.descriptor().layout().active_len()
+    );
+    assert_eq!(dense_bva.values().len(), 31);
     assert_eq!(dense_bva.descriptor().logical_len(), 32);
-    assert_eq!(dense_bva.descriptor().materialized_padding_entries(), 1);
+    assert_eq!(dense_bva.descriptor().materialized_padding_entries(), 0);
 
     let point = vec![
         -Fr::one(),
@@ -484,7 +487,7 @@ fn prepacked_bva_evaluates_without_reconstructing_the_matrix() {
 
 #[test]
 fn prepacked_bva_rejects_nonzero_materialized_padding() {
-    let shapes = [(3, 3)];
+    let shapes = [(31, 3)];
     let generated = DenseMatrixBva::from_fn(&shapes, |_, row, col| (row + col + 1) as i8).unwrap();
     let mut values = generated.values().to_vec();
     let padding = generated
@@ -495,7 +498,7 @@ fn prepacked_bva_rejects_nonzero_materialized_padding() {
             (bucket.physical_row_len() < bucket.row_len())
                 .then(|| bucket.dense_offset() + bucket.physical_row_len() * bucket.col_len())
         })
-        .unwrap_or(generated.descriptor().layout().active_len());
+        .expect("the capped split must contain stored boundary padding");
     values[padding] = 1;
     assert!(DenseMatrixBva::from_prepacked_i8(&shapes, values).is_err());
 

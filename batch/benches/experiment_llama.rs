@@ -85,7 +85,10 @@ pub(crate) fn run_from_args(arguments: impl IntoIterator<Item = String>) -> Resu
     let status = prepare_conversion(&arguments, spec, &artifacts)?;
     let conversion_seconds = conversion_started.elapsed().as_secs_f64();
     let artifacts = canonicalize_conversion_artifacts(artifacts)?;
-    if arguments.preset == ModelPreset::Llama8bI16 {
+    if matches!(
+        arguments.preset,
+        ModelPreset::Llama8bI16 | ModelPreset::Llama70bI16
+    ) {
         validate_bf16_bitcast_manifest(&artifacts.manifest_path)?;
     }
     let manifest = ModelBvaManifest::load(
@@ -573,6 +576,12 @@ fn conversion_spec(preset: ModelPreset) -> Result<ConversionSpec> {
         ModelPreset::Llama8bI16 => Ok(ConversionSpec {
             source_directory: "Llama-3.1-8B-BF16",
             output_name: "llama-3.1-8b-bf16-bits",
+            model_family: "llama-bf16",
+            storage_dtype: "i16",
+        }),
+        ModelPreset::Llama70bI16 => Ok(ConversionSpec {
+            source_directory: "Llama-3.1-70B",
+            output_name: "llama-3.1-70b-bf16-bits",
             model_family: "llama-bf16",
             storage_dtype: "i16",
         }),

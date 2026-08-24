@@ -300,7 +300,7 @@ pub trait Section6Integer: BvaInteger {
     ) -> Result<CommittedDoryBva, ValidityProtocolError>;
 
     #[allow(clippy::too_many_arguments)]
-    fn prove_packed(
+    fn prove_packed<R: RngCore>(
         parameters: &DoryProverParameters,
         source: &mut DenseMatrixBva<Self>,
         tbv: &TensorBasisVector<Fr>,
@@ -308,6 +308,7 @@ pub trait Section6Integer: BvaInteger {
         bit_width: usize,
         matrix_commitment: &DoryCommitment,
         outer_binding: &[u8],
+        rng: &mut R,
     ) -> Result<
         (
             HiddenPackedEoProof,
@@ -339,7 +340,7 @@ impl Section6Integer for i8 {
         )?)
     }
 
-    fn prove_packed(
+    fn prove_packed<R: RngCore>(
         parameters: &DoryProverParameters,
         source: &mut DenseMatrixBva<Self>,
         tbv: &TensorBasisVector<Fr>,
@@ -347,6 +348,7 @@ impl Section6Integer for i8 {
         bit_width: usize,
         matrix_commitment: &DoryCommitment,
         outer_binding: &[u8],
+        rng: &mut R,
     ) -> Result<
         (
             HiddenPackedEoProof,
@@ -364,6 +366,7 @@ impl Section6Integer for i8 {
             bit_width,
             matrix_commitment,
             outer_binding,
+            rng,
         )?)
     }
 
@@ -392,7 +395,7 @@ impl Section6Integer for i16 {
         )?)
     }
 
-    fn prove_packed(
+    fn prove_packed<R: RngCore>(
         parameters: &DoryProverParameters,
         source: &mut DenseMatrixBva<Self>,
         tbv: &TensorBasisVector<Fr>,
@@ -400,6 +403,7 @@ impl Section6Integer for i16 {
         bit_width: usize,
         matrix_commitment: &DoryCommitment,
         outer_binding: &[u8],
+        rng: &mut R,
     ) -> Result<
         (
             HiddenPackedEoProof,
@@ -417,6 +421,7 @@ impl Section6Integer for i16 {
             bit_width,
             matrix_commitment,
             outer_binding,
+            rng,
         )?)
     }
 
@@ -710,6 +715,7 @@ pub fn prove_opening<Integer: Section6Integer>(
         layout.bit_width,
         &committed.statement.bva_commitment,
         &packed_binding,
+        rng,
     )?;
     let packed_eo_seconds = packed_eo_started.elapsed().as_secs_f64();
     let virtual_tbv_drop_started = Instant::now();

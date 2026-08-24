@@ -68,14 +68,6 @@ impl Section6DoryGrid {
         self.logical_len
     }
 
-    fn row_width(self) -> usize {
-        1_usize << self.num_vars.div_ceil(2)
-    }
-
-    fn row_count(self) -> usize {
-        self.logical_len / self.row_width()
-    }
-
     /// Return the balanced native Dory shape for one power-of-two table.
     pub fn native_shape(
         self,
@@ -567,7 +559,8 @@ pub fn commit_section6_field_on_grid_zk(
     })
 }
 
-/// Commit signed bytes directly, without materializing a field-vector copy.
+/// Commit signed bytes through the shared biased-u8 path, without materializing
+/// a field-vector copy or trailing zero rows.
 pub fn commit_section6_dense_i8_on_grid_zk(
     parameters: &DoryProverParameters,
     grid: &Section6DoryGrid,
@@ -586,21 +579,16 @@ pub fn commit_section6_dense_i8_on_grid_zk(
     let primitive_count = physical_rows * row_width;
     let mut partial = DoryScheme::begin(&parameters.pcs);
     if primitive_count != 0 {
-        DoryScheme::feed_i128_rows_with(
+        DoryScheme::feed_i8_rows_with(
             &mut partial,
-            |index| values.get(index).copied().unwrap_or(0) as i128,
+            |index| values.get(index).copied().unwrap_or(0),
             primitive_count,
             row_width,
             &parameters.pcs,
         );
     }
-    DoryScheme::feed_zeros(
-        &mut partial,
-        row_width,
-        shape.row_count() - physical_rows,
-        &parameters.pcs,
-    );
-    let (commitment, hint) = DoryScheme::finish_zk(partial, &parameters.pcs);
+    let (commitment, hint) =
+        DoryScheme::finish_zk_with_implicit_zero_rows(partial, shape.row_count(), &parameters.pcs);
     Ok(CommittedSection6DorySource {
         commitment,
         logical_len,
@@ -1816,33 +1804,12 @@ fn open_grid_batch_zk(
         .map(|&index| &polynomials[index] as &dyn MultilinearPoly<Fr>)
         .collect::<Vec<_>>();
     let joint_polynomial = RlcSource::new(polynomial_refs, grouped_coefficients.clone());
-    let mut hints = representatives
+    let hints = representatives
         .iter()
         .map(|&index| claims[index].committed.hint.as_ref().clone())
         .collect::<Vec<_>>();
-    let mut hint_coefficients = grouped_coefficients.clone();
-    let widest_native_rows = representatives
-        .iter()
-        .map(|&index| grid.native_shape(claims[index].committed.logical_len))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .map(Section6DoryShape::row_count)
-        .max()
-        .ok_or(Section6FinalOpeningError::EmptyClaims)?;
-    if widest_native_rows < grid.row_count() {
-        let mut zero_partial = DoryScheme::begin(&parameters.pcs);
-        DoryScheme::feed_zeros(
-            &mut zero_partial,
-            grid.row_width(),
-            grid.row_count(),
-            &parameters.pcs,
-        );
-        let (_, zero_hint) = DoryScheme::finish_zk(zero_partial, &parameters.pcs);
-        hints.push(zero_hint);
-        hint_coefficients.push(Fr::zero());
-    }
     let combined_hint =
-        <DoryScheme as AdditivelyHomomorphic>::combine_hints(hints, &hint_coefficients);
+        <DoryScheme as AdditivelyHomomorphic>::combine_hints(hints, &grouped_coefficients);
     let joint_evaluation = evaluations
         .iter()
         .zip(&coefficients)
@@ -2165,23 +2132,72 @@ mod tests {
     use ark_bn254::Fr as ArkFr;
     use ark_ff::Zero;
     use ark_std::rand::{rngs::StdRng, SeedableRng};
+    use jolt_crypto::{Bn254G1, DeriveSetup, PedersenSetup};
     use jolt_field::Fr as JoltFr;
+    use jolt_transcript::{Blake2bTranscript, Transcript};
 
     use crate::{
         hidden_relation::{HiddenRelationTable, HiddenScalarWitness},
         jolt_dory::{evaluate_field_vector_standard, setup_dory_parameters},
+        jolt_dory_adapter::{open_dense_i8_zk, verify_dense_i8_zk, DenseI8Prefix},
     };
 
     use super::{
-        commit_section6_field_matrix_columns_on_grid_zk, commit_section6_field_on_grid_zk,
-        prove_section6_final_opening, resolve_section6_hidden_relation_prover_claim,
-        verify_section6_final_opening, ReductionStateSet, Section6DoryGrid,
-        Section6FinalOpeningData, Section6FinalOpeningProverClaim,
-        Section6FinalOpeningVerifierClaim,
+        commit_section6_dense_i8_on_grid_zk, commit_section6_field_matrix_columns_on_grid_zk,
+        commit_section6_field_on_grid_zk, prove_section6_final_opening,
+        resolve_section6_hidden_relation_prover_claim, verify_section6_final_opening,
+        ReductionStateSet, Section6DoryGrid, Section6FinalOpeningData,
+        Section6FinalOpeningProverClaim, Section6FinalOpeningVerifierClaim,
     };
 
     fn ark(value: u64) -> ArkFr {
         ArkFr::from(value)
+    }
+
+    #[test]
+    fn dense_i8_commitment_preserves_full_domain_and_omits_tail_rows() {
+        let grid = Section6DoryGrid::new(4).unwrap();
+        let (prover_parameters, verifier_parameters) = setup_dory_parameters(grid.num_vars());
+        let values = [i8::MIN, -64, -1, 0, 1, 32, 64, i8::MAX];
+
+        let actual =
+            commit_section6_dense_i8_on_grid_zk(&prover_parameters, &grid, &values, 16).unwrap();
+        let dense = DenseI8Prefix::new(&values, 16).unwrap();
+        let point = [
+            JoltFr::from(2_u64),
+            JoltFr::from(3_u64),
+            JoltFr::from(4_u64),
+            JoltFr::from(5_u64),
+        ];
+        let evaluation = dense.evaluate_monomial_low(&point).unwrap();
+        let mut prover_transcript = Blake2bTranscript::new(b"section6-i8-biased-commit");
+        let proof = open_dense_i8_zk(
+            &dense,
+            &actual.commitment,
+            actual.hint.as_ref().clone(),
+            &point,
+            evaluation,
+            b"section6-i8-biased-commit",
+            &prover_parameters.pcs,
+            &mut prover_transcript,
+        )
+        .unwrap();
+        let evaluation_setup = PedersenSetup::<Bn254G1>::derive(&prover_parameters.pcs, 1);
+        let mut verifier_transcript = Blake2bTranscript::new(b"section6-i8-biased-commit");
+        verify_dense_i8_zk(
+            &actual.commitment,
+            &proof,
+            16,
+            &point,
+            evaluation,
+            b"section6-i8-biased-commit",
+            &verifier_parameters.pcs,
+            &evaluation_setup,
+            &mut verifier_transcript,
+        )
+        .unwrap();
+
+        assert_eq!(actual.hint.row_commitment_count(), 2);
     }
 
     #[test]

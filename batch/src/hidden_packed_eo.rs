@@ -1,9 +1,10 @@
-//! Packed EO-LiteBullet scalar transcript for Section 6.
+//! Hidden Packed EO-LiteBullet scalar transcript for Section 6.
 //!
-//! Cross terms, binary-round scalars, and terminal fold scalars are sent as
-//! field elements. The resulting continuation state feeds two independent
-//! hidden stages: a Dory opening of the registered dense BVA and the final
-//! Section 6 TBV consistency relation.
+//! Cross terms, binary-round scalars, and terminal fold scalars are committed
+//! in G1 before their Fiat--Shamir challenges are sampled. BlindFold checks the
+//! terminal scalar identity. The resulting continuation state feeds two
+//! independent hidden stages: a Dory opening of the registered dense BVA and
+//! the final Section 6 TBV consistency relation.
 
 use std::{
     fmt::{Display, Formatter},
@@ -13,7 +14,7 @@ use std::{
 use ark_bn254::Fr;
 use ark_ff::{Field, One, Zero};
 use ark_std::rand::RngCore;
-use jolt_crypto::{Bn254G1, Pedersen, PedersenSetup, VectorCommitment};
+use jolt_crypto::Bn254G1;
 use jolt_dory::DoryCommitment;
 use jolt_field::Fr as JoltFr;
 use jolt_transcript::domain::{Label, LabelWithCount, U64Word};
@@ -40,21 +41,25 @@ use crate::{
     },
 };
 
-/// Public Packed EO reduction proof consisting only of field scalars.
+/// Public proof containing commitments, never the folded field scalars.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HiddenPackedEoProof {
     pub packing_stride: usize,
-    pub packed_positive: Vec<JoltFr>,
-    pub packed_negative: Vec<JoltFr>,
-    pub binary_rounds: Vec<(JoltFr, JoltFr)>,
-    pub a_reduced: JoltFr,
-    pub b_reduced: JoltFr,
+    pub packed_positive_commitments: Vec<Bn254G1>,
+    pub packed_negative_commitments: Vec<Bn254G1>,
+    pub binary_round_commitments: Vec<(Bn254G1, Bn254G1)>,
+    pub a_reduced_commitment: Bn254G1,
+    pub b_reduced_commitment: Bn254G1,
+    pub scalar_identity: HiddenScalarRelationProof,
 }
 
 impl HiddenPackedEoProof {
-    /// Number of field elements sent by the Packed EO reduction.
-    pub fn field_element_count(&self) -> usize {
-        self.packed_positive.len() + self.packed_negative.len() + 2 * self.binary_rounds.len() + 2
+    /// Number of scalar commitments sent by the Packed EO reduction.
+    pub fn scalar_commitment_count(&self) -> usize {
+        self.packed_positive_commitments.len()
+            + self.packed_negative_commitments.len()
+            + 2 * self.binary_round_commitments.len()
+            + 2
     }
 }
 
@@ -215,20 +220,24 @@ impl<SourceError> std::error::Error for HiddenPackedEoProverError<SourceError> w
 {
 }
 
-struct PublicChallengeDriver {
+struct HidingChallengeDriver<'a, R> {
+    parameters: &'a DoryProverParameters,
+    rng: &'a mut R,
     transcript: Blake2bTranscript<JoltFr>,
     packing_stride: usize,
-    packed_positive: Vec<Fr>,
-    packed_negative: Vec<Fr>,
-    binary_rounds: Vec<(Fr, Fr)>,
-    a_reduced: Option<Fr>,
-    b_reduced: Option<Fr>,
+    packed_positive: Vec<HiddenScalarWitness>,
+    packed_negative: Vec<HiddenScalarWitness>,
+    binary_rounds: Vec<(HiddenScalarWitness, HiddenScalarWitness)>,
+    a_reduced: Option<HiddenScalarWitness>,
+    b_reduced: Option<HiddenScalarWitness>,
     challenges: Vec<Fr>,
     challenges_inv: Vec<Fr>,
 }
 
-impl PublicChallengeDriver {
+impl<'a, R: RngCore> HidingChallengeDriver<'a, R> {
     fn new(
+        parameters: &'a DoryProverParameters,
+        rng: &'a mut R,
         logical_len: usize,
         packing_stride: usize,
         bit_width: usize,
@@ -237,6 +246,8 @@ impl PublicChallengeDriver {
         outer_binding: &[u8],
     ) -> Self {
         Self::with_transcript(
+            parameters,
+            rng,
             packing_stride,
             packed_eo_transcript(
                 logical_len,
@@ -249,8 +260,15 @@ impl PublicChallengeDriver {
         )
     }
 
-    fn with_transcript(packing_stride: usize, transcript: Blake2bTranscript<JoltFr>) -> Self {
+    fn with_transcript(
+        parameters: &'a DoryProverParameters,
+        rng: &'a mut R,
+        packing_stride: usize,
+        transcript: Blake2bTranscript<JoltFr>,
+    ) -> Self {
         Self {
+            parameters,
+            rng,
             transcript,
             packing_stride,
             packed_positive: Vec::new(),
@@ -263,6 +281,10 @@ impl PublicChallengeDriver {
         }
     }
 
+    fn commit_scalar(&mut self, value: Fr) -> HiddenScalarWitness {
+        HiddenScalarWitness::commit(self.parameters, value, self.rng)
+    }
+
     fn sample_challenge(&mut self) -> Result<(Fr, Fr), String> {
         let challenge = challenge_nonzero(&mut self.transcript);
         let challenge_ark = Fr::from(challenge);
@@ -272,8 +294,8 @@ impl PublicChallengeDriver {
         Ok((challenge_ark, challenge_inv))
     }
 
-    fn into_output(self) -> Result<PublicChallengeOutput, String> {
-        Ok(PublicChallengeOutput {
+    fn into_output(self) -> Result<HidingChallengeOutput, String> {
+        Ok(HidingChallengeOutput {
             transcript_state: self.transcript.state(),
             packed_positive: self.packed_positive,
             packed_negative: self.packed_negative,
@@ -290,26 +312,44 @@ impl PublicChallengeDriver {
     }
 }
 
-struct PublicChallengeOutput {
+struct HidingChallengeOutput {
     transcript_state: [u8; 32],
-    packed_positive: Vec<Fr>,
-    packed_negative: Vec<Fr>,
-    binary_rounds: Vec<(Fr, Fr)>,
-    a_reduced: Fr,
-    b_reduced: Fr,
+    packed_positive: Vec<HiddenScalarWitness>,
+    packed_negative: Vec<HiddenScalarWitness>,
+    binary_rounds: Vec<(HiddenScalarWitness, HiddenScalarWitness)>,
+    a_reduced: HiddenScalarWitness,
+    b_reduced: HiddenScalarWitness,
     challenges: Vec<Fr>,
     challenges_inv: Vec<Fr>,
 }
 
-impl PackedEoChallengeTranscript<Fr> for PublicChallengeDriver {
+impl<R: RngCore> PackedEoChallengeTranscript<Fr> for HidingChallengeDriver<'_, R> {
     fn packed_challenge(&mut self, positive: &[Fr], negative: &[Fr]) -> Result<Fr, String> {
         if !self.packed_positive.is_empty() || positive.len() != negative.len() {
-            return Err("packed cross terms were sent more than once".to_owned());
+            return Err("packed cross terms were committed more than once".to_owned());
         }
-        self.packed_positive.extend_from_slice(positive);
-        self.packed_negative.extend_from_slice(negative);
-        append_field_values(&mut self.transcript, b"packed_positive", positive);
-        append_field_values(&mut self.transcript, b"packed_negative", negative);
+        for &value in positive {
+            let witness = self.commit_scalar(value);
+            self.packed_positive.push(witness);
+        }
+        for &value in negative {
+            let witness = self.commit_scalar(value);
+            self.packed_negative.push(witness);
+        }
+        append_commitments(
+            &mut self.transcript,
+            b"packed_positive",
+            self.packed_positive
+                .iter()
+                .map(|witness| &witness.commitment),
+        );
+        append_commitments(
+            &mut self.transcript,
+            b"packed_negative",
+            self.packed_negative
+                .iter()
+                .map(|witness| &witness.commitment),
+        );
         let (challenge, challenge_inv) = self.sample_challenge()?;
         let mut power = challenge;
         let mut inverse_power = challenge_inv;
@@ -324,12 +364,16 @@ impl PackedEoChallengeTranscript<Fr> for PublicChallengeDriver {
 
     fn binary_challenge(&mut self, round: usize, iota: Fr, rho: Fr) -> Result<Fr, String> {
         if round != self.binary_rounds.len() {
-            return Err("binary rounds were sent out of order".to_owned());
+            return Err("binary rounds were committed out of order".to_owned());
         }
+        let iota = self.commit_scalar(iota);
+        let rho = self.commit_scalar(rho);
         self.transcript
             .append_labeled(b"binary_round", &U64Word(round as u64));
-        self.transcript.append_labeled(b"iota", &JoltFr::from(iota));
-        self.transcript.append_labeled(b"rho", &JoltFr::from(rho));
+        self.transcript
+            .append_labeled(b"iota_commitment", &iota.commitment);
+        self.transcript
+            .append_labeled(b"rho_commitment", &rho.commitment);
         self.binary_rounds.push((iota, rho));
         let (challenge, challenge_inv) = self.sample_challenge()?;
         self.challenges.push(challenge);
@@ -339,19 +383,21 @@ impl PackedEoChallengeTranscript<Fr> for PublicChallengeDriver {
 
     fn bind_reduced(&mut self, a_reduced: Fr, b_reduced: Fr) -> Result<(), String> {
         if self.a_reduced.is_some() || self.b_reduced.is_some() {
-            return Err("terminal scalars were sent more than once".to_owned());
+            return Err("terminal scalars were committed more than once".to_owned());
         }
+        let a_reduced = self.commit_scalar(a_reduced);
+        let b_reduced = self.commit_scalar(b_reduced);
         self.transcript
-            .append_labeled(b"a_reduced", &JoltFr::from(a_reduced));
+            .append_labeled(b"a_reduced_commitment", &a_reduced.commitment);
         self.transcript
-            .append_labeled(b"b_reduced", &JoltFr::from(b_reduced));
+            .append_labeled(b"b_reduced_commitment", &b_reduced.commitment);
         self.a_reduced = Some(a_reduced);
         self.b_reduced = Some(b_reduced);
         Ok(())
     }
 }
 
-/// Reduce the public Packed EO claim without opening the dense BVA commitment.
+/// Reduce a hidden Packed EO claim without opening the dense BVA commitment.
 #[allow(clippy::too_many_arguments)]
 pub fn prove_hidden_packed_i8_reduction<S: DenseI8BvaSource>(
     parameters: &DoryProverParameters,
@@ -361,7 +407,7 @@ pub fn prove_hidden_packed_i8_reduction<S: DenseI8BvaSource>(
     bit_width: usize,
     matrix_commitment: &DoryCommitment,
     outer_binding: &[u8],
-    _rng: &mut impl RngCore,
+    rng: &mut impl RngCore,
 ) -> Result<
     (
         HiddenPackedEoProof,
@@ -379,10 +425,11 @@ pub fn prove_hidden_packed_i8_reduction<S: DenseI8BvaSource>(
         bit_width,
         matrix_commitment,
         outer_binding,
+        rng,
     )
 }
 
-/// Reduce a public Packed EO claim over the selected native short-integer type.
+/// Reduce a hidden Packed EO claim over the selected native short-integer type.
 #[allow(clippy::too_many_arguments)]
 pub fn prove_hidden_packed_shortint_reduction<Entry, S>(
     parameters: &DoryProverParameters,
@@ -392,6 +439,7 @@ pub fn prove_hidden_packed_shortint_reduction<Entry, S>(
     bit_width: usize,
     matrix_commitment: &DoryCommitment,
     outer_binding: &[u8],
+    rng: &mut impl RngCore,
 ) -> Result<
     (
         HiddenPackedEoProof,
@@ -408,7 +456,9 @@ where
     let logical_len = BvaSource::<Entry>::layout(source).logical_len();
     let packing_stride = packing_stride_for_bit_width::<Fr>(logical_len, bit_width)
         .map_err(|_| HiddenPackedEoProverError::Protocol(HiddenPackedEoError::Shape))?;
-    let mut driver = PublicChallengeDriver::new(
+    let mut driver = HidingChallengeDriver::new(
+        parameters,
+        rng,
         logical_len,
         packing_stride,
         bit_width,
@@ -429,39 +479,65 @@ where
         .into_output()
         .map_err(|_| HiddenPackedEoProverError::Protocol(HiddenPackedEoError::Shape))?;
     let transcript_state = output.transcript_state;
-    if output.a_reduced != private_fold.a_reduced || output.b_reduced != private_fold.b_reduced {
+    if output.a_reduced.value != private_fold.a_reduced
+        || output.b_reduced.value != private_fold.b_reduced
+    {
         return Err(HiddenPackedEoProverError::Protocol(
             HiddenPackedEoError::Shape,
         ));
     }
-    verify_public_scalar_identity(claimed, packing_stride, &output.challenges, &private_fold)
-        .map_err(HiddenPackedEoProverError::Protocol)?;
-
-    let a_reduced = public_scalar_witness(parameters, output.a_reduced);
-    let b_reduced = public_scalar_witness(parameters, output.b_reduced);
+    let packed_positive_commitments = output
+        .packed_positive
+        .iter()
+        .map(|witness| witness.commitment)
+        .collect::<Vec<_>>();
+    let packed_negative_commitments = output
+        .packed_negative
+        .iter()
+        .map(|witness| witness.commitment)
+        .collect::<Vec<_>>();
+    let binary_round_commitments = output
+        .binary_rounds
+        .iter()
+        .map(|(iota, rho)| (iota.commitment, rho.commitment))
+        .collect::<Vec<_>>();
+    let a_reduced = output.a_reduced;
+    let b_reduced = output.b_reduced;
+    let mut identity_witnesses = Vec::with_capacity(private_fold.field_element_count());
+    identity_witnesses.extend(output.packed_positive);
+    identity_witnesses.extend(output.packed_negative);
+    for (iota, rho) in output.binary_rounds {
+        identity_witnesses.push(iota);
+        identity_witnesses.push(rho);
+    }
+    identity_witnesses.push(a_reduced.clone());
+    identity_witnesses.push(b_reduced.clone());
+    let identity_expression = scalar_identity_expression(
+        claimed,
+        packing_stride,
+        &output.challenges,
+        identity_witnesses.len(),
+    )
+    .map_err(HiddenPackedEoProverError::Protocol)?;
+    let scalar_identity = prove_hidden_scalar_relation(
+        &transcript_state,
+        parameters,
+        &identity_witnesses,
+        &identity_expression,
+        rng,
+    )
+    .map_err(HiddenPackedEoError::from)
+    .map_err(HiddenPackedEoProverError::Protocol)?;
 
     Ok((
         HiddenPackedEoProof {
             packing_stride,
-            packed_positive: output
-                .packed_positive
-                .iter()
-                .copied()
-                .map(JoltFr::from)
-                .collect(),
-            packed_negative: output
-                .packed_negative
-                .iter()
-                .copied()
-                .map(JoltFr::from)
-                .collect(),
-            binary_rounds: output
-                .binary_rounds
-                .iter()
-                .map(|&(iota, rho)| (JoltFr::from(iota), JoltFr::from(rho)))
-                .collect(),
-            a_reduced: JoltFr::from(output.a_reduced),
-            b_reduced: JoltFr::from(output.b_reduced),
+            packed_positive_commitments,
+            packed_negative_commitments,
+            binary_round_commitments,
+            a_reduced_commitment: a_reduced.commitment,
+            b_reduced_commitment: b_reduced.commitment,
+            scalar_identity,
         },
         HiddenPackedEoProverState {
             a_reduced,
@@ -668,7 +744,7 @@ pub fn prepare_hidden_bva_opening(
     ))
 }
 
-/// Verify the public Packed EO identity without opening the dense BVA.
+/// Verify the hidden Packed EO identity without opening the dense BVA.
 #[allow(clippy::too_many_arguments)]
 pub fn verify_hidden_packed_i8_reduction(
     parameters: &DoryVerifierParameters,
@@ -682,13 +758,13 @@ pub fn verify_hidden_packed_i8_reduction(
     let expected_stride = packing_stride_for_bit_width::<Fr>(logical_len, bit_width)
         .map_err(|_| HiddenPackedEoError::Shape)?;
     if proof.packing_stride != expected_stride
-        || proof.packed_positive.len() != expected_stride - 1
-        || proof.packed_negative.len() != expected_stride - 1
-        || proof.binary_rounds.len() != (logical_len / expected_stride).ilog2() as usize
+        || proof.packed_positive_commitments.len() != expected_stride - 1
+        || proof.packed_negative_commitments.len() != expected_stride - 1
+        || proof.binary_round_commitments.len() != (logical_len / expected_stride).ilog2() as usize
     {
         return Err(HiddenPackedEoError::Shape);
     }
-    let replay = replay_public_transcript(
+    let replay = replay_commitment_transcript(
         logical_len,
         expected_stride,
         bit_width,
@@ -697,18 +773,32 @@ pub fn verify_hidden_packed_i8_reduction(
         outer_binding,
         proof,
     )?;
-    let public_fold = public_fold_from_proof(proof);
-    verify_public_scalar_identity(claimed, expected_stride, &replay.challenges, &public_fold)?;
+    let mut identity_commitments = Vec::with_capacity(proof.scalar_commitment_count());
+    identity_commitments.extend(proof.packed_positive_commitments.iter().copied());
+    identity_commitments.extend(proof.packed_negative_commitments.iter().copied());
+    for &(iota, rho) in &proof.binary_round_commitments {
+        identity_commitments.push(iota);
+        identity_commitments.push(rho);
+    }
+    identity_commitments.push(proof.a_reduced_commitment);
+    identity_commitments.push(proof.b_reduced_commitment);
+    let identity_expression = scalar_identity_expression(
+        claimed,
+        expected_stride,
+        &replay.challenges,
+        identity_commitments.len(),
+    )?;
+    verify_hidden_scalar_relation(
+        &replay.transcript_state,
+        parameters,
+        &identity_commitments,
+        &identity_expression,
+        &proof.scalar_identity,
+    )?;
 
     Ok(HiddenPackedEoVerification {
-        a_reduced_commitment: public_scalar_commitment(
-            &parameters.blindfold,
-            Fr::from(proof.a_reduced),
-        ),
-        b_reduced_commitment: public_scalar_commitment(
-            &parameters.blindfold,
-            Fr::from(proof.b_reduced),
-        ),
+        a_reduced_commitment: proof.a_reduced_commitment,
+        b_reduced_commitment: proof.b_reduced_commitment,
         challenges: replay.challenges,
         challenges_inv: replay.challenges_inv,
         transcript_state: replay.transcript_state,
@@ -851,7 +941,7 @@ struct TranscriptReplay {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn replay_public_transcript(
+fn replay_commitment_transcript(
     logical_len: usize,
     packing_stride: usize,
     bit_width: usize,
@@ -868,8 +958,16 @@ fn replay_public_transcript(
         matrix_commitment,
         outer_binding,
     );
-    append_jolt_field_values(&mut transcript, b"packed_positive", &proof.packed_positive);
-    append_jolt_field_values(&mut transcript, b"packed_negative", &proof.packed_negative);
+    append_commitments(
+        &mut transcript,
+        b"packed_positive",
+        proof.packed_positive_commitments.iter(),
+    );
+    append_commitments(
+        &mut transcript,
+        b"packed_negative",
+        proof.packed_negative_commitments.iter(),
+    );
     let packed_challenge = Fr::from(challenge_nonzero(&mut transcript));
     let packed_challenge_inv = packed_challenge
         .inverse()
@@ -885,10 +983,10 @@ fn replay_public_transcript(
         power.square_in_place();
         inverse_power.square_in_place();
     }
-    for (round, &(iota, rho)) in proof.binary_rounds.iter().enumerate() {
+    for (round, &(iota, rho)) in proof.binary_round_commitments.iter().enumerate() {
         transcript.append_labeled(b"binary_round", &U64Word(round as u64));
-        transcript.append_labeled(b"iota", &iota);
-        transcript.append_labeled(b"rho", &rho);
+        transcript.append_labeled(b"iota_commitment", &iota);
+        transcript.append_labeled(b"rho_commitment", &rho);
         let challenge = Fr::from(challenge_nonzero(&mut transcript));
         let challenge_inv = challenge
             .inverse()
@@ -896,8 +994,8 @@ fn replay_public_transcript(
         challenges.push(challenge);
         challenges_inv.push(challenge_inv);
     }
-    transcript.append_labeled(b"a_reduced", &proof.a_reduced);
-    transcript.append_labeled(b"b_reduced", &proof.b_reduced);
+    transcript.append_labeled(b"a_reduced_commitment", &proof.a_reduced_commitment);
+    transcript.append_labeled(b"b_reduced_commitment", &proof.b_reduced_commitment);
     Ok(TranscriptReplay {
         transcript_state: transcript.state(),
         challenges,
@@ -905,81 +1003,71 @@ fn replay_public_transcript(
     })
 }
 
-fn verify_public_scalar_identity(
+fn scalar_identity_expression(
     claimed: Fr,
     packing_stride: usize,
     challenges: &[Fr],
-    proof: &PackedEoLiteBulletProof<Fr>,
-) -> Result<(), HiddenPackedEoError> {
+    witness_count: usize,
+) -> Result<RelationExpression, HiddenPackedEoError> {
     let stride_log = packing_stride.ilog2() as usize;
-    if proof.packing_stride != packing_stride
-        || proof.packed_positive.len() != packing_stride - 1
-        || proof.packed_negative.len() != packing_stride - 1
-        || challenges.len() != stride_log + proof.binary_rounds.len()
-    {
+    if challenges.len() < stride_log {
         return Err(HiddenPackedEoError::Shape);
     }
-    let mut reduced_claim = claimed;
-    if packing_stride > 1 {
-        let packed_challenge = challenges[0];
-        let packed_challenge_inv = packed_challenge
-            .inverse()
-            .ok_or(HiddenPackedEoError::ZeroChallenge)?;
-        let mut positive_power = packed_challenge;
-        let mut negative_power = packed_challenge_inv;
-        for (&positive, &negative) in proof.packed_positive.iter().zip(&proof.packed_negative) {
-            reduced_claim += positive * positive_power + negative * negative_power;
-            positive_power *= packed_challenge;
-            negative_power *= packed_challenge_inv;
-        }
+    let packed_challenge = challenges[0];
+    let packed_challenge_inv = packed_challenge
+        .inverse()
+        .ok_or(HiddenPackedEoError::ZeroChallenge)?;
+    let packed_len = packing_stride - 1;
+    let binary_round_count = challenges.len() - stride_log;
+    let expected_count = 2 * packed_len + 2 * binary_round_count + 2;
+    if witness_count != expected_count {
+        return Err(HiddenPackedEoError::Shape);
     }
-    for (&(iota, rho), &challenge) in proof.binary_rounds.iter().zip(&challenges[stride_log..]) {
+    let mut terms = vec![RelationExpression::constant(claimed)];
+    let mut positive_power = packed_challenge;
+    let mut negative_power = packed_challenge_inv;
+    for offset in 0..packed_len {
+        terms.push(
+            RelationExpression::table(offset).mul(RelationExpression::constant(positive_power)),
+        );
+        terms.push(
+            RelationExpression::table(packed_len + offset)
+                .mul(RelationExpression::constant(negative_power)),
+        );
+        positive_power *= packed_challenge;
+        negative_power *= packed_challenge_inv;
+    }
+    let mut index = 2 * packed_len;
+    for challenge in &challenges[stride_log..] {
         let challenge_inv = challenge
             .inverse()
             .ok_or(HiddenPackedEoError::ZeroChallenge)?;
-        reduced_claim += iota * challenge + rho * challenge_inv;
+        terms.push(RelationExpression::table(index).mul(RelationExpression::constant(*challenge)));
+        terms.push(
+            RelationExpression::table(index + 1).mul(RelationExpression::constant(challenge_inv)),
+        );
+        index += 2;
     }
-    if proof.a_reduced * proof.b_reduced != reduced_claim {
-        return Err(HiddenPackedEoError::Shape);
-    }
-    Ok(())
+    terms.push(
+        RelationExpression::constant(-Fr::one())
+            .mul(RelationExpression::table(index).mul(RelationExpression::table(index + 1))),
+    );
+    balanced_sum(terms).ok_or(HiddenPackedEoError::Shape)
 }
 
-fn public_fold_from_proof(proof: &HiddenPackedEoProof) -> PackedEoLiteBulletProof<Fr> {
-    PackedEoLiteBulletProof {
-        packing_stride: proof.packing_stride,
-        packed_positive: proof
-            .packed_positive
-            .iter()
-            .copied()
-            .map(Fr::from)
-            .collect(),
-        packed_negative: proof
-            .packed_negative
-            .iter()
-            .copied()
-            .map(Fr::from)
-            .collect(),
-        binary_rounds: proof
-            .binary_rounds
-            .iter()
-            .map(|&(iota, rho)| (Fr::from(iota), Fr::from(rho)))
-            .collect(),
-        a_reduced: Fr::from(proof.a_reduced),
-        b_reduced: Fr::from(proof.b_reduced),
+fn balanced_sum(mut terms: Vec<RelationExpression>) -> Option<RelationExpression> {
+    while terms.len() > 1 {
+        let mut next = Vec::with_capacity(terms.len().div_ceil(2));
+        let mut pairs = terms.into_iter();
+        while let Some(left) = pairs.next() {
+            next.push(match pairs.next() {
+                Some(right) => left.add(right),
+                None => left,
+            });
+        }
+        terms = next;
     }
-}
-
-fn public_scalar_commitment(setup: &PedersenSetup<Bn254G1>, value: Fr) -> Bn254G1 {
-    Pedersen::<Bn254G1>::commit(setup, &[JoltFr::from(value)], &JoltFr::zero())
-}
-
-fn public_scalar_witness(parameters: &DoryProverParameters, value: Fr) -> HiddenScalarWitness {
-    HiddenScalarWitness {
-        value,
-        commitment: public_scalar_commitment(&parameters.blindfold, value),
-        blind: JoltFr::zero(),
-    }
+    terms.pop()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -991,7 +1079,7 @@ fn packed_eo_transcript(
     matrix_commitment: &DoryCommitment,
     outer_binding: &[u8],
 ) -> Blake2bTranscript<JoltFr> {
-    let mut transcript = Blake2bTranscript::<JoltFr>::new(b"pc_packed_eo_public_v1");
+    let mut transcript = Blake2bTranscript::<JoltFr>::new(b"pc_hidden_peo_v1");
     transcript.append(&Label(b"packed_eo_statement"));
     transcript.append_labeled(b"logical_len", &U64Word(logical_len as u64));
     transcript.append_labeled(b"packing_stride", &U64Word(packing_stride as u64));
@@ -1006,25 +1094,15 @@ fn packed_eo_transcript(
     transcript
 }
 
-fn append_field_values(
+fn append_commitments<'a>(
     transcript: &mut Blake2bTranscript<JoltFr>,
     label: &'static [u8],
-    values: &[Fr],
+    commitments: impl IntoIterator<Item = &'a Bn254G1>,
 ) {
-    transcript.append(&LabelWithCount(label, values.len() as u64));
-    for &value in values {
-        transcript.append_labeled(b"field_element", &JoltFr::from(value));
-    }
-}
-
-fn append_jolt_field_values(
-    transcript: &mut Blake2bTranscript<JoltFr>,
-    label: &'static [u8],
-    values: &[JoltFr],
-) {
-    transcript.append(&LabelWithCount(label, values.len() as u64));
-    for value in values {
-        transcript.append_labeled(b"field_element", value);
+    let commitments = commitments.into_iter().collect::<Vec<_>>();
+    transcript.append(&LabelWithCount(label, commitments.len() as u64));
+    for commitment in commitments {
+        transcript.append_labeled(b"scalar_commitment", commitment);
     }
 }
 
@@ -1113,7 +1191,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_packed_eo_round_trip_sends_reduction_scalars_as_field_elements() {
+    fn hidden_packed_eo_round_trip_keeps_reduction_scalars_committed() {
         let (mut source, tbv, claimed) = fixture();
         let (prover, verifier) = setup_dory_parameters(7);
         let committed = commit_bva_i8_streaming(&prover, &source, 8).unwrap();
@@ -1154,20 +1232,14 @@ mod tests {
         .unwrap();
         assert!(verifier_profile.accounted_seconds() <= verifier_profile.total_seconds + 1e-9);
         let codec = bincode::DefaultOptions::new().with_fixint_encoding();
-        let packed_bytes = codec.serialize(&proof).unwrap();
-        let scalar_bytes = codec.serialize(&JoltFr::zero()).unwrap().len();
-        assert_eq!(
-            packed_bytes.len(),
-            4 * std::mem::size_of::<u64>() + proof.field_element_count() * scalar_bytes
-        );
         let split_bytes = codec.serialize(&(&proof, &bva_opening)).unwrap();
         let decoded: (HiddenPackedEoProof, HiddenBvaOpeningProof) = codec
             .reject_trailing_bytes()
             .deserialize(&split_bytes)
             .unwrap();
         assert_eq!(decoded, (proof.clone(), bva_opening));
-        assert_eq!(proof.a_reduced, JoltFr::from(claims.a_reduced.value));
-        assert_eq!(proof.b_reduced, JoltFr::from(claims.b_reduced.value));
+        assert_eq!(proof.a_reduced_commitment, claims.a_reduced.commitment);
+        assert_eq!(proof.b_reduced_commitment, claims.b_reduced.commitment);
         assert_eq!(
             verification.a_reduced_commitment,
             claims.a_reduced.commitment
@@ -1178,17 +1250,17 @@ mod tests {
         );
         assert_eq!(verification.challenges, claims.challenges);
         assert_eq!(
-            proof.binary_rounds.len(),
+            proof.binary_round_commitments.len(),
             (source.layout.logical_len() / proof.packing_stride).ilog2() as usize
         );
         assert_eq!(
-            proof.field_element_count(),
-            2 * proof.packing_stride - 2 + 2 * proof.binary_rounds.len() + 2
+            proof.scalar_commitment_count(),
+            2 * proof.packing_stride - 2 + 2 * proof.binary_round_commitments.len() + 2
         );
     }
 
     #[test]
-    fn hidden_packed_eo_rejects_field_and_statement_tampering() {
+    fn hidden_packed_eo_rejects_commitment_and_statement_tampering() {
         let (mut source, tbv, claimed) = fixture();
         let (prover, verifier) = setup_dory_parameters(7);
         let committed = commit_bva_i8_streaming(&prover, &source, 8).unwrap();
@@ -1207,7 +1279,7 @@ mod tests {
         .unwrap();
 
         let mut tampered = proof.clone();
-        tampered.packed_positive[0] += JoltFr::one();
+        tampered.packed_positive_commitments[0] = proof.a_reduced_commitment;
         assert!(verify_hidden_packed_i8_reduction(
             &verifier,
             &matrix_commitment,
@@ -1220,7 +1292,7 @@ mod tests {
         .is_err());
 
         let mut tampered = proof.clone();
-        tampered.packed_negative[0] += JoltFr::one();
+        tampered.packed_negative_commitments[0] = proof.b_reduced_commitment;
         assert!(verify_hidden_packed_i8_reduction(
             &verifier,
             &matrix_commitment,
@@ -1233,7 +1305,7 @@ mod tests {
         .is_err());
 
         let mut tampered = proof.clone();
-        tampered.binary_rounds[0].0 += JoltFr::one();
+        tampered.binary_round_commitments[0].0 = proof.a_reduced_commitment;
         assert!(verify_hidden_packed_i8_reduction(
             &verifier,
             &matrix_commitment,
@@ -1266,7 +1338,7 @@ mod tests {
         .is_err());
 
         let mut tampered_terminal = proof.clone();
-        tampered_terminal.a_reduced += JoltFr::one();
+        tampered_terminal.a_reduced_commitment = Bn254G1::default();
         assert!(verify_hidden_packed_i8_reduction(
             &verifier,
             &matrix_commitment,
@@ -1278,8 +1350,8 @@ mod tests {
         )
         .is_err());
 
-        let mut tampered_terminal = proof;
-        tampered_terminal.b_reduced += JoltFr::one();
+        let mut tampered_terminal = proof.clone();
+        tampered_terminal.b_reduced_commitment = Bn254G1::default();
         assert!(verify_hidden_packed_i8_reduction(
             &verifier,
             &matrix_commitment,
@@ -1290,6 +1362,71 @@ mod tests {
             &tampered_terminal,
         )
         .is_err());
+
+        let mut tampered_identity = proof;
+        tampered_identity.scalar_identity.blindfold_transcript_state[0] ^= 1;
+        assert!(verify_hidden_packed_i8_reduction(
+            &verifier,
+            &matrix_commitment,
+            source.layout.logical_len(),
+            claimed,
+            8,
+            b"section-6-layout",
+            &tampered_identity,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn hidden_packed_eo_randomizes_commitments_for_same_statement() {
+        let (mut first_source, tbv, claimed) = fixture();
+        let (mut second_source, _, _) = fixture();
+        let (prover, verifier) = setup_dory_parameters(7);
+        let committed = commit_bva_i8_streaming(&prover, &first_source, 8).unwrap();
+        let matrix_commitment = committed.commitment.clone();
+        let mut first_rng = StdRng::seed_from_u64(0x4849_4444_454e_0001);
+        let mut second_rng = StdRng::seed_from_u64(0x4849_4444_454e_0002);
+
+        let (first, _, _, _) = prove_hidden_packed_i8_reduction(
+            &prover,
+            &mut first_source,
+            &tbv,
+            claimed,
+            8,
+            &matrix_commitment,
+            b"section-6-layout",
+            &mut first_rng,
+        )
+        .unwrap();
+        let (second, _, _, _) = prove_hidden_packed_i8_reduction(
+            &prover,
+            &mut second_source,
+            &tbv,
+            claimed,
+            8,
+            &matrix_commitment,
+            b"section-6-layout",
+            &mut second_rng,
+        )
+        .unwrap();
+
+        for proof in [&first, &second] {
+            verify_hidden_packed_i8_reduction(
+                &verifier,
+                &matrix_commitment,
+                first_source.layout.logical_len(),
+                claimed,
+                8,
+                b"section-6-layout",
+                proof,
+            )
+            .unwrap();
+        }
+        assert_ne!(first, second);
+        assert_ne!(
+            first.packed_positive_commitments,
+            second.packed_positive_commitments
+        );
     }
 
     #[test]

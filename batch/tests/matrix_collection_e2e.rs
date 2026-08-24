@@ -1,6 +1,7 @@
 use ark_bn254::Fr;
 use ark_ff::One;
 use batch::{
+    bucketed_ip::packing_stride_for_bit_width,
     jolt_dory::setup_dory_parameters,
     matrix_collection::{
         commit_matrix_shapes, commit_registered_dense_bva, constant_matrix_mle_evaluate,
@@ -60,10 +61,10 @@ fn run_family(max_log: usize, run_witness_oracle: bool) {
         .sum::<usize>();
     assert_eq!(descriptor.physical_len(), expected_physical);
     assert_eq!(descriptor.bucket_count(), expected_buckets);
-    assert_eq!(source.values().len(), descriptor.logical_len());
+    assert_eq!(source.values().len(), descriptor.layout().active_len());
     assert_eq!(
         descriptor.materialized_padding_entries(),
-        descriptor.logical_len() - expected_physical
+        descriptor.conceptual_boundary_zeros()
     );
     assert!(descriptor.bucket_ranges_are_a_partition());
 
@@ -82,11 +83,11 @@ fn run_family(max_log: usize, run_witness_oracle: bool) {
     .unwrap();
     assert_eq!(
         proof.packed.packed_eo.packing_stride,
-        32.min(descriptor.logical_len())
+        packing_stride_for_bit_width::<Fr>(descriptor.logical_len(), 8).unwrap()
     );
     assert_eq!(
         profile.commitment.physical_entries,
-        descriptor.logical_len()
+        descriptor.layout().active_len()
     );
     assert_eq!(
         profile.commitment.materialized_padding_entries,
@@ -263,7 +264,7 @@ fn heterogeneous_matrix_collection_full_descriptor_is_exact() {
     assert_eq!(descriptor.required_dory_log(), 31);
     assert_eq!(
         descriptor.materialized_padding_entries(),
-        descriptor.logical_len() - descriptor.physical_len()
+        descriptor.conceptual_boundary_zeros()
     );
     assert!(descriptor.bucket_ranges_are_a_partition());
 }

@@ -90,7 +90,7 @@ class Bf16BitcastConversionTest(unittest.TestCase):
             self.assertIsNone(tensor["scale"])
 
             actual = np.fromfile(bva_path, dtype=np.dtype("<u2"))
-            expected = np.zeros(manifest["layout"]["logical_entries"], dtype="<u2")
+            expected = np.zeros(manifest["layout"]["active_entries"], dtype="<u2")
             source_matrix = words.reshape((31, 3))
             for bucket in manifest["buckets"]:
                 destination = expected[
@@ -108,6 +108,35 @@ class Bf16BitcastConversionTest(unittest.TestCase):
             np.testing.assert_array_equal(actual, expected)
             self.assertGreater(manifest["layout"]["boundary_padding_entries"], 0)
             self.assertGreater(manifest["layout"]["final_padding_entries"], 0)
+            self.assertEqual(
+                manifest["layout"]["bva_size_bytes"],
+                manifest["layout"]["active_entries"] * 2,
+            )
+            self.assertFalse(manifest["verification"]["final_suffix_materialized"])
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(Path(modelconvert.__file__).resolve()),
+                    "stream",
+                    "--input",
+                    str(source),
+                    "--model-family",
+                    "llama-bf16",
+                    "--storage-dtype",
+                    "i16",
+                    "--chunk-mib",
+                    "1",
+                ],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                cwd=root,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+            self.assertEqual(completed.stdout, bva_path.read_bytes())
 
             verify_stdout = io.StringIO()
             with contextlib.redirect_stdout(verify_stdout), contextlib.redirect_stderr(
@@ -358,12 +387,11 @@ class LlamaW8A8StreamTest(unittest.TestCase):
             self.assertEqual(after, before)
 
             persisted = bva_path.read_bytes()
-            final_padding_bytes = (
-                description["layout"]["logical_entries"]
-                - description["stream_entries"]
-            ) * description["element_bytes"]
-            reconstructed = completed.stdout + bytes(final_padding_bytes)
-            self.assertEqual(reconstructed, persisted)
+            self.assertEqual(completed.stdout, persisted)
+            self.assertIn(np.int8(-128), np.frombuffer(persisted, dtype=np.int8))
+            self.assertEqual(
+                manifest["quantization"]["native_i8_formula"], "q=source_i8"
+            )
 
     @staticmethod
     def _file_snapshot(root: Path) -> dict[str, tuple[int, int]]:
@@ -403,7 +431,35 @@ class LlamaW8A8StreamTest(unittest.TestCase):
                 "model.layers.0.i8.weight",
                 "I8",
                 [6, 4],
-                np.arange(-12, 12, dtype=np.dtype("i1")).tobytes(),
+                np.asarray(
+                    [
+                        -128,
+                        -127,
+                        -96,
+                        -64,
+                        -32,
+                        -1,
+                        0,
+                        1,
+                        2,
+                        16,
+                        32,
+                        64,
+                        96,
+                        112,
+                        120,
+                        121,
+                        122,
+                        123,
+                        124,
+                        125,
+                        126,
+                        127,
+                        -2,
+                        -3,
+                    ],
+                    dtype=np.dtype("i1"),
+                ).tobytes(),
             ),
             (
                 "model.layers.0.i8.weight_scale",

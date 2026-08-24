@@ -33,7 +33,7 @@ use sha2::{Digest, Sha256};
 
 const HOMOGENEOUS_BIT_WIDTH: usize = 8;
 const DEFAULT_SEED: u64 = 0x4558_5045_5249_4d54;
-const PROOF_MAGIC: [u8; 8] = *b"S6BENCH1";
+const PROOF_MAGIC: [u8; 8] = *b"S6BENCH2";
 const EXPERIMENT_STAGE_COUNT: usize = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,7 +65,7 @@ enum ExperimentSource {
     I16(DenseMatrixBva<i16>),
 }
 
-pub(crate) struct InMemoryI8LoadProfile {
+pub(crate) struct InMemoryLoadProfile {
     pub allocation_seconds: f64,
     pub stream_seconds: f64,
     pub adopt_seconds: f64,
@@ -74,13 +74,20 @@ pub(crate) struct InMemoryI8LoadProfile {
     pub stream_sha256: String,
 }
 
-pub(crate) struct LoadedInMemoryI8 {
-    pub source: DenseMatrixBva<i8>,
-    pub profile: InMemoryI8LoadProfile,
+pub(crate) enum LoadedInMemoryBva {
+    I8(DenseMatrixBva<i8>),
+    I16(DenseMatrixBva<i16>),
 }
 
-pub(crate) struct InMemoryI8Input {
+pub(crate) struct LoadedInMemoryModel {
+    pub source: LoadedInMemoryBva,
+    pub profile: InMemoryLoadProfile,
+}
+
+pub(crate) struct InMemoryModelInput {
     pub preset: ModelPreset,
+    pub storage_dtype: &'static str,
+    pub bit_width: usize,
     pub source_path: PathBuf,
     pub matrix_shapes: Vec<(usize, usize)>,
     pub physical_entries: usize,
@@ -89,7 +96,8 @@ pub(crate) struct InMemoryI8Input {
     pub bucket_count: usize,
     pub native_i8_tensor_count: usize,
     pub converted_float_tensor_count: usize,
-    pub loader: Box<dyn FnOnce() -> Result<LoadedInMemoryI8>>,
+    pub bitcast_bf16_tensor_count: usize,
+    pub loader: Box<dyn FnOnce() -> Result<LoadedInMemoryModel>>,
 }
 
 impl ExperimentSource {
@@ -126,9 +134,9 @@ pub(crate) fn run_from_args(arguments: impl IntoIterator<Item = String>) -> Resu
     run(arguments, None)
 }
 
-pub(crate) fn run_from_args_with_in_memory_i8(
+pub(crate) fn run_from_args_with_in_memory_model(
     arguments: impl IntoIterator<Item = String>,
-    input: InMemoryI8Input,
+    input: InMemoryModelInput,
 ) -> Result<()> {
     let Some(arguments) = parse_arguments(arguments)? else {
         return Ok(());
@@ -136,7 +144,7 @@ pub(crate) fn run_from_args_with_in_memory_i8(
     run(arguments, Some(input))
 }
 
-fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Result<()> {
+fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Result<()> {
     let threads = rayon::current_num_threads();
     if !arguments.allow_non_64_threads {
         ensure!(
@@ -149,7 +157,7 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
     report_active_stage(1, "Workload preparation")?;
     let experiment_started = Instant::now();
     let monitor = MemoryMonitor::spawn(Duration::from_millis(100));
-    if let Some(input) = in_memory_i8.as_ref() {
+    if let Some(input) = in_memory.as_ref() {
         let Workload::Model(preset) = &arguments.workload else {
             bail!("an in-memory model source cannot be used with a homogeneous workload");
         };
@@ -168,10 +176,17 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
                 && input.logical_entries.is_power_of_two(),
             "invalid in-memory BVA length metadata"
         );
+        ensure!(
+            matches!(
+                (input.storage_dtype, input.bit_width),
+                ("i8", 8) | ("i16", 16)
+            ),
+            "unsupported in-memory BVA storage"
+        );
     }
     let manifest_started = Instant::now();
     let model_manifest = match &arguments.workload {
-        Workload::Model(preset) if in_memory_i8.is_none() => Some(
+        Workload::Model(preset) if in_memory.is_none() => Some(
             ModelBvaManifest::load(
                 preset.clone(),
                 &arguments.model_data_dir,
@@ -185,8 +200,8 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
     let manifest_seconds = manifest_started.elapsed().as_secs_f64();
 
     let (bit_width, storage_dtype, storage_element_bytes) =
-        match (in_memory_i8.as_ref(), model_manifest.as_ref()) {
-            (Some(_), None) => (8, "i8", size_of::<i8>()),
+        match (in_memory.as_ref(), model_manifest.as_ref()) {
+            (Some(input), None) => (input.bit_width, input.storage_dtype, input.bit_width / 8),
             (None, Some(manifest)) => {
                 ensure!(
                     matches!(
@@ -210,7 +225,7 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
 
     let shapes = match (
         &arguments.workload,
-        in_memory_i8.as_ref(),
+        in_memory.as_ref(),
         model_manifest.as_ref(),
     ) {
         (
@@ -235,7 +250,7 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
             "validated model descriptor changed before the experiment"
         );
     }
-    if let Some(input) = in_memory_i8.as_ref() {
+    if let Some(input) = in_memory.as_ref() {
         ensure!(
             physical_entries == input.physical_entries
                 && descriptor.layout().active_len() == input.active_entries
@@ -260,14 +275,14 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
     let packed_field_bytes = packed_field_entries
         .checked_mul(size_of::<Fr>())
         .context("packed field byte estimate overflowed")?;
-    let eo_flat_entries_per_vector = layout.logical_len / stride;
+    let eo_flat_entries_per_vector = layout.active_len.div_ceil(stride);
     let eo_flat_field_entries = eo_flat_entries_per_vector
         .checked_mul(2)
         .context("EO flat-vector entry estimate overflowed")?;
     let eo_flat_field_bytes = eo_flat_field_entries
         .checked_mul(size_of::<Fr>())
         .context("EO flat-vector byte estimate overflowed")?;
-    let stored_shortint_entries = layout.logical_len;
+    let stored_shortint_entries = layout.active_len;
     let stored_shortint_bytes = stored_shortint_entries
         .checked_mul(storage_element_bytes)
         .context("stored witness byte estimate overflowed")?;
@@ -276,7 +291,7 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
     if detailed_output {
         println!("output_mode=detailed");
         println!("experiment=parcomm-cargo-bench");
-        println!("protocol=section6-capped16-packed-eo-padded-shortint-dory");
+        println!("protocol=section6-capped16-packed-eo-active-prefix-dory");
         println!(
             "shape_validity_proof_enabled={}",
             arguments.shape_validity_proof
@@ -307,16 +322,26 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
                 println!("family=model");
                 println!("model_preset={preset}");
                 println!("matrix_count={}", shapes.len());
-                if let Some(input) = in_memory_i8.as_ref() {
+                if let Some(input) = in_memory.as_ref() {
                     println!("input_kind=in_memory_safetensors_bva");
                     println!("source_checkpoint={}", input.source_path.display());
                     println!("bva_disk_materialized=false");
                     println!("streamed_bva_entries={}", input.active_entries);
-                    println!("streamed_bva_bytes={}", input.active_entries);
+                    println!(
+                        "streamed_bva_bytes={}",
+                        input
+                            .active_entries
+                            .checked_mul(storage_element_bytes)
+                            .context("streamed BVA byte count overflowed")?
+                    );
                     println!("native_i8_tensor_count={}", input.native_i8_tensor_count);
                     println!(
                         "converted_float_tensor_count={}",
                         input.converted_float_tensor_count
+                    );
+                    println!(
+                        "bitcast_bf16_tensor_count={}",
+                        input.bitcast_bf16_tensor_count
                     );
                 } else {
                     let manifest = model_manifest
@@ -379,8 +404,9 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
         input_hash_seconds,
         input_adopt_seconds,
         input_loader_total_seconds,
-    ) = match (in_memory_i8.take(), model_manifest) {
+    ) = match (in_memory.take(), model_manifest) {
         (Some(input), None) => {
+            let input_dtype = input.storage_dtype;
             let loaded = (input.loader)().with_context(|| {
                 format!(
                     "stream {} directly into the in-memory BVA",
@@ -393,8 +419,13 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
                 println!("input_stream_complete=true");
                 println!("bva_disk_materialized=false");
             }
+            let source = match (input_dtype, loaded.source) {
+                ("i8", LoadedInMemoryBva::I8(source)) => ExperimentSource::I8(source),
+                ("i16", LoadedInMemoryBva::I16(source)) => ExperimentSource::I16(source),
+                _ => bail!("streamed BVA type does not match its declared storage dtype"),
+            };
             (
-                ExperimentSource::I8(loaded.source),
+                source,
                 loaded.profile.allocation_seconds,
                 loaded.profile.stream_seconds,
                 0.0,
@@ -525,14 +556,20 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
         serialized_size(&opening_proof.point.lookup.identity_reduction)?;
     let point_lookup_sum_size_bytes = serialized_size(&opening_proof.point.lookup.sum_reduction)?;
     let packed_eo_size_bytes = serialized_size(&opening_proof.packed_eo)?;
-    let packed_eo_field_element_count = opening_proof.packed_eo.field_element_count();
+    let packed_eo_scalar_commitment_count = opening_proof.packed_eo.scalar_commitment_count();
     let packed_eo_stride_size_bytes = serialized_size(&opening_proof.packed_eo.packing_stride)?;
-    let packed_eo_positive_size_bytes = serialized_size(&opening_proof.packed_eo.packed_positive)?;
-    let packed_eo_negative_size_bytes = serialized_size(&opening_proof.packed_eo.packed_negative)?;
-    let packed_eo_binary_size_bytes = serialized_size(&opening_proof.packed_eo.binary_rounds)?;
-    let packed_eo_a_reduced_size_bytes = serialized_size(&opening_proof.packed_eo.a_reduced)?;
-    let packed_eo_b_reduced_size_bytes = serialized_size(&opening_proof.packed_eo.b_reduced)?;
-    let packed_eo_scalar_identity_size_bytes = 0_usize;
+    let packed_eo_positive_commitments_size_bytes =
+        serialized_size(&opening_proof.packed_eo.packed_positive_commitments)?;
+    let packed_eo_negative_commitments_size_bytes =
+        serialized_size(&opening_proof.packed_eo.packed_negative_commitments)?;
+    let packed_eo_binary_round_commitments_size_bytes =
+        serialized_size(&opening_proof.packed_eo.binary_round_commitments)?;
+    let packed_eo_a_reduced_commitment_size_bytes =
+        serialized_size(&opening_proof.packed_eo.a_reduced_commitment)?;
+    let packed_eo_b_reduced_commitment_size_bytes =
+        serialized_size(&opening_proof.packed_eo.b_reduced_commitment)?;
+    let packed_eo_scalar_identity_size_bytes =
+        serialized_size(&opening_proof.packed_eo.scalar_identity)?;
     let final_evaluation_size_bytes = serialized_size(&opening_proof.final_eval)?;
     let final_aux_size_bytes = serialized_size(&opening_proof.final_eval.aux)?;
     let final_identity_size_bytes = serialized_size(&opening_proof.final_eval.joint_identity)?;
@@ -582,11 +619,11 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
     );
     ensure!(
         packed_eo_stride_size_bytes
-            + packed_eo_positive_size_bytes
-            + packed_eo_negative_size_bytes
-            + packed_eo_binary_size_bytes
-            + packed_eo_a_reduced_size_bytes
-            + packed_eo_b_reduced_size_bytes
+            + packed_eo_positive_commitments_size_bytes
+            + packed_eo_negative_commitments_size_bytes
+            + packed_eo_binary_round_commitments_size_bytes
+            + packed_eo_a_reduced_commitment_size_bytes
+            + packed_eo_b_reduced_commitment_size_bytes
             + packed_eo_scalar_identity_size_bytes
             == packed_eo_size_bytes,
         "Packed EO component sizes are not exhaustive"
@@ -668,7 +705,7 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
     );
     ensure!(
         opening_profile.packed_eo.physical_entries_per_pass == layout.active_len,
-        "Packed EO did not visit the complete padded BVA"
+        "Packed EO did not visit the complete active BVA prefix"
     );
     let total_prover_seconds = commit_phase_seconds + opening_prove_seconds;
     let total_verifier_seconds = validity_verify_seconds + opening_verify_seconds;
@@ -1030,13 +1067,23 @@ fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Resul
         println!("point_lookup_identity_size_bytes={point_lookup_identity_size_bytes}");
         println!("point_lookup_sum_size_bytes={point_lookup_sum_size_bytes}");
         println!("packed_eo_size_bytes={packed_eo_size_bytes}");
-        println!("packed_eo_field_element_count={packed_eo_field_element_count}");
+        println!("packed_eo_scalar_commitment_count={packed_eo_scalar_commitment_count}");
         println!("packed_eo_stride_size_bytes={packed_eo_stride_size_bytes}");
-        println!("packed_eo_positive_size_bytes={packed_eo_positive_size_bytes}");
-        println!("packed_eo_negative_size_bytes={packed_eo_negative_size_bytes}");
-        println!("packed_eo_binary_size_bytes={packed_eo_binary_size_bytes}");
-        println!("packed_eo_a_reduced_size_bytes={packed_eo_a_reduced_size_bytes}");
-        println!("packed_eo_b_reduced_size_bytes={packed_eo_b_reduced_size_bytes}");
+        println!(
+            "packed_eo_positive_commitments_size_bytes={packed_eo_positive_commitments_size_bytes}"
+        );
+        println!(
+            "packed_eo_negative_commitments_size_bytes={packed_eo_negative_commitments_size_bytes}"
+        );
+        println!(
+            "packed_eo_binary_round_commitments_size_bytes={packed_eo_binary_round_commitments_size_bytes}"
+        );
+        println!(
+            "packed_eo_a_reduced_commitment_size_bytes={packed_eo_a_reduced_commitment_size_bytes}"
+        );
+        println!(
+            "packed_eo_b_reduced_commitment_size_bytes={packed_eo_b_reduced_commitment_size_bytes}"
+        );
         println!("packed_eo_scalar_identity_size_bytes={packed_eo_scalar_identity_size_bytes}");
         println!("final_evaluation_size_bytes={final_evaluation_size_bytes}");
         println!("final_aux_size_bytes={final_aux_size_bytes}");

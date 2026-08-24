@@ -292,7 +292,7 @@ impl DenseBvaDescriptor {
     }
 
     pub fn materialized_padding_entries(&self) -> usize {
-        self.conceptual_zero_entries()
+        self.conceptual_boundary_zeros()
     }
 
     pub fn layout(&self) -> &BvaLayout {
@@ -638,6 +638,8 @@ impl RegisteredMatrixCollectionVerification {
 }
 
 /// The one-allocation prover witness with materialized dyadic-bucket padding.
+///
+/// The final suffix up to `logical_len` is implicit and is never stored.
 pub struct DenseMatrixBva<Integer: BvaInteger = i8> {
     descriptor: DenseBvaDescriptor,
     values: Vec<Integer>,
@@ -646,14 +648,15 @@ pub struct DenseMatrixBva<Integer: BvaInteger = i8> {
 impl<Integer: BvaInteger> DenseMatrixBva<Integer> {
     /// Adopt an already converted dense BVA without widening its entries.
     ///
-    /// The converter materializes boundary padding and the final suffix, so
-    /// every padded entry is checked before the witness is accepted.
+    /// The converter materializes bucket-boundary padding but omits the final
+    /// logical zero suffix. Every stored padding entry is checked before the
+    /// witness is accepted.
     pub fn from_dense_values(
         descriptor: DenseBvaDescriptor,
         values: Vec<Integer>,
     ) -> Result<Self, MatrixCollectionError> {
         descriptor.validate_canonical()?;
-        let expected = descriptor.logical_len();
+        let expected = descriptor.layout.active_len();
         if values.len() != expected {
             return Err(MatrixCollectionError::PackedBvaLength {
                 expected,
@@ -680,11 +683,7 @@ impl<Integer: BvaInteger> DenseMatrixBva<Integer> {
             }
             None
         });
-        let invalid_suffix = values[descriptor.layout.active_len()..]
-            .par_iter()
-            .position_any(|value| !value.is_zero())
-            .map(|offset| descriptor.layout.active_len() + offset);
-        if let Some(index) = invalid_boundary.or(invalid_suffix) {
+        if let Some(index) = invalid_boundary {
             return Err(MatrixCollectionError::NonZeroPackedPadding { index });
         }
         Ok(Self { descriptor, values })
@@ -731,9 +730,9 @@ impl<Integer: BvaInteger> DenseMatrixBva<Integer> {
 
     /// Build the final dense BVA directly from matrix entries.
     ///
-    /// This path allocates exactly one `logical_len` short-integer vector. Every sorted
-    /// bucket occupies its full padded rectangle and the final BVA suffix is
-    /// stored as zero in the same allocation.
+    /// This path allocates exactly one `active_len` short-integer vector. Every
+    /// sorted bucket occupies its full padded rectangle, while the final BVA
+    /// suffix up to `logical_len` remains implicit.
     pub fn from_short_fn<ValueAt>(
         shapes: &[(usize, usize)],
         value_at: ValueAt,
@@ -742,12 +741,8 @@ impl<Integer: BvaInteger> DenseMatrixBva<Integer> {
         ValueAt: Fn(usize, usize, usize) -> Integer + Sync,
     {
         let descriptor = DenseBvaDescriptor::from_shapes(shapes)?;
-        let mut values = vec![Integer::from(false); descriptor.logical_len()];
-        fill_bucket_range(
-            &mut values[..descriptor.layout.active_len()],
-            &descriptor.buckets,
-            &value_at,
-        );
+        let mut values = vec![Integer::from(false); descriptor.layout.active_len()];
+        fill_bucket_range(&mut values, &descriptor.buckets, &value_at);
         Ok(Self { descriptor, values })
     }
 
@@ -2030,4 +2025,23 @@ fn fill_bucket_range<Integer, ValueAt>(
         || fill_bucket_range(left_values, left_buckets, value_at),
         || fill_bucket_range(right_values, right_buckets, value_at),
     );
+}
+
+#[cfg(test)]
+mod dense_bva_tests {
+    use super::DenseMatrixBva;
+
+    #[test]
+    fn i8_construction_preserves_the_full_signed_domain() {
+        let shapes = [(2, 2)];
+        let from_fn = DenseMatrixBva::from_fn(&shapes, |_, row, col| {
+            [-128_i8, -127, 0, 127][row * 2 + col]
+        })
+        .unwrap();
+        assert_eq!(from_fn.values(), &[-128, -127, 0, 127]);
+
+        let from_prepacked =
+            DenseMatrixBva::from_prepacked_i8(&shapes, vec![-128, -127, 0, 127]).unwrap();
+        assert_eq!(from_prepacked.values(), &[-128, -127, 0, 127]);
+    }
 }

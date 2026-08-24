@@ -436,16 +436,15 @@ pub fn commit_dense_i8_zk(
     let primitive_count = physical_rows * row_width;
     let mut partial = DoryScheme::begin(setup);
     if primitive_count != 0 {
-        DoryScheme::feed_i128_rows_with(
+        DoryScheme::feed_i8_rows_with(
             &mut partial,
-            |index| source.values.get(index).copied().unwrap_or(0) as i128,
+            |index| source.values.get(index).copied().unwrap_or(0),
             primitive_count,
             row_width,
             setup,
         );
     }
-    DoryScheme::feed_zeros(&mut partial, row_width, total_rows - physical_rows, setup);
-    DoryScheme::finish_zk(partial, setup)
+    DoryScheme::finish_zk_with_implicit_zero_rows(partial, total_rows, setup)
 }
 
 /// Stream the i16 prefix and implicit zero rows into a hiding Dory commitment.
@@ -468,8 +467,7 @@ pub fn commit_dense_i16_zk(
             setup,
         );
     }
-    DoryScheme::feed_zeros(&mut partial, row_width, total_rows - physical_rows, setup);
-    DoryScheme::finish_zk(partial, setup)
+    DoryScheme::finish_zk_with_implicit_zero_rows(partial, total_rows, setup)
 }
 
 /// Public opening data for a dense field vector.
