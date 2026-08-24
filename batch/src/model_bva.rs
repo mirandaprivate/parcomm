@@ -16,9 +16,16 @@ use std::{
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::matrix_collection::{DenseBvaDescriptor, DenseMatrixBva, MatrixCollectionError};
+use crate::{
+    bucketed_ip::BvaInteger,
+    matrix_collection::{DenseBvaDescriptor, DenseMatrixBva, MatrixCollectionError},
+};
 
-const MANIFEST_VERSION: u64 = 1;
+const LEGACY_MANIFEST_VERSION: u64 = 1;
+const MANIFEST_VERSION: u64 = 2;
+const BF16_BITCAST_SCHEME: &str = "bf16_bitcast_i16";
+const BF16_BITCAST_CONVERSION: &str = "bitcast_bf16_to_i16";
+const BF16_SOURCE_TO_STORAGE: &str = "bitcast_bf16_u16_to_i16";
 const BUCKET_ORDER: &str = "entry_count_desc_then_tensor_index_then_row_offset_then_col_offset";
 const WITHIN_BUCKET_ORDER: &str = "row_major";
 const RANK1_MATRIX_MAPPING: &str = "shape_n_to_n_by_1";
@@ -45,9 +52,9 @@ impl ModelPreset {
             Self::Llama8bI8 => {
                 Path::new("Llama-3.1-8B-W8A8/parcomm-i8/llama-3.1-8b-w8a8.manifest.json")
             }
-            Self::Llama8bI16 => {
-                Path::new("Llama-3.1-8B-BF16/parcomm-i16/llama-3.1-8b-bf16.manifest.json")
-            }
+            Self::Llama8bI16 => Path::new(
+                "Llama-3.1-8B-BF16/parcomm-bf16-bits/llama-3.1-8b-bf16-bits.manifest.json",
+            ),
             Self::Llama70bI8 => {
                 Path::new("Llama-3.1-70B-W8A8/parcomm-i8/llama-3.1-70b-w8a8.manifest.json")
             }
@@ -123,7 +130,7 @@ pub struct ModelBvaManifest {
 }
 
 impl ModelBvaManifest {
-    /// Parse and validate a converter-v1 manifest and its BVA file.
+    /// Parse and validate a converter manifest and its BVA file.
     ///
     /// Relative manifest overrides are resolved below `model_data_root`.
     /// Relative BVA overrides are resolved next to the selected manifest.
@@ -246,24 +253,61 @@ impl ModelBvaManifest {
 
     /// Read an i8 BVA into its single final allocation and adopt it directly.
     pub fn load_i8(self, verify_sha256: bool) -> Result<LoadedI8ModelBva, ModelBvaError> {
-        if self.storage_dtype != "i8" || self.bit_width != 8 || self.element_bytes != 1 {
-            return Err(ModelBvaError::UnsupportedI8Load {
+        self.load_native(verify_sha256, "i8", 8, 1, |shapes, values| {
+            DenseMatrixBva::from_prepacked_i8(shapes, values)
+        })
+    }
+
+    /// Read an i16 BVA into its single final allocation without widening it.
+    pub fn load_i16(self, verify_sha256: bool) -> Result<LoadedI16ModelBva, ModelBvaError> {
+        self.load_native(verify_sha256, "i16", 16, 2, |shapes, values| {
+            DenseMatrixBva::from_prepacked_i16(shapes, values)
+        })
+    }
+
+    fn load_native<Integer, Adopt>(
+        self,
+        verify_sha256: bool,
+        expected_dtype: &'static str,
+        expected_bit_width: usize,
+        expected_element_bytes: usize,
+        adopt: Adopt,
+    ) -> Result<LoadedModelBva<Integer>, ModelBvaError>
+    where
+        Integer: BvaInteger + bytemuck::Pod,
+        Adopt: FnOnce(
+            &[(usize, usize)],
+            Vec<Integer>,
+        ) -> Result<DenseMatrixBva<Integer>, MatrixCollectionError>,
+    {
+        if self.storage_dtype != expected_dtype
+            || self.bit_width != expected_bit_width
+            || self.element_bytes != expected_element_bytes
+        {
+            return Err(ModelBvaError::UnsupportedNativeLoad {
                 preset: self.preset,
                 storage_dtype: self.storage_dtype.clone(),
                 bit_width: self.bit_width,
+                requested_storage_dtype: expected_dtype,
             });
+        }
+        if cfg!(target_endian = "big") && expected_element_bytes > 1 {
+            return Err(ModelBvaError::invalid(
+                "storage_encoding",
+                "little-endian i16 BVA loading requires a little-endian target",
+            ));
         }
 
         let total_started = Instant::now();
         let allocation_started = Instant::now();
-        let mut values = Vec::<i8>::new();
+        let mut values = Vec::<Integer>::new();
         values
             .try_reserve_exact(self.logical_entries)
             .map_err(|source| ModelBvaError::Allocation {
                 entries: self.logical_entries,
                 message: source.to_string(),
             })?;
-        values.resize(self.logical_entries, 0);
+        values.resize(self.logical_entries, Integer::from(false));
         let allocation_seconds = allocation_started.elapsed().as_secs_f64();
 
         let read_started = Instant::now();
@@ -299,7 +343,7 @@ impl ModelBvaManifest {
         let sha256_seconds = hash_started.elapsed().as_secs_f64();
 
         let adopt_started = Instant::now();
-        let bva = DenseMatrixBva::from_prepacked_i8(&self.matrix_shapes, values)?;
+        let bva = adopt(&self.matrix_shapes, values)?;
         let adopt_seconds = adopt_started.elapsed().as_secs_f64();
         let profile = ModelBvaLoadProfile {
             allocation_seconds,
@@ -310,7 +354,7 @@ impl ModelBvaManifest {
             bytes_read: self.bva_size_bytes,
             sha256_verified: verify_sha256,
         };
-        Ok(LoadedI8ModelBva {
+        Ok(LoadedModelBva {
             manifest: self,
             bva,
             profile,
@@ -330,12 +374,15 @@ pub struct ModelBvaLoadProfile {
     pub sha256_verified: bool,
 }
 
-/// An i8 model BVA ready for the existing dense matrix-collection pipeline.
-pub struct LoadedI8ModelBva {
+/// A native short-integer model BVA ready for the matrix-collection pipeline.
+pub struct LoadedModelBva<Integer: BvaInteger> {
     pub manifest: ModelBvaManifest,
-    pub bva: DenseMatrixBva,
+    pub bva: DenseMatrixBva<Integer>,
     pub profile: ModelBvaLoadProfile,
 }
+
+pub type LoadedI8ModelBva = LoadedModelBva<i8>;
+pub type LoadedI16ModelBva = LoadedModelBva<i16>;
 
 #[derive(Debug)]
 pub enum ModelBvaError {
@@ -362,10 +409,11 @@ pub enum ModelBvaError {
         expected: String,
         actual: String,
     },
-    UnsupportedI8Load {
+    UnsupportedNativeLoad {
         preset: ModelPreset,
         storage_dtype: String,
         bit_width: usize,
+        requested_storage_dtype: &'static str,
     },
     Allocation {
         entries: usize,
@@ -422,16 +470,17 @@ impl Display for ModelBvaError {
                 "BVA SHA-256 mismatch for {}: expected {expected}, got {actual}",
                 path.display()
             ),
-            Self::UnsupportedI8Load {
+            Self::UnsupportedNativeLoad {
                 preset,
                 storage_dtype,
                 bit_width,
+                requested_storage_dtype,
             } => write!(
                 formatter,
-                "model preset {preset} stores {storage_dtype}/{bit_width}-bit elements; the i8 loader does not convert it"
+                "model preset {preset} stores {storage_dtype}/{bit_width}-bit elements; the {requested_storage_dtype} loader does not convert it"
             ),
             Self::Allocation { entries, message } => {
-                write!(formatter, "could not allocate {entries} i8 BVA entries: {message}")
+                write!(formatter, "could not allocate {entries} native BVA entries: {message}")
             }
             Self::MatrixCollection(error) => Display::fmt(error, formatter),
         }
@@ -459,6 +508,8 @@ impl From<MatrixCollectionError> for ModelBvaError {
 struct RawManifest {
     format: String,
     version: u64,
+    #[serde(default)]
+    source: Option<RawSource>,
     quantization: RawQuantization,
     layout: RawLayout,
     tensors: Vec<RawTensor>,
@@ -466,7 +517,30 @@ struct RawManifest {
 }
 
 #[derive(Debug, Deserialize)]
+struct RawSource {
+    model_family: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct RawQuantization {
+    #[serde(default)]
+    scheme: Option<String>,
+    #[serde(default)]
+    native_i8_tensor_count: Option<u64>,
+    #[serde(default)]
+    converted_float_tensor_count: Option<u64>,
+    #[serde(default)]
+    bitcast_bf16_tensor_count: Option<u64>,
+    #[serde(default)]
+    bit_preserving: Option<bool>,
+    #[serde(default)]
+    numeric_conversion: Option<bool>,
+    #[serde(default)]
+    source_to_storage: Option<String>,
+    #[serde(default)]
+    source_storage_encoding: Option<String>,
+    #[serde(default)]
+    field_interpretation: Option<String>,
     storage_dtype: String,
     storage_encoding: String,
     #[serde(default)]
@@ -499,6 +573,14 @@ struct RawLayout {
 #[derive(Debug, Deserialize)]
 struct RawTensor {
     index: u64,
+    #[serde(default)]
+    source_dtype: Option<String>,
+    #[serde(default)]
+    conversion: Option<String>,
+    #[serde(default)]
+    max_abs: Option<f64>,
+    #[serde(default)]
+    scale: Option<f64>,
     matrix_shape: [u64; 2],
     element_count: u64,
     bucket_indices: Vec<u64>,
@@ -555,7 +637,15 @@ fn resolve_bva_path(
 }
 
 fn validate_scalar_metadata(preset: ModelPreset, raw: &RawManifest) -> Result<(), ModelBvaError> {
-    expect_eq("version", raw.version, MANIFEST_VERSION)?;
+    if !matches!(raw.version, LEGACY_MANIFEST_VERSION | MANIFEST_VERSION) {
+        return Err(ModelBvaError::invalid(
+            "version",
+            format!(
+                "expected {LEGACY_MANIFEST_VERSION} or {MANIFEST_VERSION}, got {}",
+                raw.version
+            ),
+        ));
+    }
     expect_eq(
         "format",
         raw.format.as_str(),
@@ -607,7 +697,81 @@ fn validate_scalar_metadata(preset: ModelPreset, raw: &RawManifest) -> Result<()
             ),
         ));
     }
+    if preset == ModelPreset::Llama8bI16 {
+        validate_bf16_bitcast_metadata(raw)?;
+    }
     validate_sha256(&raw.layout.bva_sha256)
+}
+
+fn validate_bf16_bitcast_metadata(raw: &RawManifest) -> Result<(), ModelBvaError> {
+    expect_eq("version", raw.version, MANIFEST_VERSION)?;
+    let source = raw
+        .source
+        .as_ref()
+        .ok_or_else(|| ModelBvaError::invalid("source", "missing BF16 source metadata"))?;
+    expect_eq(
+        "source.model_family",
+        source.model_family.as_str(),
+        "llama-bf16",
+    )?;
+    expect_eq(
+        "quantization.scheme",
+        raw.quantization.scheme.as_deref(),
+        Some(BF16_BITCAST_SCHEME),
+    )?;
+    expect_eq(
+        "quantization.native_i8_tensor_count",
+        raw.quantization.native_i8_tensor_count,
+        Some(0),
+    )?;
+    expect_eq(
+        "quantization.converted_float_tensor_count",
+        raw.quantization.converted_float_tensor_count,
+        Some(0),
+    )?;
+    expect_eq(
+        "quantization.bitcast_bf16_tensor_count",
+        raw.quantization.bitcast_bf16_tensor_count,
+        Some(raw.tensors.len() as u64),
+    )?;
+    expect_eq(
+        "quantization.bit_preserving",
+        raw.quantization.bit_preserving,
+        Some(true),
+    )?;
+    expect_eq(
+        "quantization.numeric_conversion",
+        raw.quantization.numeric_conversion,
+        Some(false),
+    )?;
+    expect_eq(
+        "quantization.source_to_storage",
+        raw.quantization.source_to_storage.as_deref(),
+        Some(BF16_SOURCE_TO_STORAGE),
+    )?;
+    expect_eq(
+        "quantization.source_storage_encoding",
+        raw.quantization.source_storage_encoding.as_deref(),
+        Some("bf16_bit_pattern_little_endian"),
+    )?;
+    expect_eq(
+        "quantization.field_interpretation",
+        raw.quantization.field_interpretation.as_deref(),
+        Some("signed_twos_complement_i16"),
+    )?;
+    for (index, tensor) in raw.tensors.iter().enumerate() {
+        if tensor.source_dtype.as_deref() != Some("BF16")
+            || tensor.conversion.as_deref() != Some(BF16_BITCAST_CONVERSION)
+            || tensor.max_abs.is_some()
+            || tensor.scale.is_some()
+        {
+            return Err(ModelBvaError::invalid(
+                "tensors[]",
+                format!("tensor {index} does not use the scale-free BF16 bitcast"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_tensor_metadata(raw: &[RawTensor]) -> Result<Vec<(usize, usize)>, ModelBvaError> {
@@ -879,11 +1043,81 @@ mod tests {
             None,
         )
         .unwrap();
-        let error = match manifest.load_i8(false) {
+        let error = match manifest.clone().load_i8(false) {
             Err(error) => error,
             Ok(_) => panic!("the i8 loader must not convert an i16 BVA"),
         };
-        assert!(matches!(error, ModelBvaError::UnsupportedI8Load { .. }));
+        assert!(matches!(error, ModelBvaError::UnsupportedNativeLoad { .. }));
+        let loaded = manifest.load_i16(true).unwrap();
+        let expected = fixture
+            .values
+            .iter()
+            .copied()
+            .map(i16::from)
+            .collect::<Vec<_>>();
+        assert_eq!(loaded.bva.values(), expected);
+    }
+
+    #[test]
+    fn legacy_i16_manifest_version_is_rejected() {
+        let fixture = Fixture::new(ModelPreset::Llama8bI16);
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(&fixture.manifest_path).unwrap()).unwrap();
+        manifest["version"] = json!(1);
+        fs::write(
+            &fixture.manifest_path,
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let error = ModelBvaManifest::load(
+            ModelPreset::Llama8bI16,
+            fixture.directory.path(),
+            Some(&fixture.manifest_path),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("version"));
+    }
+
+    #[test]
+    fn numeric_i16_manifest_scheme_is_rejected() {
+        let fixture = Fixture::new(ModelPreset::Llama8bI16);
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(&fixture.manifest_path).unwrap()).unwrap();
+        manifest["quantization"]["scheme"] = json!("symmetric_per_tensor");
+        fs::write(
+            &fixture.manifest_path,
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let error = ModelBvaManifest::load(
+            ModelPreset::Llama8bI16,
+            fixture.directory.path(),
+            Some(&fixture.manifest_path),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("quantization.scheme"));
+    }
+
+    #[test]
+    fn version_two_i8_manifest_remains_supported() {
+        let fixture = Fixture::new(ModelPreset::Llama8bI8);
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(&fixture.manifest_path).unwrap()).unwrap();
+        manifest["version"] = json!(2);
+        fs::write(
+            &fixture.manifest_path,
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        ModelBvaManifest::load(
+            ModelPreset::Llama8bI8,
+            fixture.directory.path(),
+            Some(&fixture.manifest_path),
+            None,
+        )
+        .unwrap();
     }
 
     struct Fixture {
@@ -948,9 +1182,9 @@ mod tests {
             } else {
                 "signed_twos_complement_little_endian"
             };
-            let manifest = json!({
+            let mut manifest = json!({
                 "format": format!("parcomm-dense-{}-bva", preset.storage_dtype()),
-                "version": 1,
+                "version": if preset == ModelPreset::Llama8bI16 { 2 } else { 1 },
                 "quantization": {
                     "storage_dtype": preset.storage_dtype(),
                     "storage_encoding": encoding,
@@ -983,6 +1217,24 @@ mod tests {
                 }],
                 "buckets": buckets,
             });
+            if preset == ModelPreset::Llama8bI16 {
+                manifest["source"] = json!({ "model_family": "llama-bf16" });
+                manifest["quantization"]["scheme"] = json!(BF16_BITCAST_SCHEME);
+                manifest["quantization"]["native_i8_tensor_count"] = json!(0);
+                manifest["quantization"]["converted_float_tensor_count"] = json!(0);
+                manifest["quantization"]["bitcast_bf16_tensor_count"] = json!(1);
+                manifest["quantization"]["bit_preserving"] = json!(true);
+                manifest["quantization"]["numeric_conversion"] = json!(false);
+                manifest["quantization"]["source_to_storage"] = json!(BF16_SOURCE_TO_STORAGE);
+                manifest["quantization"]["source_storage_encoding"] =
+                    json!("bf16_bit_pattern_little_endian");
+                manifest["quantization"]["field_interpretation"] =
+                    json!("signed_twos_complement_i16");
+                manifest["tensors"][0]["source_dtype"] = json!("BF16");
+                manifest["tensors"][0]["conversion"] = json!(BF16_BITCAST_CONVERSION);
+                manifest["tensors"][0]["max_abs"] = Value::Null;
+                manifest["tensors"][0]["scale"] = Value::Null;
+            }
             fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
             Self {
                 directory,

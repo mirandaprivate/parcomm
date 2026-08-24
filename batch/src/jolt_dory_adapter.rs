@@ -750,6 +750,24 @@ fn bind_hidden_dense_i8_statement<T: Transcript<Challenge = Fr>>(
     transcript.append_values(b"standard_point", standard_point_msb);
 }
 
+fn bind_hidden_dense_i16_statement<T: Transcript<Challenge = Fr>>(
+    transcript: &mut T,
+    outer_binding: &[u8],
+    commitment: &DoryCommitment,
+    logical_len: usize,
+    standard_point_msb: &[Fr],
+) {
+    transcript.append(&Label(b"parcomm_hidden_i16_v1"));
+    transcript.append(&LabelWithCount(
+        b"outer_binding",
+        outer_binding.len() as u64,
+    ));
+    transcript.append_bytes(outer_binding);
+    transcript.append_labeled(b"logical_len", &U64Word(logical_len as u64));
+    transcript.append_labeled(b"commitment", commitment);
+    transcript.append_values(b"standard_point", standard_point_msb);
+}
+
 /// Open a dense i8 source while retaining the normalized evaluation and blind.
 #[allow(clippy::too_many_arguments)]
 pub fn open_hidden_dense_i8_zk<S: I8DoryPolynomial, T: Transcript<Challenge = Fr>>(
@@ -772,6 +790,55 @@ pub fn open_hidden_dense_i8_zk<S: I8DoryPolynomial, T: Transcript<Challenge = Fr
     let normalization = normalize_monomial_point(monomial_point_low)?;
     let standard_eval = monomial_eval * normalization.monomial_scale_inverse;
     bind_hidden_dense_i8_statement(
+        transcript,
+        outer_binding,
+        commitment,
+        source.logical_len(),
+        &normalization.standard_point_msb,
+    );
+    let opening_source = ClaimedOpeningSource {
+        source,
+        point: &normalization.standard_point_msb,
+        evaluation: standard_eval,
+    };
+    let (opening, evaluation_commitment, evaluation_blind) = DoryScheme::open_zk(
+        &opening_source,
+        &normalization.standard_point_msb,
+        standard_eval,
+        setup,
+        hint,
+        transcript,
+    )
+    .map_err(|error| DenseI8DoryError::Dory(error.to_string()))?;
+    Ok((
+        HiddenDenseI8DoryProof { opening },
+        evaluation_commitment,
+        evaluation_blind,
+    ))
+}
+
+/// Open a dense i16 source while retaining the normalized evaluation and blind.
+#[allow(clippy::too_many_arguments)]
+pub fn open_hidden_dense_i16_zk<S: I16DoryPolynomial, T: Transcript<Challenge = Fr>>(
+    source: &S,
+    commitment: &DoryCommitment,
+    hint: DoryHint,
+    monomial_point_low: &[Fr],
+    monomial_eval: Fr,
+    outer_binding: &[u8],
+    setup: &DoryProverSetup,
+    transcript: &mut T,
+) -> Result<(HiddenDenseI8DoryProof, Bn254G1, Fr), DenseI8DoryError> {
+    let num_vars = source.num_vars();
+    if monomial_point_low.len() != num_vars {
+        return Err(DenseI8DoryError::PointLength {
+            expected: num_vars,
+            actual: monomial_point_low.len(),
+        });
+    }
+    let normalization = normalize_monomial_point(monomial_point_low)?;
+    let standard_eval = monomial_eval * normalization.monomial_scale_inverse;
+    bind_hidden_dense_i16_statement(
         transcript,
         outer_binding,
         commitment,
@@ -823,6 +890,46 @@ pub fn verify_hidden_dense_i8_zk<T: Transcript<Challenge = Fr>>(
     validate_dory_proof_layout(&proof.opening, num_vars)?;
     let normalization = normalize_monomial_point(monomial_point_low)?;
     bind_hidden_dense_i8_statement(
+        transcript,
+        outer_binding,
+        commitment,
+        logical_len,
+        &normalization.standard_point_msb,
+    );
+    DoryScheme::verify_zk(
+        commitment,
+        &normalization.standard_point_msb,
+        &proof.opening,
+        verifier_setup,
+        transcript,
+    )
+    .map_err(|error| DenseI8DoryError::Dory(error.to_string()))
+}
+
+/// Verify a hidden dense-i16 opening and return its normalized evaluation commitment.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_hidden_dense_i16_zk<T: Transcript<Challenge = Fr>>(
+    commitment: &DoryCommitment,
+    proof: &HiddenDenseI8DoryProof,
+    logical_len: usize,
+    monomial_point_low: &[Fr],
+    outer_binding: &[u8],
+    verifier_setup: &DoryVerifierSetup,
+    transcript: &mut T,
+) -> Result<Bn254G1, DenseI8DoryError> {
+    if logical_len == 0 || !logical_len.is_power_of_two() {
+        return Err(DenseI8DoryError::InvalidLogicalLength(logical_len));
+    }
+    let num_vars = logical_len.trailing_zeros() as usize;
+    if monomial_point_low.len() != num_vars {
+        return Err(DenseI8DoryError::PointLength {
+            expected: num_vars,
+            actual: monomial_point_low.len(),
+        });
+    }
+    validate_dory_proof_layout(&proof.opening, num_vars)?;
+    let normalization = normalize_monomial_point(monomial_point_low)?;
+    bind_hidden_dense_i16_statement(
         transcript,
         outer_binding,
         commitment,

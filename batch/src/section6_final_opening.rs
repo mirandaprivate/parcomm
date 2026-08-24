@@ -29,11 +29,12 @@ use serde::{Deserialize, Serialize};
 use crate::{
     hidden_relation::{HiddenRelationTable, HiddenRelationTableStatement, HiddenScalarWitness},
     jolt_dory::{
-        commitment_binding_bytes, dense_i8_polynomial, CommittedDoryBva, CommittedDoryFieldMatrix,
-        CommittedDoryFieldVector, DenseI8BvaSource, DoryCommitProfile, DoryProverParameters,
-        DoryVerifierParameters, HiddenFieldVectorDoryProof,
+        commitment_binding_bytes, dense_i16_polynomial, dense_i8_polynomial, CommittedDoryBva,
+        CommittedDoryFieldMatrix, CommittedDoryFieldVector, DenseI16BvaSource, DenseI8BvaSource,
+        DoryCommitProfile, DoryProverParameters, DoryVerifierParameters,
+        HiddenFieldVectorDoryProof,
     },
-    jolt_dory_adapter::{commit_dense_i8_zk, DenseI8DoryError},
+    jolt_dory_adapter::{commit_dense_i16_zk, commit_dense_i8_zk, DenseI8DoryError},
 };
 
 const SUMCHECK_DEGREE: usize = 2;
@@ -765,6 +766,46 @@ pub fn commit_section6_bva_i8_on_grid_zk<S: DenseI8BvaSource>(
     let dense = dense_i8_polynomial(source)
         .map_err(|error| Section6FinalOpeningError::Dory(error.to_string()))?;
     let (commitment, hint) = commit_dense_i8_zk(&dense, &parameters.pcs);
+    let shape = grid.native_shape(logical_len)?;
+    let row_width = shape.row_width();
+    Ok(CommittedDoryBva {
+        commitment,
+        hint,
+        profile: DoryCommitProfile {
+            physical_entries: values.len(),
+            nonzero_entries: values.par_iter().filter(|&&value| value != 0).count(),
+            logical_entries: logical_len,
+            row_commitments: shape.row_count(),
+            physical_rows: values.len().div_ceil(row_width),
+            materialized_field_entries: 0,
+            materialized_padding_entries: source.materialized_padding_entries(),
+            padding_group_operations: 0,
+        },
+    })
+}
+
+/// Grid-aware BVA commitment preserving direct signed-16-bit storage.
+pub fn commit_section6_bva_i16_on_grid_zk<S: DenseI16BvaSource>(
+    parameters: &DoryProverParameters,
+    grid: &Section6DoryGrid,
+    source: &S,
+    bit_width: usize,
+) -> Result<CommittedDoryBva, Section6FinalOpeningError> {
+    if bit_width == 0 || bit_width > 16 {
+        return Err(Section6FinalOpeningError::ProofShape);
+    }
+    let logical_len = source.layout().logical_len();
+    let values = source.dense_values();
+    if bit_width < 16
+        && values
+            .par_iter()
+            .any(|value| u64::from(value.unsigned_abs()) >= (1_u64 << bit_width))
+    {
+        return Err(Section6FinalOpeningError::ProofShape);
+    }
+    let dense = dense_i16_polynomial(source)
+        .map_err(|error| Section6FinalOpeningError::Dory(error.to_string()))?;
+    let (commitment, hint) = commit_dense_i16_zk(&dense, &parameters.pcs);
     let shape = grid.native_shape(logical_len)?;
     let row_width = shape.row_width();
     Ok(CommittedDoryBva {

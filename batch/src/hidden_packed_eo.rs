@@ -22,20 +22,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     bucketed_ip::{
-        packing_stride_for_bit_width, PackedEoChallengeTranscript, PackedEoLiteBulletProof,
-        PaddingWorkCounters, StreamingEoError, StreamingEoProfile, TensorBasisVector,
+        packing_stride_for_bit_width, BvaInteger, BvaSource, PackedEoChallengeTranscript,
+        PackedEoLiteBulletProof, PaddingWorkCounters, StreamingEoError, StreamingEoProfile,
+        TensorBasisVector,
     },
     hidden_relation::{
         prove_hidden_scalar_relation, verify_hidden_scalar_relation, HiddenRelationError,
         HiddenScalarRelationProof, HiddenScalarWitness, RelationExpression,
     },
     jolt_dory::{
-        dense_i8_polynomial, normalize_monomial_mle_claim, CommittedDoryBva, DenseI8BvaSource,
-        DoryProverParameters, DoryVerifierParameters,
+        dense_i16_polynomial, dense_i8_polynomial, normalize_monomial_mle_claim, CommittedDoryBva,
+        DenseI16BvaSource, DenseI8BvaSource, DoryProverParameters, DoryVerifierParameters,
     },
     jolt_dory_adapter::{
-        open_hidden_dense_i8_zk, verify_hidden_dense_i8_zk, DenseI8DoryError,
-        HiddenDenseI8DoryProof,
+        open_hidden_dense_i16_zk, open_hidden_dense_i8_zk, verify_hidden_dense_i16_zk,
+        verify_hidden_dense_i8_zk, DenseI8DoryError, HiddenDenseI8DoryProof,
     },
 };
 
@@ -370,7 +371,7 @@ pub fn prove_hidden_packed_i8_reduction<S: DenseI8BvaSource>(
     ),
     HiddenPackedEoProverError<S::Error>,
 > {
-    prove_hidden_packed_i8_reduction_inner(
+    prove_hidden_packed_shortint_reduction::<i8, S>(
         parameters,
         source,
         tbv,
@@ -381,8 +382,9 @@ pub fn prove_hidden_packed_i8_reduction<S: DenseI8BvaSource>(
     )
 }
 
+/// Reduce a public Packed EO claim over the selected native short-integer type.
 #[allow(clippy::too_many_arguments)]
-fn prove_hidden_packed_i8_reduction_inner<S: DenseI8BvaSource>(
+pub fn prove_hidden_packed_shortint_reduction<Entry, S>(
     parameters: &DoryProverParameters,
     source: &mut S,
     tbv: &TensorBasisVector<Fr>,
@@ -398,8 +400,12 @@ fn prove_hidden_packed_i8_reduction_inner<S: DenseI8BvaSource>(
         StreamingEoProfile,
     ),
     HiddenPackedEoProverError<S::Error>,
-> {
-    let logical_len = source.layout().logical_len();
+>
+where
+    Entry: BvaInteger,
+    S: BvaSource<Entry>,
+{
+    let logical_len = BvaSource::<Entry>::layout(source).logical_len();
     let packing_stride = packing_stride_for_bit_width::<Fr>(logical_len, bit_width)
         .map_err(|_| HiddenPackedEoProverError::Protocol(HiddenPackedEoError::Shape))?;
     let mut driver = PublicChallengeDriver::new(
@@ -411,7 +417,7 @@ fn prove_hidden_packed_i8_reduction_inner<S: DenseI8BvaSource>(
         outer_binding,
     );
     let (private_fold, counters, profile) =
-        PackedEoLiteBulletProof::prove_i8_streaming_with_commitment_transcript(
+        PackedEoLiteBulletProof::prove_shortint_streaming_with_commitment_transcript::<Entry, S>(
             source,
             tbv,
             claimed,
@@ -509,6 +515,81 @@ pub fn prove_hidden_bva_opening_profiled<S: DenseI8BvaSource>(
 
     let dory_open_started = Instant::now();
     let (dory_opening, evaluation_commitment, evaluation_blind) = open_hidden_dense_i8_zk(
+        &dense,
+        &committed.commitment,
+        committed.hint.clone(),
+        &monomial_point,
+        JoltFr::from(packed.a_reduced.value),
+        &packed.transcript_state,
+        &parameters.pcs,
+        &mut dory_transcript,
+    )?;
+    let dory_open_seconds = dory_open_started.elapsed().as_secs_f64();
+
+    let scalar_binding_started = Instant::now();
+    let normalized = normalize_monomial_mle_claim(&packed.challenges_inv, packed.a_reduced.value)
+        .map_err(|_| HiddenPackedEoError::Shape)?;
+    let normalized_a = HiddenScalarWitness {
+        value: normalized.value,
+        commitment: evaluation_commitment,
+        blind: evaluation_blind,
+    };
+    let evaluation_expression = RelationExpression::table(1)
+        .mul(RelationExpression::constant(normalized.scale))
+        .sub(RelationExpression::table(0));
+    let evaluation_binding = prove_hidden_scalar_relation(
+        &packed.transcript_state,
+        parameters,
+        &[packed.a_reduced.clone(), normalized_a],
+        &evaluation_expression,
+        rng,
+    )?;
+    let scalar_binding_seconds = scalar_binding_started.elapsed().as_secs_f64();
+
+    let proof = HiddenBvaOpeningProof {
+        dory_opening,
+        evaluation_binding,
+    };
+    let profile = HiddenBvaOpeningProverProfile {
+        point_preparation_seconds,
+        dense_preparation_seconds,
+        transcript_preparation_seconds,
+        dory_open_seconds,
+        scalar_binding_seconds,
+        total_seconds: total_started.elapsed().as_secs_f64(),
+    };
+    Ok((proof, profile))
+}
+
+/// Open a registered native-i16 BVA and report mutually exclusive timings.
+pub fn prove_hidden_bva_i16_opening_profiled<S: DenseI16BvaSource>(
+    parameters: &DoryProverParameters,
+    source: &S,
+    committed: &CommittedDoryBva,
+    packed: &HiddenPackedEoProverState,
+    rng: &mut impl RngCore,
+) -> Result<(HiddenBvaOpeningProof, HiddenBvaOpeningProverProfile), HiddenPackedEoError> {
+    let total_started = Instant::now();
+
+    let point_preparation_started = Instant::now();
+    let monomial_point = packed
+        .challenges_inv
+        .iter()
+        .copied()
+        .map(JoltFr::from)
+        .collect::<Vec<_>>();
+    let point_preparation_seconds = point_preparation_started.elapsed().as_secs_f64();
+
+    let dense_preparation_started = Instant::now();
+    let dense = dense_i16_polynomial(source)?;
+    let dense_preparation_seconds = dense_preparation_started.elapsed().as_secs_f64();
+
+    let transcript_preparation_started = Instant::now();
+    let mut dory_transcript = Blake2bTranscript::<JoltFr>::new(b"pc_hidden_peo_dory");
+    let transcript_preparation_seconds = transcript_preparation_started.elapsed().as_secs_f64();
+
+    let dory_open_started = Instant::now();
+    let (dory_opening, evaluation_commitment, evaluation_blind) = open_hidden_dense_i16_zk(
         &dense,
         &committed.commitment,
         committed.hint.clone(),
@@ -654,6 +735,25 @@ pub fn verify_hidden_bva_opening_profiled(
     packed: &HiddenPackedEoVerification,
     proof: &HiddenBvaOpeningProof,
 ) -> Result<HiddenBvaOpeningVerifierProfile, HiddenPackedEoError> {
+    verify_hidden_shortint_bva_opening_profiled(
+        parameters,
+        matrix_commitment,
+        logical_len,
+        8,
+        packed,
+        proof,
+    )
+}
+
+/// Verify a native short-integer BVA opening selected by its committed bit width.
+pub fn verify_hidden_shortint_bva_opening_profiled(
+    parameters: &DoryVerifierParameters,
+    matrix_commitment: &DoryCommitment,
+    logical_len: usize,
+    bit_width: usize,
+    packed: &HiddenPackedEoVerification,
+    proof: &HiddenBvaOpeningProof,
+) -> Result<HiddenBvaOpeningVerifierProfile, HiddenPackedEoError> {
     let total_started = Instant::now();
 
     let point_preparation_started = Instant::now();
@@ -670,15 +770,27 @@ pub fn verify_hidden_bva_opening_profiled(
     let transcript_preparation_seconds = transcript_preparation_started.elapsed().as_secs_f64();
 
     let dory_verify_started = Instant::now();
-    let evaluation_commitment = verify_hidden_dense_i8_zk(
-        matrix_commitment,
-        &proof.dory_opening,
-        logical_len,
-        &monomial_point,
-        &packed.transcript_state,
-        &parameters.pcs,
-        &mut dory_transcript,
-    )?;
+    let evaluation_commitment = match bit_width {
+        1..=8 => verify_hidden_dense_i8_zk(
+            matrix_commitment,
+            &proof.dory_opening,
+            logical_len,
+            &monomial_point,
+            &packed.transcript_state,
+            &parameters.pcs,
+            &mut dory_transcript,
+        )?,
+        9..=16 => verify_hidden_dense_i16_zk(
+            matrix_commitment,
+            &proof.dory_opening,
+            logical_len,
+            &monomial_point,
+            &packed.transcript_state,
+            &parameters.pcs,
+            &mut dory_transcript,
+        )?,
+        _ => return Err(HiddenPackedEoError::Shape),
+    };
     let dory_verify_seconds = dory_verify_started.elapsed().as_secs_f64();
 
     let scalar_binding_started = Instant::now();

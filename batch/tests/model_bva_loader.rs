@@ -52,18 +52,17 @@ fn converted_i8_bva_is_loaded_in_place_from_validated_manifest_order() {
 }
 
 #[test]
-fn native_i16_manifest_is_recognized_but_not_reinterpreted_as_i8() {
+fn native_i16_manifest_loads_without_reinterpretation_or_widening() {
     let directory = TempDir::new().unwrap();
     let manifest_path = directory.path().join("tiny-i16.manifest.json");
     let bva_path = directory.path().join("tiny-i16.bva.i16");
     let shapes = [(3, 2)];
-    let generated =
-        DenseMatrixBva::from_fn(&shapes, |_, row, col| (1 + row * 3 + col) as i8).unwrap();
-    let bytes = generated
-        .values()
-        .iter()
-        .flat_map(|&value| i16::from(value).to_le_bytes())
-        .collect::<Vec<_>>();
+    let words = [0x0000_u16, 0x8000, 0x3f80, 0xbf80, 0x7f80, 0xffff];
+    let generated = DenseMatrixBva::<i16>::from_i16_fn(&shapes, |_, row, col| {
+        i16::from_le_bytes(words[row * shapes[0].1 + col].to_le_bytes())
+    })
+    .unwrap();
+    let bytes = bytemuck::cast_slice::<i16, u8>(generated.values()).to_vec();
     fs::write(&bva_path, &bytes).unwrap();
     write_manifest(
         &manifest_path,
@@ -82,11 +81,15 @@ fn native_i16_manifest_is_recognized_but_not_reinterpreted_as_i8() {
         None,
     )
     .unwrap();
-    let error = match manifest.load_i8(false) {
+    let error = match manifest.clone().load_i8(false) {
         Err(error) => error,
         Ok(_) => panic!("native i16 was reinterpreted by the i8 loader"),
     };
     assert!(error.to_string().contains("i8 loader does not convert"));
+    let loaded = manifest.load_i16(true).unwrap();
+    assert_eq!(loaded.bva.values(), generated.values());
+    assert!(loaded.profile.sha256_verified);
+    assert_eq!(loaded.profile.bytes_read, bytes.len() as u64);
 }
 
 #[test]
@@ -135,9 +138,9 @@ fn write_manifest(
             })
         })
         .collect::<Vec<_>>();
-    let manifest = json!({
+    let mut manifest = json!({
         "format": format!("parcomm-dense-{storage_dtype}-bva"),
-        "version": 1,
+        "version": if bit_width == 16 { 2 } else { 1 },
         "quantization": {
             "storage_dtype": storage_dtype,
             "storage_encoding": if bit_width == 8 {
@@ -174,6 +177,23 @@ fn write_manifest(
         }],
         "buckets": buckets,
     });
+    if bit_width == 16 {
+        manifest["source"] = json!({ "model_family": "llama-bf16" });
+        manifest["quantization"]["scheme"] = json!("bf16_bitcast_i16");
+        manifest["quantization"]["native_i8_tensor_count"] = json!(0);
+        manifest["quantization"]["converted_float_tensor_count"] = json!(0);
+        manifest["quantization"]["bitcast_bf16_tensor_count"] = json!(1);
+        manifest["quantization"]["bit_preserving"] = json!(true);
+        manifest["quantization"]["numeric_conversion"] = json!(false);
+        manifest["quantization"]["source_to_storage"] = json!("bitcast_bf16_u16_to_i16");
+        manifest["quantization"]["source_storage_encoding"] =
+            json!("bf16_bit_pattern_little_endian");
+        manifest["quantization"]["field_interpretation"] = json!("signed_twos_complement_i16");
+        manifest["tensors"][0]["source_dtype"] = json!("BF16");
+        manifest["tensors"][0]["conversion"] = json!("bitcast_bf16_to_i16");
+        manifest["tensors"][0]["max_abs"] = serde_json::Value::Null;
+        manifest["tensors"][0]["scale"] = serde_json::Value::Null;
+    }
     fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
 }
 

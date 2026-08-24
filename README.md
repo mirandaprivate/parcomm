@@ -120,18 +120,17 @@ Shape-validity proving is optional and disabled by default.
 
 ### Converted model matrices
 
-The CPU end-to-end experiment currently accepts native-i8 BVA artifacts for
-the Llama 8B and Llama 70B presets. By default, manifests and BVA files are
-loaded from `../model-data` relative to the workspace.
+The CPU end-to-end experiment accepts native-i8 BVA artifacts for the Llama 8B
+and Llama 70B presets and bit-preserving 16-bit BVA artifacts for Llama 8B BF16.
+By default, manifests and BVA files are loaded from `../model-data` relative to
+the workspace.
 
 ```bash
 RAYON_NUM_THREADS=64 cargo bench --quiet -p batch --bench experiment -- \
-  llama8b-i8 \
-  --summary-only
+  llama8b-i8
 
 RAYON_NUM_THREADS=64 cargo bench --quiet -p batch --bench experiment -- \
-  llama70b-i8 \
-  --summary-only
+  llama70b-i8
 ```
 
 Use `--model-data-dir`, `--manifest`, or `--bva` to override the artifact
@@ -142,8 +141,7 @@ same end-to-end experiment through one direct Cargo command, use:
 
 ```bash
 RAYON_NUM_THREADS=64 cargo bench --quiet -p batch --bench experiment_llama -- \
-  llama8b-i8 \
-  --summary-only
+  llama8b-i8
 ```
 
 The benchmark invokes `python3 preprocessing/modelconvert.py` directly. It
@@ -152,6 +150,19 @@ conversion when present, and then verifies its manifest and BVA before proving.
 Pass `--force-conversion` only when the existing conversion must be replaced.
 The converter requires NumPy in the selected Python environment. Llama 70B i8
 uses the same command with `llama70b-i8`.
+
+For BF16, the dedicated benchmark copies each source BF16 payload directly into
+one 16-bit BVA word. It does not decode the floating-point value and does not
+apply scaling, rounding, clipping, or numeric i16 quantization:
+
+```bash
+RAYON_NUM_THREADS=64 cargo bench --quiet -p batch \
+  --bench experiment_llama8B_16bit
+```
+
+The resulting two bytes are identical to the source BF16 bytes. The native
+ShortInt proof path subsequently interprets that preserved word as a signed
+little-endian i16 field value.
 
 ### Options
 

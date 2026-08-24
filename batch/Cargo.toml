@@ -44,6 +44,11 @@ name = "experiment_llama"
 harness = false
 
 [[bench]]
+name = "experiment_llama8B_16bit"
+path = "benches/experiment_llama8B_16bit.rs"
+harness = false
+
+[[bench]]
 name = "packed_eo_ab"
 harness = false
 

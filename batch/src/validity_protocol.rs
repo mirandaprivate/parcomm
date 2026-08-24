@@ -26,12 +26,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    bucketed_ip::{PaddingWorkCounters, StreamingEoProfile},
+    bucketed_ip::{BvaInteger, PaddingWorkCounters, StreamingEoProfile, TensorBasisVector},
     hidden_packed_eo::{
-        prove_hidden_bva_opening_profiled, prove_hidden_packed_i8_reduction,
-        verify_hidden_bva_opening_profiled, verify_hidden_packed_i8_reduction,
-        HiddenBvaOpeningProof, HiddenBvaOpeningProverProfile, HiddenBvaOpeningVerifierProfile,
-        HiddenPackedEoError, HiddenPackedEoProof, HiddenPackedEoProverError,
+        prove_hidden_bva_i16_opening_profiled, prove_hidden_bva_opening_profiled,
+        prove_hidden_packed_shortint_reduction, verify_hidden_packed_i8_reduction,
+        verify_hidden_shortint_bva_opening_profiled, HiddenBvaOpeningProof,
+        HiddenBvaOpeningProverProfile, HiddenBvaOpeningVerifierProfile, HiddenPackedEoError,
+        HiddenPackedEoProof, HiddenPackedEoProverError, HiddenPackedEoProverState,
     },
     jolt_dory::{CommittedDoryBva, DoryProverParameters, DoryVerifierParameters},
     matrix_collection::DenseMatrixBva,
@@ -41,10 +42,10 @@ use crate::{
         Section6MatrixClaim, Section6PointWitness,
     },
     section6_final_opening::{
-        commit_section6_bva_i8_on_grid_zk, prove_section6_final_opening_profiled,
-        verify_section6_final_opening_profiled, Section6DoryGrid, Section6FinalOpeningError,
-        Section6FinalOpeningProof, Section6FinalOpeningProverProfile,
-        Section6FinalOpeningVerifierProfile,
+        commit_section6_bva_i16_on_grid_zk, commit_section6_bva_i8_on_grid_zk,
+        prove_section6_final_opening_profiled, verify_section6_final_opening_profiled,
+        Section6DoryGrid, Section6FinalOpeningError, Section6FinalOpeningProof,
+        Section6FinalOpeningProverProfile, Section6FinalOpeningVerifierProfile,
     },
     validity_final::{
         build_final_prover_plan, build_final_verifier_plan, commit_final_aux_on_grid_zk,
@@ -289,6 +290,149 @@ impl From<Section6FinalOpeningError> for ValidityProtocolError {
     }
 }
 
+/// Native short-integer storage supported by the Section 6 prover path.
+pub trait Section6Integer: BvaInteger {
+    fn commit_bva_on_grid(
+        parameters: &DoryProverParameters,
+        grid: &Section6DoryGrid,
+        source: &DenseMatrixBva<Self>,
+        bit_width: usize,
+    ) -> Result<CommittedDoryBva, ValidityProtocolError>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn prove_packed(
+        parameters: &DoryProverParameters,
+        source: &mut DenseMatrixBva<Self>,
+        tbv: &TensorBasisVector<Fr>,
+        claimed: Fr,
+        bit_width: usize,
+        matrix_commitment: &DoryCommitment,
+        outer_binding: &[u8],
+    ) -> Result<
+        (
+            HiddenPackedEoProof,
+            HiddenPackedEoProverState,
+            PaddingWorkCounters,
+            StreamingEoProfile,
+        ),
+        ValidityProtocolError,
+    >;
+
+    fn open_bva<R: RngCore>(
+        parameters: &DoryProverParameters,
+        source: &DenseMatrixBva<Self>,
+        committed: &CommittedDoryBva,
+        packed: &HiddenPackedEoProverState,
+        rng: &mut R,
+    ) -> Result<(HiddenBvaOpeningProof, HiddenBvaOpeningProverProfile), ValidityProtocolError>;
+}
+
+impl Section6Integer for i8 {
+    fn commit_bva_on_grid(
+        parameters: &DoryProverParameters,
+        grid: &Section6DoryGrid,
+        source: &DenseMatrixBva<Self>,
+        bit_width: usize,
+    ) -> Result<CommittedDoryBva, ValidityProtocolError> {
+        Ok(commit_section6_bva_i8_on_grid_zk(
+            parameters, grid, source, bit_width,
+        )?)
+    }
+
+    fn prove_packed(
+        parameters: &DoryProverParameters,
+        source: &mut DenseMatrixBva<Self>,
+        tbv: &TensorBasisVector<Fr>,
+        claimed: Fr,
+        bit_width: usize,
+        matrix_commitment: &DoryCommitment,
+        outer_binding: &[u8],
+    ) -> Result<
+        (
+            HiddenPackedEoProof,
+            HiddenPackedEoProverState,
+            PaddingWorkCounters,
+            StreamingEoProfile,
+        ),
+        ValidityProtocolError,
+    > {
+        Ok(prove_hidden_packed_shortint_reduction::<i8, _>(
+            parameters,
+            source,
+            tbv,
+            claimed,
+            bit_width,
+            matrix_commitment,
+            outer_binding,
+        )?)
+    }
+
+    fn open_bva<R: RngCore>(
+        parameters: &DoryProverParameters,
+        source: &DenseMatrixBva<Self>,
+        committed: &CommittedDoryBva,
+        packed: &HiddenPackedEoProverState,
+        rng: &mut R,
+    ) -> Result<(HiddenBvaOpeningProof, HiddenBvaOpeningProverProfile), ValidityProtocolError> {
+        Ok(prove_hidden_bva_opening_profiled(
+            parameters, source, committed, packed, rng,
+        )?)
+    }
+}
+
+impl Section6Integer for i16 {
+    fn commit_bva_on_grid(
+        parameters: &DoryProverParameters,
+        grid: &Section6DoryGrid,
+        source: &DenseMatrixBva<Self>,
+        bit_width: usize,
+    ) -> Result<CommittedDoryBva, ValidityProtocolError> {
+        Ok(commit_section6_bva_i16_on_grid_zk(
+            parameters, grid, source, bit_width,
+        )?)
+    }
+
+    fn prove_packed(
+        parameters: &DoryProverParameters,
+        source: &mut DenseMatrixBva<Self>,
+        tbv: &TensorBasisVector<Fr>,
+        claimed: Fr,
+        bit_width: usize,
+        matrix_commitment: &DoryCommitment,
+        outer_binding: &[u8],
+    ) -> Result<
+        (
+            HiddenPackedEoProof,
+            HiddenPackedEoProverState,
+            PaddingWorkCounters,
+            StreamingEoProfile,
+        ),
+        ValidityProtocolError,
+    > {
+        Ok(prove_hidden_packed_shortint_reduction::<i16, _>(
+            parameters,
+            source,
+            tbv,
+            claimed,
+            bit_width,
+            matrix_commitment,
+            outer_binding,
+        )?)
+    }
+
+    fn open_bva<R: RngCore>(
+        parameters: &DoryProverParameters,
+        source: &DenseMatrixBva<Self>,
+        committed: &CommittedDoryBva,
+        packed: &HiddenPackedEoProverState,
+        rng: &mut R,
+    ) -> Result<(HiddenBvaOpeningProof, HiddenBvaOpeningProverProfile), ValidityProtocolError> {
+        Ok(prove_hidden_bva_i16_opening_profiled(
+            parameters, source, committed, packed, rng,
+        )?)
+    }
+}
+
 /// Minimum Dory grid covering every auxiliary matrix and the BlindFold rows
 /// of the identity batches. The dense BVA is committed and opened separately
 /// on its native source-sized grid.
@@ -339,9 +483,9 @@ fn validity_bva_dory_log(layout: &Section6Layout) -> Result<usize, ValidityProto
 }
 
 /// Commit the shape masks and BVA, then produce the size-private validity proof.
-pub fn commit_validity_collection(
+pub fn commit_validity_collection<Integer: Section6Integer>(
     parameters: &DoryProverParameters,
-    source: &DenseMatrixBva,
+    source: &DenseMatrixBva<Integer>,
     bit_width: usize,
     rng: &mut impl RngCore,
 ) -> Result<CommittedValidityCollection, ValidityProtocolError> {
@@ -349,9 +493,9 @@ pub fn commit_validity_collection(
 }
 
 /// Commit the persistent state and retain separate stage timings.
-pub fn commit_validity_collection_profiled(
+pub fn commit_validity_collection_profiled<Integer: Section6Integer>(
     parameters: &DoryProverParameters,
-    source: &DenseMatrixBva,
+    source: &DenseMatrixBva<Integer>,
     bit_width: usize,
     rng: &mut impl RngCore,
 ) -> Result<(CommittedValidityCollection, ValidityCommitProfile), ValidityProtocolError> {
@@ -363,18 +507,18 @@ pub fn commit_validity_collection_profiled(
 }
 
 /// Commit the persistent shape masks and BVA without a shape validity proof.
-pub fn commit_opening_collection(
+pub fn commit_opening_collection<Integer: Section6Integer>(
     parameters: &DoryProverParameters,
-    source: &DenseMatrixBva,
+    source: &DenseMatrixBva<Integer>,
     bit_width: usize,
 ) -> Result<CommittedOpeningCollection, ValidityProtocolError> {
     Ok(commit_opening_collection_profiled(parameters, source, bit_width)?.0)
 }
 
 /// Commit the opening state and retain timings, with validity proof time set to zero.
-pub fn commit_opening_collection_profiled(
+pub fn commit_opening_collection_profiled<Integer: Section6Integer>(
     parameters: &DoryProverParameters,
-    source: &DenseMatrixBva,
+    source: &DenseMatrixBva<Integer>,
     bit_width: usize,
 ) -> Result<(CommittedOpeningCollection, ValidityCommitProfile), ValidityProtocolError> {
     let layout = Section6Layout::from_descriptor(source.descriptor(), bit_width)?;
@@ -391,7 +535,7 @@ pub fn commit_opening_collection_profiled(
     let shape_commit_seconds = shape_started.elapsed().as_secs_f64();
 
     let bva_started = Instant::now();
-    let bva = commit_section6_bva_i8_on_grid_zk(parameters, &bva_grid, source, bit_width)?;
+    let bva = Integer::commit_bva_on_grid(parameters, &bva_grid, source, bit_width)?;
     let bva_commit_seconds = bva_started.elapsed().as_secs_f64();
 
     let statement = ValidityCommitStatement {
@@ -444,10 +588,10 @@ pub fn verify_shape_commitment(
 }
 
 /// Execute the complete prover flow with a streamed byte opening.
-pub fn prove_validity_opening(
+pub fn prove_validity_opening<Integer: Section6Integer>(
     parameters: &DoryProverParameters,
     committed: &CommittedValidityCollection,
-    source: &mut DenseMatrixBva,
+    source: &mut DenseMatrixBva<Integer>,
     claims: &[Section6MatrixClaim<Fr>],
     rng: &mut impl RngCore,
 ) -> Result<(ValidityOpeningProof, ValidityOpeningProfile), ValidityProtocolError> {
@@ -455,10 +599,10 @@ pub fn prove_validity_opening(
 }
 
 /// Execute the complete opening flow without generating a shape validity proof.
-pub fn prove_opening(
+pub fn prove_opening<Integer: Section6Integer>(
     parameters: &DoryProverParameters,
     committed: &CommittedOpeningCollection,
-    source: &mut DenseMatrixBva,
+    source: &mut DenseMatrixBva<Integer>,
     claims: &[Section6MatrixClaim<Fr>],
     rng: &mut impl RngCore,
 ) -> Result<(ValidityOpeningProof, ValidityOpeningProfile), ValidityProtocolError> {
@@ -558,7 +702,7 @@ pub fn prove_opening(
     let virtual_tbv = point_witness.reconstruct_tbv(&layout)?;
     let tbv_reconstruct_seconds = tbv_reconstruct_started.elapsed().as_secs_f64();
     let packed_eo_started = Instant::now();
-    let (packed_eo, packed_state, padding, packed_profile) = prove_hidden_packed_i8_reduction(
+    let (packed_eo, packed_state, padding, packed_profile) = Integer::prove_packed(
         parameters,
         source,
         &virtual_tbv,
@@ -566,7 +710,6 @@ pub fn prove_opening(
         layout.bit_width,
         &committed.statement.bva_commitment,
         &packed_binding,
-        rng,
     )?;
     let packed_eo_seconds = packed_eo_started.elapsed().as_secs_f64();
     let virtual_tbv_drop_started = Instant::now();
@@ -574,7 +717,7 @@ pub fn prove_opening(
     let virtual_tbv_drop_seconds = virtual_tbv_drop_started.elapsed().as_secs_f64();
     let bva_open_started = Instant::now();
     let (bva_opening, bva_open_profile) =
-        prove_hidden_bva_opening_profiled(parameters, source, &committed.bva, &packed_state, rng)?;
+        Integer::open_bva(parameters, source, &committed.bva, &packed_state, rng)?;
     let bva_open_seconds = bva_open_started.elapsed().as_secs_f64();
 
     // TBV evaluation identities at the Packed EO point with deferred
@@ -779,10 +922,11 @@ pub fn verify_validity_opening_profiled(
     )?;
     let packed_eo_verify_seconds = packed_eo_verify_started.elapsed().as_secs_f64();
     let bva_open_verify_started = Instant::now();
-    let bva_open_profile = verify_hidden_bva_opening_profiled(
+    let bva_open_profile = verify_hidden_shortint_bva_opening_profiled(
         parameters,
         &statement.bva_commitment,
         layout.logical_len,
+        layout.bit_width,
         &packed,
         &proof.bva_opening,
     )?;
@@ -1111,5 +1255,63 @@ mod tests {
             &bad_joint,
         )
         .is_err());
+    }
+
+    #[test]
+    fn validity_protocol_round_trips_native_i16() {
+        let shapes = [(3_usize, 3_usize), (2, 2)];
+        let mut source = DenseMatrixBva::<i16>::from_i16_fn(&shapes, |matrix, row, col| {
+            let magnitude = 17_000 + (matrix * 101 + row * 7 + col) as i16;
+            if (row + col).is_multiple_of(2) {
+                magnitude
+            } else {
+                -magnitude
+            }
+        })
+        .unwrap();
+        let layout = Section6Layout::from_descriptor(source.descriptor(), 16).unwrap();
+        let setup_log = validity_required_dory_log(&layout).unwrap();
+        let (prover_parameters, verifier_parameters) = setup_dory_parameters(setup_log);
+        let mut rng = StdRng::seed_from_u64(0x4931_3653_4543_5436);
+        let committed = commit_opening_collection(&prover_parameters, &source, 16).unwrap();
+        let point_log = layout.point_log();
+        let claims = shapes
+            .iter()
+            .enumerate()
+            .map(|(matrix, &(rows, cols))| {
+                let row_point = (0..rows.next_power_of_two().ilog2() as usize)
+                    .map(|coordinate| Fr::from((matrix * 19 + coordinate + 2) as u64))
+                    .collect::<Vec<_>>();
+                let col_point = (0..cols.next_power_of_two().ilog2() as usize)
+                    .map(|coordinate| Fr::from((matrix * 23 + coordinate + 5) as u64))
+                    .collect::<Vec<_>>();
+                let value = source
+                    .matrix_mle_evaluate(matrix, &row_point, &col_point)
+                    .unwrap();
+                Section6MatrixClaim::from_unpadded(point_log, &row_point, &col_point, value)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let claimed_values = claims.iter().map(|claim| claim.value).collect::<Vec<_>>();
+        let (proof, profile) = prove_opening(
+            &prover_parameters,
+            &committed,
+            &mut source,
+            &claims,
+            &mut rng,
+        )
+        .unwrap();
+        let verification = verify_validity_opening(
+            &verifier_parameters,
+            committed.statement(),
+            &claimed_values,
+            &proof,
+        )
+        .unwrap();
+        assert_eq!(
+            verification.terminal_claim_count,
+            profile.terminal_claim_count
+        );
+        assert_eq!(proof.physical_dory_proof_count(), 2);
     }
 }

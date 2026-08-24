@@ -209,9 +209,9 @@ impl Section6Layout {
                 "at least one real bucket is required".to_owned(),
             ));
         }
-        if bit_width == 0 || bit_width > 8 {
+        if bit_width == 0 || bit_width > 16 {
             return Err(Section6DataError::InvalidLayout(format!(
-                "bit_width must be in 1..=8, got {bit_width}"
+                "bit_width must be in 1..=16, got {bit_width}"
             )));
         }
         if !logical_len.is_power_of_two() {

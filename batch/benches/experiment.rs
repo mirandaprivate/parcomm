@@ -31,7 +31,7 @@ use batch::{
 use bincode::Options;
 use sha2::{Digest, Sha256};
 
-const BIT_WIDTH_I8: usize = 8;
+const HOMOGENEOUS_BIT_WIDTH: usize = 8;
 const DEFAULT_SEED: u64 = 0x4558_5045_5249_4d54;
 const PROOF_MAGIC: [u8; 8] = *b"S6BENCH1";
 const EXPERIMENT_STAGE_COUNT: usize = 8;
@@ -58,6 +58,34 @@ struct Arguments {
     allow_non_64_threads: bool,
     shape_validity_proof: bool,
     summary_only: bool,
+}
+
+enum ExperimentSource {
+    I8(DenseMatrixBva<i8>),
+    I16(DenseMatrixBva<i16>),
+}
+
+impl ExperimentSource {
+    fn descriptor(&self) -> &DenseBvaDescriptor {
+        match self {
+            Self::I8(source) => source.descriptor(),
+            Self::I16(source) => source.descriptor(),
+        }
+    }
+
+    fn values_len(&self) -> usize {
+        match self {
+            Self::I8(source) => source.values().len(),
+            Self::I16(source) => source.values().len(),
+        }
+    }
+
+    fn matrix_mle_evaluate(&self, matrix: usize, left: &[Fr], right: &[Fr]) -> Result<Fr> {
+        match self {
+            Self::I8(source) => Ok(source.matrix_mle_evaluate(matrix, left, right)?),
+            Self::I16(source) => Ok(source.matrix_mle_evaluate(matrix, left, right)?),
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -99,16 +127,26 @@ fn run(arguments: Arguments) -> Result<()> {
     };
     let manifest_seconds = manifest_started.elapsed().as_secs_f64();
 
-    if let Some(manifest) = model_manifest.as_ref() {
-        ensure!(
-            manifest.bit_width() == BIT_WIDTH_I8 && manifest.storage_dtype() == "i8",
-            "preset {} uses native {}-bit {} BVA storage, but the current Packed EO and Dory source path supports native i8 only; the experiment will not reinterpret or convert {}",
-            manifest.preset(),
-            manifest.bit_width(),
-            manifest.storage_dtype(),
-            manifest.bva_path().display()
-        );
-    }
+    let (bit_width, storage_dtype, storage_element_bytes) = match model_manifest.as_ref() {
+        Some(manifest) => {
+            ensure!(
+                matches!(
+                    (manifest.storage_dtype(), manifest.bit_width()),
+                    ("i8", 8) | ("i16", 16)
+                ),
+                "preset {} uses unsupported native {}-bit {} BVA storage",
+                manifest.preset(),
+                manifest.bit_width(),
+                manifest.storage_dtype()
+            );
+            (
+                manifest.bit_width(),
+                manifest.storage_dtype(),
+                manifest.bit_width() / 8,
+            )
+        }
+        None => (HOMOGENEOUS_BIT_WIDTH, "i8", size_of::<i8>()),
+    };
 
     let shapes = match (&arguments.workload, model_manifest.as_ref()) {
         (
@@ -131,7 +169,7 @@ fn run(arguments: Arguments) -> Result<()> {
             "validated model descriptor changed before the experiment"
         );
     }
-    let layout = Section6Layout::from_descriptor(&descriptor, BIT_WIDTH_I8)?;
+    let layout = Section6Layout::from_descriptor(&descriptor, bit_width)?;
     let descriptor_seconds =
         report_stage("descriptor", descriptor_started, &monitor, detailed_output);
     let logical_log = layout.logical_len.ilog2() as usize;
@@ -141,18 +179,22 @@ fn run(arguments: Arguments) -> Result<()> {
             "workload has logical domain 2^{logical_log}, not requested 2^{target_log}"
         );
     }
-    let stride = packing_stride_for_bit_width::<Fr>(layout.logical_len, BIT_WIDTH_I8)?;
+    let stride = packing_stride_for_bit_width::<Fr>(layout.logical_len, bit_width)?;
     let setup_log = validity_required_dory_log(&layout)?;
     let packed_field_entries = layout.active_len.div_ceil(stride);
     let packed_field_bytes = packed_field_entries
         .checked_mul(size_of::<Fr>())
         .context("packed field byte estimate overflowed")?;
-    let stored_i8_entries = layout.logical_len;
-    let materialized_padding_entries = stored_i8_entries - physical_entries;
+    let stored_shortint_entries = layout.logical_len;
+    let stored_shortint_bytes = stored_shortint_entries
+        .checked_mul(storage_element_bytes)
+        .context("stored witness byte estimate overflowed")?;
+    let materialized_padding_entries = stored_shortint_entries - physical_entries;
 
     if detailed_output {
+        println!("output_mode=detailed");
         println!("experiment=parcomm-cargo-bench");
-        println!("protocol=section6-capped16-packed-eo-padded-i8-dory");
+        println!("protocol=section6-capped16-packed-eo-padded-shortint-dory");
         println!(
             "shape_validity_proof_enabled={}",
             arguments.shape_validity_proof
@@ -161,7 +203,9 @@ fn run(arguments: Arguments) -> Result<()> {
         println!("rayon_threads={threads}");
         println!("formal_thread_requirement=64");
         println!("seed={}", arguments.seed);
-        println!("bit_width={BIT_WIDTH_I8}");
+        println!("bit_width={bit_width}");
+        println!("storage_dtype={storage_dtype}");
+        println!("storage_element_bytes={storage_element_bytes}");
         println!("kappa={stride}");
         println!("splitting_budget={}", DenseBvaDescriptor::SPLITTING_BUDGET);
         match &arguments.workload {
@@ -196,14 +240,15 @@ fn run(arguments: Arguments) -> Result<()> {
         println!("active_logical_entries={}", layout.active_len);
         println!("logical_entries={}", layout.logical_len);
         println!(
-            "boundary_padding_i8_entries={}",
+            "boundary_padding_shortint_entries={}",
             layout.active_len - physical_entries
         );
         println!(
-            "final_padding_i8_entries={}",
+            "final_padding_shortint_entries={}",
             layout.logical_len - layout.active_len
         );
-        println!("stored_i8_entries={stored_i8_entries}");
+        println!("stored_shortint_entries={stored_shortint_entries}");
+        println!("stored_shortint_bytes={stored_shortint_bytes}");
         println!("bucket_count={}", layout.bucket_count);
         println!("required_dory_log={setup_log}");
         println!("canonical_dory_log={}", canonical_dory_log(setup_log));
@@ -211,7 +256,7 @@ fn run(arguments: Arguments) -> Result<()> {
         println!("estimated_packed_field_bytes={packed_field_bytes}");
         println!(
             "estimated_witness_plus_packed_bytes={}",
-            stored_i8_entries
+            stored_shortint_bytes
                 .checked_add(packed_field_bytes)
                 .context("combined memory estimate overflowed")?
         );
@@ -230,23 +275,43 @@ fn run(arguments: Arguments) -> Result<()> {
         input_adopt_seconds,
         input_loader_total_seconds,
     ) = match model_manifest {
-        Some(manifest) => {
-            let loaded = manifest.load_i8(arguments.verify_input_hash)?;
-            if detailed_output {
-                println!("input_bytes_read={}", loaded.profile.bytes_read);
-                println!("input_sha256_verified={}", loaded.profile.sha256_verified);
+        Some(manifest) => match manifest.storage_dtype() {
+            "i8" => {
+                let loaded = manifest.load_i8(arguments.verify_input_hash)?;
+                if detailed_output {
+                    println!("input_bytes_read={}", loaded.profile.bytes_read);
+                    println!("input_sha256_verified={}", loaded.profile.sha256_verified);
+                }
+                (
+                    ExperimentSource::I8(loaded.bva),
+                    loaded.profile.allocation_seconds,
+                    loaded.profile.read_seconds,
+                    loaded.profile.sha256_seconds,
+                    loaded.profile.adopt_seconds,
+                    loaded.profile.total_seconds,
+                )
             }
-            (
-                loaded.bva,
-                loaded.profile.allocation_seconds,
-                loaded.profile.read_seconds,
-                loaded.profile.sha256_seconds,
-                loaded.profile.adopt_seconds,
-                loaded.profile.total_seconds,
-            )
-        }
+            "i16" => {
+                let loaded = manifest.load_i16(arguments.verify_input_hash)?;
+                if detailed_output {
+                    println!("input_bytes_read={}", loaded.profile.bytes_read);
+                    println!("input_sha256_verified={}", loaded.profile.sha256_verified);
+                }
+                (
+                    ExperimentSource::I16(loaded.bva),
+                    loaded.profile.allocation_seconds,
+                    loaded.profile.read_seconds,
+                    loaded.profile.sha256_seconds,
+                    loaded.profile.adopt_seconds,
+                    loaded.profile.total_seconds,
+                )
+            }
+            dtype => bail!("unsupported native BVA storage dtype {dtype}"),
+        },
         None => (
-            DenseMatrixBva::from_fn(&shapes, |matrix, _, _| matrix_value(matrix))?,
+            ExperimentSource::I8(DenseMatrixBva::from_fn(&shapes, |matrix, _, _| {
+                matrix_value(matrix)
+            })?),
             0.0,
             0.0,
             0.0,
@@ -258,7 +323,7 @@ fn run(arguments: Arguments) -> Result<()> {
         report_stage("generation", generation_started, &monitor, detailed_output);
     layout.validate_descriptor(source.descriptor())?;
     ensure!(
-        source.values().len() == stored_i8_entries,
+        source.values_len() == stored_shortint_entries,
         "witness length mismatch"
     );
 
@@ -280,8 +345,14 @@ fn run(arguments: Arguments) -> Result<()> {
     report_active_stage(5, "Shape and dense BVA commitments")?;
     let prover_wall_started = Instant::now();
     let commit_started = Instant::now();
-    let (committed, mut commit_profile) =
-        commit_opening_collection_profiled(&prover_parameters, &source, BIT_WIDTH_I8)?;
+    let (committed, mut commit_profile) = match &source {
+        ExperimentSource::I8(source) => {
+            commit_opening_collection_profiled(&prover_parameters, source, bit_width)?
+        }
+        ExperimentSource::I16(source) => {
+            commit_opening_collection_profiled(&prover_parameters, source, bit_width)?
+        }
+    };
     let validity_proof = if arguments.shape_validity_proof {
         let (proof, seconds) =
             prove_shape_validity_for_collection(&prover_parameters, &committed, &mut rng)?;
@@ -298,13 +369,14 @@ fn run(arguments: Arguments) -> Result<()> {
 
     report_active_stage(6, "Opening prover")?;
     let opening_started = Instant::now();
-    let (opening_proof, opening_profile) = prove_opening(
-        &prover_parameters,
-        &committed,
-        &mut source,
-        &claims,
-        &mut rng,
-    )?;
+    let (opening_proof, opening_profile) = match &mut source {
+        ExperimentSource::I8(source) => {
+            prove_opening(&prover_parameters, &committed, source, &claims, &mut rng)?
+        }
+        ExperimentSource::I16(source) => {
+            prove_opening(&prover_parameters, &committed, source, &claims, &mut rng)?
+        }
+    };
     let opening_prove_seconds =
         report_stage("opening_prove", opening_started, &monitor, detailed_output);
     let prover_wall_seconds = prover_wall_started.elapsed().as_secs_f64();
@@ -1007,6 +1079,9 @@ fn run(arguments: Arguments) -> Result<()> {
         println!("accepted=true");
     }
 
+    println!();
+    println!("ParComm experiment: VERIFIED");
+    println!("verified_marker=SECTION6_E2E_VERIFIED");
     let commit_other_seconds = (commit_phase_seconds
         - commit_profile.bva_commit_seconds
         - commit_profile.shape_commit_seconds)
@@ -1021,10 +1096,32 @@ fn run(arguments: Arguments) -> Result<()> {
     let reported_proof_size_bytes = component_sizes[1]
         .checked_add(component_sizes[2])
         .context("reported proof size overflowed")?;
+    let tbv_compilation_evaluation_proof_size_bytes = x_statement_size_bytes
+        .checked_add(tbv_statement_size_bytes)
+        .and_then(|size| size.checked_add(point_reduction_size_bytes))
+        .and_then(|size| size.checked_add(final_evaluation_size_bytes))
+        .context("TBV compilation and evaluation proof size overflowed")?;
+    let proof_other_size_bytes = component_sizes[1];
+    let reported_proof_breakdown_size_bytes = bva_opening_size_bytes
+        .checked_add(packed_eo_size_bytes)
+        .and_then(|size| size.checked_add(tbv_compilation_evaluation_proof_size_bytes))
+        .and_then(|size| size.checked_add(terminal_opening_size_bytes))
+        .and_then(|size| size.checked_add(proof_other_size_bytes))
+        .context("reported proof size breakdown overflowed")?;
+    ensure!(
+        reported_proof_breakdown_size_bytes == reported_proof_size_bytes,
+        "reported proof size breakdown is not exhaustive"
+    );
+    let tbv_compilation_evaluation_verify_seconds = verifier_profile.point_prepare_seconds
+        + verifier_profile.point_verify_seconds
+        + verifier_profile.final_prepare_seconds
+        + verifier_profile.final_verify_seconds;
+    let grouped_verifier_seconds = verifier_profile.bva_open_verify_seconds
+        + verifier_profile.packed_eo_verify_seconds
+        + tbv_compilation_evaluation_verify_seconds
+        + verifier_profile.terminal_open_verify_seconds;
+    let verifier_other_seconds = (total_verifier_seconds - grouped_verifier_seconds).max(0.0);
 
-    println!();
-    println!("ParComm experiment: VERIFIED");
-    println!("verified_marker=SECTION6_E2E_VERIFIED");
     println!();
     println!("Final results");
     println!("| Metric | Value | Breakdown |");
@@ -1045,12 +1142,20 @@ fn run(arguments: Arguments) -> Result<()> {
         opening_profile.terminal_open_seconds,
     );
     println!(
-        "| Proof size | {} | Opening proof {}; Shape validity proof {} |",
+        "| Proof size | {} | BVA open {}; EO-LiteBullet {}; TBV compilation + evaluation proof {}; Terminal open {}; Other {} |",
         format_bytes(reported_proof_size_bytes),
-        format_bytes(component_sizes[2]),
-        format_bytes(component_sizes[1]),
+        format_bytes(bva_opening_size_bytes),
+        format_bytes(packed_eo_size_bytes),
+        format_bytes(tbv_compilation_evaluation_proof_size_bytes),
+        format_bytes(terminal_opening_size_bytes),
+        format_bytes(proof_other_size_bytes),
     );
-    println!("| Verifier time | {total_verifier_seconds:.3} s | — |");
+    println!(
+        "| Verifier time | {total_verifier_seconds:.3} s | BVA open verify {:.3} s; EO-LiteBullet verify {:.3} s; TBV compilation + evaluation proof verify {tbv_compilation_evaluation_verify_seconds:.3} s; Terminal open verify {:.3} s; Other {verifier_other_seconds:.3} s |",
+        verifier_profile.bva_open_verify_seconds,
+        verifier_profile.packed_eo_verify_seconds,
+        verifier_profile.terminal_open_verify_seconds,
+    );
     if peak_rss_kib == 0 {
         println!("| Peak RSS | unavailable | RSS sampling returned no value |");
     } else {
@@ -1059,7 +1164,7 @@ fn run(arguments: Arguments) -> Result<()> {
             peak_rss_kib as f64 / (1024.0 * 1024.0),
         );
     }
-    io::stdout().flush().context("flush experiment summary")?;
+    io::stdout().flush().context("flush experiment output")?;
     Ok(())
 }
 
@@ -1167,6 +1272,8 @@ fn print_help() {
          RAYON_NUM_THREADS=64 cargo bench -p batch --bench experiment -- \\\n           homogeneous --matrix-count N --rows R --cols C [OPTIONS]\n\
          RAYON_NUM_THREADS=64 cargo bench -p batch --bench experiment -- \\\n           llama8b-i8|llama8b-i16|llama70b-i8 [OPTIONS]\n\
          \n\
+         Detailed stage timings and proof-size components are printed by default.\n\
+         \n\
          Options:\n\
            --model-data-dir PATH    Model-data root; defaults to workspace ../model-data\n\
            --manifest PATH          Override a model preset manifest\n\
@@ -1177,7 +1284,7 @@ fn print_help() {
            --skip-input-hash        Skip only the model BVA SHA-256 pass\n\
            --allow-non-64-threads   Permit a local smoke run\n\
            --shape-validity-proof   Include the optional shape validity proof\n\
-           --summary-only           Print stages and the final table without detailed key=value metrics\n\
+           --summary-only           Hide detailed key=value metrics and retain Final results\n\
            -h, --help               Print this help"
     );
 }
@@ -1227,7 +1334,7 @@ fn claims_for_constant_matrices(
 }
 
 fn claims_for_prepacked_matrices(
-    source: &DenseMatrixBva,
+    source: &ExperimentSource,
     point_log: usize,
 ) -> Result<Vec<Section6MatrixClaim<Fr>>> {
     source

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Convert Hugging Face safetensors checkpoints into ParComm dense integer BVA files.
+"""Convert Hugging Face safetensors checkpoints into ParComm dense short-word BVA files.
 
 The converter intentionally has no PyTorch or safetensors package dependency.
 It parses safetensors headers directly, memory-maps tensor data, preserves
-native i8 weights, quantizes floating parameters to i8 or i16, and writes the
-exact dense bucket order constructed by ``DenseBvaDescriptor::from_shapes``
-in ParComm.
+native i8 weights, preserves Llama BF16 payloads bit-for-bit in 16-bit storage,
+quantizes other floating parameters, and writes the exact dense bucket order
+constructed by ``DenseBvaDescriptor::from_shapes`` in ParComm.
 """
 
 from __future__ import annotations
@@ -27,8 +27,12 @@ from typing import Any, Iterator, Mapping, Sequence
 import numpy as np
 
 
-FORMAT_VERSION = 1
+LEGACY_FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 SPLITTING_BUDGET = 4
+BF16_BITCAST_CONVERSION = "bitcast_bf16_to_i16"
+BF16_BITCAST_SCHEME = "bf16_bitcast_i16"
+BF16_SOURCE_TO_STORAGE = "bitcast_bf16_u16_to_i16"
 GPT2_BUFFER_PATTERN = re.compile(
     r"^(?:transformer\.)?h\.\d+\.attn\.(?:bias|masked_bias)$"
 )
@@ -43,8 +47,9 @@ DTYPE_INFO: dict[str, tuple[np.dtype[Any], int]] = {
 }
 
 STORAGE_INFO: dict[str, tuple[np.dtype[Any], int, int, int]] = {
-    # Floating inputs use symmetric ranges and deliberately leave the most
-    # negative two's-complement value unused.
+    # Numerically converted floating inputs use symmetric ranges and
+    # deliberately leave the most negative two's-complement value unused.
+    # The BF16 bitcast path bypasses these numeric limits entirely.
     "i8": (np.dtype("i1"), 1, -127, 127),
     "i16": (np.dtype("<i2"), 2, -32767, 32767),
 }
@@ -290,6 +295,13 @@ def open_checkpoint(path: Path, model_family: str) -> Any:
     raise ConversionError(f"unsupported model family {model_family!r}")
 
 
+def validate_storage_mode(model_family: str, storage_dtype: str) -> None:
+    if model_family == "llama-bf16" and storage_dtype != "i16":
+        raise ConversionError(
+            "Llama BF16 bit-preserving storage requires --storage-dtype i16"
+        )
+
+
 def product(values: Sequence[int]) -> int:
     result = 1
     for value in values:
@@ -398,7 +410,16 @@ def parse_tensor_specs(
             raise ConversionError(
                 f"parameter tensor {name!r} has unsupported rank {len(shape)}"
             )
-        conversion = "identity_i8" if dtype_name == "I8" else "symmetric_per_tensor"
+        if model_family == "llama-bf16" and dtype_name != "BF16":
+            raise ConversionError(
+                f"Llama BF16 tensor {name!r} uses unexpected dtype {dtype_name}"
+            )
+        if dtype_name == "I8":
+            conversion = "identity_i8"
+        elif model_family == "llama-bf16":
+            conversion = BF16_BITCAST_CONVERSION
+        else:
+            conversion = "symmetric_per_tensor"
         quantization_scale_tensor = None
         if model_family == "llama-w8a8" and dtype_name == "I8":
             quantization_scale_tensor = f"{name}_scale"
@@ -406,10 +427,6 @@ def parse_tensor_specs(
                 raise ConversionError(
                     f"native I8 weight {name!r} has no {quantization_scale_tensor!r}"
                 )
-        if model_family == "llama-bf16" and dtype_name != "BF16":
-            raise ConversionError(
-                f"Llama BF16 tensor {name!r} uses unexpected dtype {dtype_name}"
-            )
         tensors.append(
             TensorSpec(
                 index=len(tensors),
@@ -527,6 +544,11 @@ def as_float32(raw: np.ndarray[Any, Any], dtype_name: str) -> np.ndarray[Any, An
     return np.asarray(raw, dtype=np.float32)
 
 
+def bitcast_bf16_to_i16(raw: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
+    """Return an i16 view with exactly the same little-endian 16-bit payloads."""
+    return np.asarray(raw, dtype=np.dtype("<u2")).view(np.dtype("<i2"))
+
+
 def compute_quantization_scales(
     source: Any,
     tensors: Sequence[TensorSpec],
@@ -624,7 +646,7 @@ def write_dense_bva(
     try:
         for bucket in buckets:
             tensor = tensors[bucket.tensor_index]
-            if tensor.scale is None:
+            if tensor.conversion == "symmetric_per_tensor" and tensor.scale is None:
                 raise ConversionError(f"tensor {tensor.name!r} has no quantization scale")
             raw = source.tensor_view(tensor).reshape(tuple(tensor.matrix_shape))
             destination = output[
@@ -640,7 +662,15 @@ def write_dense_bva(
                 ]
                 if tensor.conversion == "identity_i8":
                     destination[local_start:local_end, :physical_cols] = source_block
-                else:
+                elif tensor.conversion == BF16_BITCAST_CONVERSION:
+                    if storage_dtype != "i16" or tensor.source_dtype != "BF16":
+                        raise ConversionError(
+                            f"tensor {tensor.name!r} has an invalid BF16 bitcast configuration"
+                        )
+                    destination[local_start:local_end, :physical_cols] = (
+                        bitcast_bf16_to_i16(source_block)
+                    )
+                elif tensor.conversion == "symmetric_per_tensor":
                     float_block = as_float32(source_block, tensor.source_dtype)
                     destination[local_start:local_end, :physical_cols] = quantize_block(
                         float_block,
@@ -648,6 +678,11 @@ def write_dense_bva(
                         output_dtype,
                         quantization_min,
                         quantization_max,
+                    )
+                else:
+                    raise ConversionError(
+                        f"tensor {tensor.name!r} has unknown conversion mode "
+                        f"{tensor.conversion!r}"
                     )
             processed += bucket.physical_entry_count
             ratio = processed / summary.physical_entries
@@ -707,7 +742,7 @@ def verify_layout_samples(
     checked = 0
     for bucket in buckets:
         tensor = tensors[bucket.tensor_index]
-        if tensor.scale is None:
+        if tensor.conversion == "symmetric_per_tensor" and tensor.scale is None:
             raise ConversionError(f"tensor {tensor.name!r} has no quantization scale")
         raw = source.tensor_view(tensor).reshape(tuple(tensor.matrix_shape))
         coordinates = {
@@ -723,17 +758,34 @@ def verify_layout_samples(
                 bucket.row_offset + local_row : bucket.row_offset + local_row + 1,
                 bucket.col_offset + local_col : bucket.col_offset + local_col + 1,
             ]
+            position = bucket.dense_offset + local_row * bucket.col_len + local_col
+            if tensor.conversion == BF16_BITCAST_CONVERSION:
+                expected_bits = int(
+                    np.asarray(source_sample, dtype=np.dtype("<u2"))[0, 0]
+                )
+                actual_bits = int(output[position : position + 1].view("<u2")[0])
+                if actual_bits != expected_bits:
+                    raise ConversionError(
+                        f"BF16 bit mismatch in {tensor.name!r} at "
+                        f"({bucket.row_offset + local_row}, "
+                        f"{bucket.col_offset + local_col}): "
+                        f"0x{actual_bits:04x} != 0x{expected_bits:04x}"
+                    )
+                checked += 1
+                continue
             if tensor.conversion == "identity_i8":
                 expected = int(source_sample[0, 0])
-            else:
+            elif tensor.conversion == "symmetric_per_tensor":
                 expected = scalar_quantize(
                     float(as_float32(source_sample, tensor.source_dtype)[0, 0]),
                     tensor.scale,
                     storage_dtype,
                 )
-            position = (
-                bucket.dense_offset + local_row * bucket.col_len + local_col
-            )
+            else:
+                raise ConversionError(
+                    f"tensor {tensor.name!r} has unknown conversion mode "
+                    f"{tensor.conversion!r}"
+                )
             actual = int(output[position])
             if actual != expected:
                 raise ConversionError(
@@ -820,21 +872,69 @@ def make_manifest(
         storage_dtype
     ]
     storage_limits = np.iinfo(output_dtype)
-    native_i8_tensors = sum(
-        tensor.conversion == "identity_i8" for tensor in tensors
+    native_i8_tensors = sum(tensor.conversion == "identity_i8" for tensor in tensors)
+    converted_tensors = sum(
+        tensor.conversion == "symmetric_per_tensor" for tensor in tensors
     )
-    converted_tensors = len(tensors) - native_i8_tensors
+    bitcast_bf16_tensors = sum(
+        tensor.conversion == BF16_BITCAST_CONVERSION for tensor in tensors
+    )
     if model_family == "gpt2":
         selection_policy = "gpt2_trainable_parameters"
     elif model_family == "llama-w8a8":
         selection_policy = "llama_w8a8_weights_without_public_weight_scales"
     else:
         selection_policy = "llama_bf16_parameter_weights"
-    quantization_scheme = (
-        "symmetric_per_tensor"
-        if native_i8_tensors == 0
-        else "native_i8_plus_symmetric_per_tensor"
-    )
+    storage_metadata = {
+        "storage_dtype": storage_dtype,
+        "storage_encoding": "signed_twos_complement_little_endian",
+        "storage_item_bytes": item_size,
+        "bit_width": item_size * 8,
+    }
+    if model_family == "llama-bf16":
+        if (
+            storage_dtype != "i16"
+            or native_i8_tensors != 0
+            or converted_tensors != 0
+            or bitcast_bf16_tensors != len(tensors)
+        ):
+            raise ConversionError("invalid Llama BF16 bitcast manifest state")
+        quantization_metadata = {
+            "scheme": BF16_BITCAST_SCHEME,
+            "native_i8_tensor_count": 0,
+            "converted_float_tensor_count": 0,
+            "bitcast_bf16_tensor_count": bitcast_bf16_tensors,
+            "bit_preserving": True,
+            "numeric_conversion": False,
+            "source_to_storage": BF16_SOURCE_TO_STORAGE,
+            "source_storage_encoding": "bf16_bit_pattern_little_endian",
+            "field_interpretation": "signed_twos_complement_i16",
+            **storage_metadata,
+        }
+    else:
+        quantization_scheme = (
+            "symmetric_per_tensor"
+            if native_i8_tensors == 0
+            else "native_i8_plus_symmetric_per_tensor"
+        )
+        quantization_metadata = {
+            "scheme": quantization_scheme,
+            "native_i8_tensor_count": native_i8_tensors,
+            "converted_float_tensor_count": converted_tensors,
+            "bitcast_bf16_tensor_count": 0,
+            "zero_point": 0,
+            **storage_metadata,
+            "storage_qmin": int(storage_limits.min),
+            "storage_qmax": int(storage_limits.max),
+            "float_conversion_qmin": quantization_min,
+            "float_conversion_qmax": quantization_max,
+            "rounding": "nearest_ties_to_even",
+            "float_conversion_formula": (
+                "q=clip(round(value/scale),"
+                f"{quantization_min},{quantization_max})"
+            ),
+            "native_i8_formula": "q=source_i8",
+        }
     return {
         "format": f"parcomm-dense-{storage_dtype}-bva",
         "version": FORMAT_VERSION,
@@ -857,26 +957,7 @@ def make_manifest(
             "tensor_order": "lexicographic_name",
             "excluded_tensors": list(excluded),
         },
-        "quantization": {
-            "scheme": quantization_scheme,
-            "native_i8_tensor_count": native_i8_tensors,
-            "converted_float_tensor_count": converted_tensors,
-            "zero_point": 0,
-            "storage_dtype": storage_dtype,
-            "storage_encoding": "signed_twos_complement_little_endian",
-            "storage_item_bytes": item_size,
-            "bit_width": item_size * 8,
-            "storage_qmin": int(storage_limits.min),
-            "storage_qmax": int(storage_limits.max),
-            "float_conversion_qmin": quantization_min,
-            "float_conversion_qmax": quantization_max,
-            "rounding": "nearest_ties_to_even",
-            "float_conversion_formula": (
-                "q=clip(round(value/scale),"
-                f"{quantization_min},{quantization_max})"
-            ),
-            "native_i8_formula": "q=source_i8",
-        },
+        "quantization": quantization_metadata,
         "layout": {
             **asdict(summary),
             "splitting_budget": SPLITTING_BUDGET,
@@ -925,6 +1006,7 @@ def inspect_checkpoint(
 ) -> tuple[
     list[TensorSpec], list[dict[str, Any]], list[BucketSpec], LayoutSummary
 ]:
+    validate_storage_mode(model_family, storage_dtype)
     with open_checkpoint(source_path, model_family) as source:
         tensors, excluded = parse_tensor_specs(source, model_family)
         buckets, summary = build_layout(tensors)
@@ -938,7 +1020,11 @@ def inspect_checkpoint(
     )
     print(
         "converted_float_tensors="
-        f"{sum(tensor.conversion != 'identity_i8' for tensor in tensors)}"
+        f"{sum(tensor.conversion == 'symmetric_per_tensor' for tensor in tensors)}"
+    )
+    print(
+        "bitcast_bf16_tensors="
+        f"{sum(tensor.conversion == BF16_BITCAST_CONVERSION for tensor in tensors)}"
     )
     print(f"bucket_count={summary.bucket_count}")
     print(f"physical_entries={summary.physical_entries}")
@@ -958,6 +1044,7 @@ def convert_checkpoint(arguments: argparse.Namespace) -> None:
     source_path = arguments.input.resolve()
     model_family = arguments.model_family
     storage_dtype = arguments.storage_dtype
+    validate_storage_mode(model_family, storage_dtype)
     output_dir = arguments.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     if arguments.name:
@@ -967,7 +1054,7 @@ def convert_checkpoint(arguments: argparse.Namespace) -> None:
     elif model_family == "llama-w8a8":
         prefix = "llama-3.1-8b-w8a8"
     else:
-        prefix = "llama-3.1-8b-bf16"
+        prefix = "llama-3.1-8b-bf16-bits"
     bva_path = output_dir / f"{prefix}.bva.{storage_dtype}"
     manifest_path = output_dir / f"{prefix}.manifest.json"
     chunk_elements = max(1, (arguments.chunk_mib << 20) // 4)
@@ -985,7 +1072,11 @@ def convert_checkpoint(arguments: argparse.Namespace) -> None:
         )
         print(
             "converted_float_tensors="
-            f"{sum(tensor.conversion != 'identity_i8' for tensor in tensors)}"
+            f"{sum(tensor.conversion == 'symmetric_per_tensor' for tensor in tensors)}"
+        )
+        print(
+            "bitcast_bf16_tensors="
+            f"{sum(tensor.conversion == BF16_BITCAST_CONVERSION for tensor in tensors)}"
         )
         print(f"physical_entries={summary.physical_entries}")
         print(f"bucket_count={summary.bucket_count}")
@@ -1005,13 +1096,22 @@ def convert_checkpoint(arguments: argparse.Namespace) -> None:
                 f"{arguments.expected_source_sha256}"
             )
         print(f"source_sha256={source_sha256}")
-        print("stage=quantization_scales", flush=True)
-        compute_quantization_scales(
-            source,
-            tensors,
-            chunk_elements,
-            STORAGE_INFO[storage_dtype][3],
-        )
+        scale_tensors = [
+            tensor
+            for tensor in tensors
+            if tensor.conversion != BF16_BITCAST_CONVERSION
+        ]
+        if scale_tensors:
+            print("stage=quantization_scales", flush=True)
+            compute_quantization_scales(
+                source,
+                scale_tensors,
+                chunk_elements,
+                STORAGE_INFO[storage_dtype][3],
+            )
+        else:
+            print("stage=bf16_bitcast", flush=True)
+            print("quantization_scale_pass=skipped", flush=True)
         print("stage=write_bva", flush=True)
         write_dense_bva(
             source,
@@ -1054,10 +1154,51 @@ def convert_checkpoint(arguments: argparse.Namespace) -> None:
     print("conversion_verified=true")
 
 
+def validate_manifest_conversion_metadata(
+    manifest: Mapping[str, Any],
+    model_family: str,
+    tensors: Sequence[TensorSpec],
+) -> None:
+    if model_family != "llama-bf16":
+        return
+    quantization = manifest.get("quantization")
+    if not isinstance(quantization, Mapping):
+        raise ConversionError("manifest quantization metadata is missing")
+    expected = {
+        "scheme": BF16_BITCAST_SCHEME,
+        "native_i8_tensor_count": 0,
+        "converted_float_tensor_count": 0,
+        "bitcast_bf16_tensor_count": len(tensors),
+        "bit_preserving": True,
+        "numeric_conversion": False,
+        "source_to_storage": BF16_SOURCE_TO_STORAGE,
+        "source_storage_encoding": "bf16_bit_pattern_little_endian",
+        "field_interpretation": "signed_twos_complement_i16",
+    }
+    for name, value in expected.items():
+        if quantization.get(name) != value:
+            raise ConversionError(
+                f"manifest quantization.{name} does not match BF16 bitcast semantics"
+            )
+    forbidden = {
+        "zero_point",
+        "float_conversion_qmin",
+        "float_conversion_qmax",
+        "rounding",
+        "float_conversion_formula",
+    }
+    present = sorted(forbidden.intersection(quantization))
+    if present:
+        raise ConversionError(
+            "BF16 bitcast manifest contains numeric conversion metadata: "
+            + ", ".join(present)
+        )
+
+
 def verify_artifacts(arguments: argparse.Namespace) -> None:
     with arguments.manifest.open("r", encoding="utf-8") as stream:
         manifest = json.load(stream)
-    if manifest.get("version") != FORMAT_VERSION:
+    if manifest.get("version") not in {LEGACY_FORMAT_VERSION, FORMAT_VERSION}:
         raise ConversionError("unsupported ParComm manifest format")
     storage_dtype = manifest.get("quantization", {}).get("storage_dtype")
     if storage_dtype not in STORAGE_INFO:
@@ -1069,9 +1210,13 @@ def verify_artifacts(arguments: argparse.Namespace) -> None:
     model_family = manifest.get("source", {}).get("model_family")
     if model_family not in {"gpt2", "llama-w8a8", "llama-bf16"}:
         raise ConversionError(f"unsupported manifest model family {model_family!r}")
+    if model_family == "llama-bf16" and manifest.get("version") != FORMAT_VERSION:
+        raise ConversionError("Llama BF16 bitcast manifests must use format version 2")
+    validate_storage_mode(model_family, storage_dtype)
     with open_checkpoint(source_path, model_family) as source:
         tensors, excluded = parse_tensor_specs(source, model_family)
         buckets, summary = build_layout(tensors)
+        validate_manifest_conversion_metadata(manifest, model_family, tensors)
         manifest_tensors = manifest.get("tensors", [])
         if len(manifest_tensors) != len(tensors):
             raise ConversionError("manifest tensor count does not match the checkpoint")
@@ -1082,8 +1227,14 @@ def verify_artifacts(arguments: argparse.Namespace) -> None:
                 raise ConversionError(
                     f"manifest conversion mode does not match tensor {tensor.name!r}"
                 )
-            tensor.max_abs = float(record["max_abs"])
-            tensor.scale = float(record["scale"])
+            if tensor.conversion == BF16_BITCAST_CONVERSION:
+                if record.get("max_abs") is not None or record.get("scale") is not None:
+                    raise ConversionError(
+                        f"BF16 bitcast tensor {tensor.name!r} contains numeric scale metadata"
+                    )
+            else:
+                tensor.max_abs = float(record["max_abs"])
+                tensor.scale = float(record["scale"])
         expected_excluded = [record["name"] for record in excluded]
         actual_excluded = [
             record["name"]

@@ -2680,9 +2680,26 @@ impl<F: PrimeField + Absorb> PackedEoLiteBulletProof<F> {
         bit_width: usize,
         transcript: &mut dyn PackedEoChallengeTranscript<F>,
     ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>> {
-        let stride =
-            packing_stride_for_bit_width::<F>(BvaI8Source::layout(source).logical_len, bit_width)?;
-        Self::prove_integer_streaming_inner::<i8, S>(
+        Self::prove_shortint_streaming_with_commitment_transcript::<i8, S>(
+            source, tbv, claimed, bit_width, transcript,
+        )
+    }
+
+    /// Run Packed EO with a commitment transcript over the selected native
+    /// short-integer storage type.
+    pub fn prove_shortint_streaming_with_commitment_transcript<Entry, S>(
+        source: &mut S,
+        tbv: &TensorBasisVector<F>,
+        claimed: F,
+        bit_width: usize,
+        transcript: &mut dyn PackedEoChallengeTranscript<F>,
+    ) -> Result<(Self, PaddingWorkCounters, StreamingEoProfile), StreamingEoError<S::Error>>
+    where
+        Entry: BvaInteger,
+        S: BvaSource<Entry>,
+    {
+        let stride = packing_stride_for_bit_width::<F>(source.layout().logical_len, bit_width)?;
+        Self::prove_integer_streaming_inner::<Entry, S>(
             source,
             tbv,
             claimed,
