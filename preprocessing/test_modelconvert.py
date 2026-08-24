@@ -3,7 +3,10 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import struct
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -236,6 +239,201 @@ class Bf16BitcastConversionTest(unittest.TestCase):
         encoded_header += b" " * (-len(encoded_header) % 8)
         path.write_bytes(
             struct.pack("<Q", len(encoded_header)) + encoded_header + data
+        )
+
+
+class LlamaW8A8StreamTest(unittest.TestCase):
+    def test_stream_matches_persisted_conversion_without_creating_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            output = root / "persisted"
+            self._write_checkpoint(source)
+
+            conversion_output = io.StringIO()
+            with contextlib.redirect_stdout(
+                conversion_output
+            ), contextlib.redirect_stderr(conversion_output):
+                conversion_result = modelconvert.main(
+                    [
+                        "convert",
+                        "--input",
+                        str(source),
+                        "--model-family",
+                        "llama-w8a8",
+                        "--storage-dtype",
+                        "i8",
+                        "--output-dir",
+                        str(output),
+                        "--name",
+                        "tiny-w8a8",
+                        "--chunk-mib",
+                        "1",
+                    ]
+                )
+            self.assertEqual(conversion_result, 0, conversion_output.getvalue())
+            manifest_path = output / "tiny-w8a8.manifest.json"
+            bva_path = output / "tiny-w8a8.bva.i8"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+            description_output = io.StringIO()
+            with contextlib.redirect_stdout(description_output):
+                description_result = modelconvert.main(
+                    [
+                        "describe-json",
+                        "--input",
+                        str(source),
+                        "--model-family",
+                        "llama-w8a8",
+                        "--storage-dtype",
+                        "i8",
+                    ]
+                )
+            self.assertEqual(description_result, 0, description_output.getvalue())
+            description = json.loads(description_output.getvalue())
+            self.assertEqual(
+                description["shapes"],
+                [tensor["matrix_shape"] for tensor in manifest["tensors"]],
+            )
+            for field_name in (
+                "tensor_count",
+                "bucket_count",
+                "physical_entries",
+                "active_entries",
+                "logical_entries",
+                "boundary_padding_entries",
+                "final_padding_entries",
+            ):
+                self.assertEqual(
+                    description["layout"][field_name],
+                    manifest["layout"][field_name],
+                )
+            self.assertEqual(description["buckets"], manifest["buckets"])
+            self.assertEqual(
+                description["native_i8_tensor_count"],
+                manifest["quantization"]["native_i8_tensor_count"],
+            )
+            self.assertEqual(
+                description["converted_float_tensor_count"],
+                manifest["quantization"]["converted_float_tensor_count"],
+            )
+            self.assertEqual(
+                description["stream_entries"], manifest["layout"]["active_entries"]
+            )
+            self.assertEqual(
+                description["stream_bytes"],
+                description["stream_entries"] * description["element_bytes"],
+            )
+            self.assertFalse(description["layout"]["final_padding_streamed"])
+
+            before = self._file_snapshot(root)
+            environment = os.environ.copy()
+            environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(Path(modelconvert.__file__).resolve()),
+                    "stream",
+                    "--input",
+                    str(source),
+                    "--model-family",
+                    "llama-w8a8",
+                    "--storage-dtype",
+                    "i8",
+                    "--chunk-mib",
+                    "1",
+                ],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+                cwd=root,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+            self.assertIn("stage=stream_bva", completed.stderr.decode())
+            self.assertIn("stream_complete=true", completed.stderr.decode())
+            self.assertEqual(len(completed.stdout), description["stream_bytes"])
+            after = self._file_snapshot(root)
+            self.assertEqual(after, before)
+
+            persisted = bva_path.read_bytes()
+            final_padding_bytes = (
+                description["layout"]["logical_entries"]
+                - description["stream_entries"]
+            ) * description["element_bytes"]
+            reconstructed = completed.stdout + bytes(final_padding_bytes)
+            self.assertEqual(reconstructed, persisted)
+
+    @staticmethod
+    def _file_snapshot(root: Path) -> dict[str, tuple[int, int]]:
+        return {
+            str(path.relative_to(root)): (path.stat().st_size, path.stat().st_mtime_ns)
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    @staticmethod
+    def _write_checkpoint(directory: Path) -> None:
+        directory.mkdir(parents=True)
+        bf16_values = np.linspace(-3.0, 3.0, 15, dtype=np.dtype("<f4"))
+        bf16_words = np.right_shift(
+            bf16_values.view(np.dtype("<u4")), 16
+        ).astype(np.dtype("<u2"))
+        tensors: list[tuple[str, str, list[int], bytes]] = [
+            (
+                "model.layers.0.bf16.weight",
+                "BF16",
+                [5, 3],
+                bf16_words.tobytes(),
+            ),
+            (
+                "model.layers.0.f16.weight",
+                "F16",
+                [3, 5],
+                np.linspace(-2.0, 2.0, 15, dtype=np.dtype("<f2")).tobytes(),
+            ),
+            (
+                "model.layers.0.f32.weight",
+                "F32",
+                [7],
+                np.linspace(-4.0, 4.0, 7, dtype=np.dtype("<f4")).tobytes(),
+            ),
+            (
+                "model.layers.0.i8.weight",
+                "I8",
+                [6, 4],
+                np.arange(-12, 12, dtype=np.dtype("i1")).tobytes(),
+            ),
+            (
+                "model.layers.0.i8.weight_scale",
+                "F32",
+                [6, 1],
+                np.linspace(0.1, 0.6, 6, dtype=np.dtype("<f4")).tobytes(),
+            ),
+        ]
+        header: dict[str, object] = {}
+        payload = bytearray()
+        for name, dtype_name, shape, data in tensors:
+            start = len(payload)
+            payload.extend(data)
+            header[name] = {
+                "dtype": dtype_name,
+                "shape": shape,
+                "data_offsets": [start, len(payload)],
+            }
+        encoded_header = json.dumps(header, separators=(",", ":")).encode("utf-8")
+        encoded_header += b" " * (-len(encoded_header) % 8)
+        shard_name = "model-00001-of-00001.safetensors"
+        (directory / shard_name).write_bytes(
+            struct.pack("<Q", len(encoded_header)) + encoded_header + payload
+        )
+        index = {
+            "metadata": {"total_size": len(payload)},
+            "weight_map": {name: shard_name for name, _, _, _ in tensors},
+        }
+        (directory / "model.safetensors.index.json").write_text(
+            json.dumps(index), encoding="utf-8"
         )
 
 

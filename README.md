@@ -148,8 +148,23 @@ The benchmark invokes `python3 preprocessing/modelconvert.py` directly. It
 uses `../model-data/Llama-3.1-8B-W8A8` by default, reuses a complete canonical
 conversion when present, and then verifies its manifest and BVA before proving.
 Pass `--force-conversion` only when the existing conversion must be replaced.
-The converter requires NumPy in the selected Python environment. Llama 70B i8
-uses the same command with `llama70b-i8`.
+The converter requires NumPy in the selected Python environment.
+
+Llama 70B uses a dedicated no-artifact path because its padded BVA contains
+`2^37` i8 entries. The converter streams only the active BVA prefix through a
+pipe into the final zero-initialized Rust allocation; the power-of-two suffix
+remains materialized as i8 zeros in memory. No `.bva`, manifest, or partial
+conversion file is written:
+
+```bash
+RAYON_NUM_THREADS=64 cargo bench --locked -p batch \
+  --bench experiment_llama70B_8bit
+```
+
+The default checkpoint is
+`../model-data/Llama-3.1-70B-W8A8`. Use `--input PATH` to select another
+compatible sharded checkpoint. Formal runs require at least 320 GiB of
+available memory before allocation begins.
 
 For BF16, the dedicated benchmark copies each source BF16 payload directly into
 one 16-bit BVA word. It does not decode the floating-point value and does not

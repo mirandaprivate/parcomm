@@ -22,7 +22,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any, BinaryIO, Iterator, Mapping, Sequence, TextIO
 
 import numpy as np
 
@@ -554,7 +554,10 @@ def compute_quantization_scales(
     tensors: Sequence[TensorSpec],
     chunk_elements: int,
     quantization_max: int,
+    progress_stream: TextIO | None = None,
 ) -> None:
+    if progress_stream is None:
+        progress_stream = sys.stdout
     started = time.monotonic()
     processed = 0
     total = sum(tensor.element_count for tensor in tensors)
@@ -587,6 +590,7 @@ def compute_quantization_scales(
             print(
                 f"scale_progress={ratio:.1%} processed={processed} "
                 f"rate_melements_per_second={rate:.1f}",
+                file=progress_stream,
                 flush=True,
             )
             next_report += 0.05
@@ -702,6 +706,115 @@ def write_dense_bva(
         raise
     del output
     os.replace(partial, output_path)
+
+
+def encode_dense_block(
+    tensor: TensorSpec,
+    source_block: np.ndarray[Any, Any],
+    storage_dtype: str,
+) -> np.ndarray[Any, Any]:
+    """Encode one physical tensor block using the persisted BVA semantics."""
+    output_dtype, _, quantization_min, quantization_max = STORAGE_INFO[
+        storage_dtype
+    ]
+    if tensor.conversion == "identity_i8":
+        return np.asarray(source_block, dtype=output_dtype)
+    if tensor.conversion == BF16_BITCAST_CONVERSION:
+        if storage_dtype != "i16" or tensor.source_dtype != "BF16":
+            raise ConversionError(
+                f"tensor {tensor.name!r} has an invalid BF16 bitcast configuration"
+            )
+        return bitcast_bf16_to_i16(source_block)
+    if tensor.conversion == "symmetric_per_tensor":
+        if tensor.scale is None:
+            raise ConversionError(f"tensor {tensor.name!r} has no quantization scale")
+        return quantize_block(
+            as_float32(source_block, tensor.source_dtype),
+            tensor.scale,
+            output_dtype,
+            quantization_min,
+            quantization_max,
+        )
+    raise ConversionError(
+        f"tensor {tensor.name!r} has unknown conversion mode {tensor.conversion!r}"
+    )
+
+
+def stream_dense_bva(
+    source: Any,
+    tensors: Sequence[TensorSpec],
+    buckets: Sequence[BucketSpec],
+    summary: LayoutSummary,
+    output: BinaryIO,
+    chunk_elements: int,
+    storage_dtype: str,
+    progress_stream: TextIO,
+) -> None:
+    """Stream active dense BVA entries without creating an intermediate file."""
+    output_dtype, item_size, _, _ = STORAGE_INFO[storage_dtype]
+    zero_chunk = bytes(max(1, chunk_elements) * item_size)
+
+    def write_all(data: bytes | memoryview) -> None:
+        remaining = memoryview(data).cast("B")
+        while remaining:
+            written = output.write(remaining)
+            if written is None or written <= 0:
+                raise ConversionError("standard output stopped accepting BVA bytes")
+            remaining = remaining[written:]
+
+    def write_zeros(element_count: int) -> None:
+        remaining = element_count
+        while remaining:
+            count = min(remaining, chunk_elements)
+            write_all(memoryview(zero_chunk)[: count * item_size])
+            remaining -= count
+
+    started = time.monotonic()
+    processed = 0
+    streamed_entries = 0
+    next_report = 0.05
+    for bucket in buckets:
+        tensor = tensors[bucket.tensor_index]
+        raw = source.tensor_view(tensor).reshape(tuple(tensor.matrix_shape))
+        rows_per_chunk = max(1, chunk_elements // max(bucket.col_len, 1))
+        physical_cols = bucket.physical_col_len
+        for local_start in range(0, bucket.physical_row_len, rows_per_chunk):
+            local_end = min(bucket.physical_row_len, local_start + rows_per_chunk)
+            source_block = raw[
+                bucket.row_offset + local_start : bucket.row_offset + local_end,
+                bucket.col_offset : bucket.col_offset + physical_cols,
+            ]
+            encoded = encode_dense_block(tensor, source_block, storage_dtype)
+            if physical_cols == bucket.col_len:
+                write_all(encoded.tobytes(order="C"))
+            else:
+                padded = np.zeros(
+                    (local_end - local_start, bucket.col_len), dtype=output_dtype
+                )
+                padded[:, :physical_cols] = encoded
+                write_all(padded.tobytes(order="C"))
+            processed += (local_end - local_start) * physical_cols
+        write_zeros(
+            (bucket.row_len - bucket.physical_row_len) * bucket.col_len
+        )
+        streamed_entries += bucket.entry_count
+        ratio = processed / summary.physical_entries
+        if ratio >= next_report or processed == summary.physical_entries:
+            elapsed = time.monotonic() - started
+            rate = processed / max(elapsed, 1e-9) / (1 << 20)
+            print(
+                f"stream_progress={ratio:.1%} processed={processed} "
+                f"rate_melements_per_second={rate:.1f}",
+                file=progress_stream,
+                flush=True,
+            )
+            next_report += 0.05
+    if streamed_entries != summary.active_entries:
+        raise ConversionError(
+            f"stream produced {streamed_entries} entries, "
+            f"expected {summary.active_entries}"
+        )
+    output.flush()
 
 
 def scalar_quantize(value: float, scale: float, storage_dtype: str) -> int:
@@ -1040,6 +1153,151 @@ def inspect_checkpoint(
     return tensors, excluded, buckets, summary
 
 
+def stream_description(
+    source_path: Path, model_family: str, storage_dtype: str
+) -> dict[str, Any]:
+    """Describe the exact layout consumed by the raw BVA stream."""
+    validate_storage_mode(model_family, storage_dtype)
+    with open_checkpoint(source_path, model_family) as source:
+        tensors, excluded = parse_tensor_specs(source, model_family)
+        buckets, summary = build_layout(tensors)
+    item_size = STORAGE_INFO[storage_dtype][1]
+    stream_entries = summary.active_entries
+    stream_bytes = stream_entries * item_size
+    return {
+        "format": "parcomm-dense-bva-stream-description",
+        "version": 1,
+        "model_family": model_family,
+        "storage_dtype": storage_dtype,
+        "element_bytes": item_size,
+        "native_i8_tensor_count": sum(
+            tensor.conversion == "identity_i8" for tensor in tensors
+        ),
+        "converted_float_tensor_count": sum(
+            tensor.conversion == "symmetric_per_tensor" for tensor in tensors
+        ),
+        "bitcast_bf16_tensor_count": sum(
+            tensor.conversion == BF16_BITCAST_CONVERSION for tensor in tensors
+        ),
+        "shapes": [tensor.matrix_shape for tensor in tensors],
+        "stream_entries": stream_entries,
+        "stream_bytes": stream_bytes,
+        "layout": {
+            **asdict(summary),
+            "splitting_budget": SPLITTING_BUDGET,
+            "bucket_order": (
+                "entry_count_desc_then_tensor_index_then_row_offset_then_col_offset"
+            ),
+            "within_bucket_order": "row_major",
+            "rank1_matrix_mapping": "shape_n_to_n_by_1",
+            "element_dtype": storage_dtype,
+            "element_bytes": item_size,
+            "stream_entries": stream_entries,
+            "stream_bytes": stream_bytes,
+            "logical_bytes": summary.logical_entries * item_size,
+            "final_padding_streamed": False,
+        },
+        "tensors": [asdict(tensor) for tensor in tensors],
+        "excluded_tensors": excluded,
+        "buckets": [bucket.manifest_record() for bucket in buckets],
+    }
+
+
+def describe_checkpoint_json(arguments: argparse.Namespace) -> None:
+    description = stream_description(
+        arguments.input.resolve(),
+        arguments.model_family,
+        arguments.storage_dtype,
+    )
+    json.dump(description, sys.stdout, separators=(",", ":"), sort_keys=True)
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
+def stream_checkpoint(arguments: argparse.Namespace) -> None:
+    source_path = arguments.input.resolve()
+    model_family = arguments.model_family
+    storage_dtype = arguments.storage_dtype
+    validate_storage_mode(model_family, storage_dtype)
+    chunk_elements = max(1, (arguments.chunk_mib << 20) // 4)
+    output = getattr(sys.stdout, "buffer", None)
+    if output is None:
+        raise ConversionError("stream requires a binary stdout")
+
+    started = time.monotonic()
+    print("stage=parse_layout", file=sys.stderr, flush=True)
+    with open_checkpoint(source_path, model_family) as source:
+        tensors, excluded = parse_tensor_specs(source, model_family)
+        buckets, summary = build_layout(tensors)
+        item_size = STORAGE_INFO[storage_dtype][1]
+        print(f"model_family={model_family}", file=sys.stderr, flush=True)
+        print(
+            f"selected_tensors={summary.tensor_count}", file=sys.stderr, flush=True
+        )
+        print(f"excluded_tensors={len(excluded)}", file=sys.stderr, flush=True)
+        print(
+            "native_i8_tensors="
+            f"{sum(tensor.conversion == 'identity_i8' for tensor in tensors)}",
+            file=sys.stderr,
+            flush=True,
+        )
+        print(
+            "converted_float_tensors="
+            f"{sum(tensor.conversion == 'symmetric_per_tensor' for tensor in tensors)}",
+            file=sys.stderr,
+            flush=True,
+        )
+        print(f"bucket_count={summary.bucket_count}", file=sys.stderr, flush=True)
+        print(f"physical_entries={summary.physical_entries}", file=sys.stderr, flush=True)
+        print(f"active_entries={summary.active_entries}", file=sys.stderr, flush=True)
+        print(f"logical_entries={summary.logical_entries}", file=sys.stderr, flush=True)
+        print(
+            f"stream_bytes={summary.active_entries * item_size}",
+            file=sys.stderr,
+            flush=True,
+        )
+        scale_tensors = [
+            tensor
+            for tensor in tensors
+            if tensor.conversion == "symmetric_per_tensor"
+        ]
+        if scale_tensors:
+            print("stage=quantization_scales", file=sys.stderr, flush=True)
+            compute_quantization_scales(
+                source,
+                scale_tensors,
+                chunk_elements,
+                STORAGE_INFO[storage_dtype][3],
+                progress_stream=sys.stderr,
+            )
+        else:
+            if any(
+                tensor.conversion == BF16_BITCAST_CONVERSION for tensor in tensors
+            ):
+                print("stage=bf16_bitcast", file=sys.stderr, flush=True)
+                print("quantization_scale_pass=skipped", file=sys.stderr, flush=True)
+            else:
+                print(
+                    "quantization_scale_pass=skipped_native_i8",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        print("stage=stream_bva", file=sys.stderr, flush=True)
+        stream_dense_bva(
+            source,
+            tensors,
+            buckets,
+            summary,
+            output,
+            chunk_elements,
+            storage_dtype,
+            sys.stderr,
+        )
+    elapsed = time.monotonic() - started
+    print(f"elapsed_seconds={elapsed:.6f}", file=sys.stderr, flush=True)
+    print("stream_complete=true", file=sys.stderr, flush=True)
+
+
 def convert_checkpoint(arguments: argparse.Namespace) -> None:
     source_path = arguments.input.resolve()
     model_family = arguments.model_family
@@ -1281,6 +1539,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--storage-dtype", choices=tuple(STORAGE_INFO), default="i8"
     )
 
+    describe_parser = subparsers.add_parser(
+        "describe-json",
+        help="write a machine-readable description of the streamed BVA layout",
+    )
+    describe_parser.add_argument("--input", type=Path, required=True)
+    describe_parser.add_argument(
+        "--model-family",
+        choices=("gpt2", "llama-w8a8", "llama-bf16"),
+        default="gpt2",
+    )
+    describe_parser.add_argument(
+        "--storage-dtype", choices=tuple(STORAGE_INFO), default="i8"
+    )
+
+    stream_parser = subparsers.add_parser(
+        "stream", help="write active dense BVA bytes directly to standard output"
+    )
+    stream_parser.add_argument("--input", type=Path, required=True)
+    stream_parser.add_argument(
+        "--model-family",
+        choices=("gpt2", "llama-w8a8", "llama-bf16"),
+        default="gpt2",
+    )
+    stream_parser.add_argument(
+        "--storage-dtype", choices=tuple(STORAGE_INFO), default="i8"
+    )
+    stream_parser.add_argument(
+        "--chunk-mib",
+        type=int,
+        default=64,
+        help="maximum working chunk size in MiB (default: 64)",
+    )
+
     convert_parser = subparsers.add_parser(
         "convert", help="convert checkpoint parameters into a dense ParComm integer BVA"
     )
@@ -1323,6 +1614,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 arguments.model_family,
                 arguments.storage_dtype,
             )
+        elif arguments.command == "describe-json":
+            describe_checkpoint_json(arguments)
+        elif arguments.command == "stream":
+            if arguments.chunk_mib <= 0:
+                raise ConversionError("--chunk-mib must be positive")
+            stream_checkpoint(arguments)
         elif arguments.command == "convert":
             if arguments.chunk_mib <= 0:
                 raise ConversionError("--chunk-mib must be positive")

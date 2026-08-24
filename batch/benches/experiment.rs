@@ -65,6 +65,33 @@ enum ExperimentSource {
     I16(DenseMatrixBva<i16>),
 }
 
+pub(crate) struct InMemoryI8LoadProfile {
+    pub allocation_seconds: f64,
+    pub stream_seconds: f64,
+    pub adopt_seconds: f64,
+    pub total_seconds: f64,
+    pub bytes_streamed: u64,
+    pub stream_sha256: String,
+}
+
+pub(crate) struct LoadedInMemoryI8 {
+    pub source: DenseMatrixBva<i8>,
+    pub profile: InMemoryI8LoadProfile,
+}
+
+pub(crate) struct InMemoryI8Input {
+    pub preset: ModelPreset,
+    pub source_path: PathBuf,
+    pub matrix_shapes: Vec<(usize, usize)>,
+    pub physical_entries: usize,
+    pub active_entries: usize,
+    pub logical_entries: usize,
+    pub bucket_count: usize,
+    pub native_i8_tensor_count: usize,
+    pub converted_float_tensor_count: usize,
+    pub loader: Box<dyn FnOnce() -> Result<LoadedInMemoryI8>>,
+}
+
 impl ExperimentSource {
     fn descriptor(&self) -> &DenseBvaDescriptor {
         match self {
@@ -96,10 +123,20 @@ pub(crate) fn run_from_args(arguments: impl IntoIterator<Item = String>) -> Resu
     let Some(arguments) = parse_arguments(arguments)? else {
         return Ok(());
     };
-    run(arguments)
+    run(arguments, None)
 }
 
-fn run(arguments: Arguments) -> Result<()> {
+pub(crate) fn run_from_args_with_in_memory_i8(
+    arguments: impl IntoIterator<Item = String>,
+    input: InMemoryI8Input,
+) -> Result<()> {
+    let Some(arguments) = parse_arguments(arguments)? else {
+        return Ok(());
+    };
+    run(arguments, Some(input))
+}
+
+fn run(arguments: Arguments, mut in_memory_i8: Option<InMemoryI8Input>) -> Result<()> {
     let threads = rayon::current_num_threads();
     if !arguments.allow_non_64_threads {
         ensure!(
@@ -112,9 +149,29 @@ fn run(arguments: Arguments) -> Result<()> {
     report_active_stage(1, "Workload preparation")?;
     let experiment_started = Instant::now();
     let monitor = MemoryMonitor::spawn(Duration::from_millis(100));
+    if let Some(input) = in_memory_i8.as_ref() {
+        let Workload::Model(preset) = &arguments.workload else {
+            bail!("an in-memory model source cannot be used with a homogeneous workload");
+        };
+        ensure!(
+            *preset == input.preset,
+            "in-memory preset {} does not match requested preset {preset}",
+            input.preset
+        );
+        ensure!(
+            arguments.manifest_override.is_none() && arguments.bva_override.is_none(),
+            "an in-memory model source does not accept --manifest or --bva"
+        );
+        ensure!(
+            input.physical_entries <= input.active_entries
+                && input.active_entries <= input.logical_entries
+                && input.logical_entries.is_power_of_two(),
+            "invalid in-memory BVA length metadata"
+        );
+    }
     let manifest_started = Instant::now();
     let model_manifest = match &arguments.workload {
-        Workload::Model(preset) => Some(
+        Workload::Model(preset) if in_memory_i8.is_none() => Some(
             ModelBvaManifest::load(
                 preset.clone(),
                 &arguments.model_data_dir,
@@ -123,32 +180,39 @@ fn run(arguments: Arguments) -> Result<()> {
             )
             .with_context(|| format!("load converted model preset {preset}"))?,
         ),
-        Workload::Homogeneous { .. } => None,
+        Workload::Model(_) | Workload::Homogeneous { .. } => None,
     };
     let manifest_seconds = manifest_started.elapsed().as_secs_f64();
 
-    let (bit_width, storage_dtype, storage_element_bytes) = match model_manifest.as_ref() {
-        Some(manifest) => {
-            ensure!(
-                matches!(
-                    (manifest.storage_dtype(), manifest.bit_width()),
-                    ("i8", 8) | ("i16", 16)
-                ),
-                "preset {} uses unsupported native {}-bit {} BVA storage",
-                manifest.preset(),
-                manifest.bit_width(),
-                manifest.storage_dtype()
-            );
-            (
-                manifest.bit_width(),
-                manifest.storage_dtype(),
-                manifest.bit_width() / 8,
-            )
-        }
-        None => (HOMOGENEOUS_BIT_WIDTH, "i8", size_of::<i8>()),
-    };
+    let (bit_width, storage_dtype, storage_element_bytes) =
+        match (in_memory_i8.as_ref(), model_manifest.as_ref()) {
+            (Some(_), None) => (8, "i8", size_of::<i8>()),
+            (None, Some(manifest)) => {
+                ensure!(
+                    matches!(
+                        (manifest.storage_dtype(), manifest.bit_width()),
+                        ("i8", 8) | ("i16", 16)
+                    ),
+                    "preset {} uses unsupported native {}-bit {} BVA storage",
+                    manifest.preset(),
+                    manifest.bit_width(),
+                    manifest.storage_dtype()
+                );
+                (
+                    manifest.bit_width(),
+                    manifest.storage_dtype(),
+                    manifest.bit_width() / 8,
+                )
+            }
+            (None, None) => (HOMOGENEOUS_BIT_WIDTH, "i8", size_of::<i8>()),
+            (Some(_), Some(_)) => unreachable!("model input has one source"),
+        };
 
-    let shapes = match (&arguments.workload, model_manifest.as_ref()) {
+    let shapes = match (
+        &arguments.workload,
+        in_memory_i8.as_ref(),
+        model_manifest.as_ref(),
+    ) {
         (
             Workload::Homogeneous {
                 matrix_count,
@@ -156,8 +220,10 @@ fn run(arguments: Arguments) -> Result<()> {
                 cols,
             },
             None,
+            None,
         ) => vec![(*rows, *cols); *matrix_count],
-        (Workload::Model(_), Some(manifest)) => manifest.matrix_shapes().to_vec(),
+        (Workload::Model(_), Some(input), None) => input.matrix_shapes.clone(),
+        (Workload::Model(_), None, Some(manifest)) => manifest.matrix_shapes().to_vec(),
         _ => unreachable!("workload and model manifest stay aligned"),
     };
     let physical_entries = physical_entry_count(&shapes)?;
@@ -167,6 +233,15 @@ fn run(arguments: Arguments) -> Result<()> {
         ensure!(
             descriptor == *manifest.descriptor(),
             "validated model descriptor changed before the experiment"
+        );
+    }
+    if let Some(input) = in_memory_i8.as_ref() {
+        ensure!(
+            physical_entries == input.physical_entries
+                && descriptor.layout().active_len() == input.active_entries
+                && descriptor.logical_len() == input.logical_entries
+                && descriptor.bucket_count() == input.bucket_count,
+            "Rust descriptor does not match the in-memory checkpoint description"
         );
     }
     let layout = Section6Layout::from_descriptor(&descriptor, bit_width)?;
@@ -185,6 +260,13 @@ fn run(arguments: Arguments) -> Result<()> {
     let packed_field_bytes = packed_field_entries
         .checked_mul(size_of::<Fr>())
         .context("packed field byte estimate overflowed")?;
+    let eo_flat_entries_per_vector = layout.logical_len / stride;
+    let eo_flat_field_entries = eo_flat_entries_per_vector
+        .checked_mul(2)
+        .context("EO flat-vector entry estimate overflowed")?;
+    let eo_flat_field_bytes = eo_flat_field_entries
+        .checked_mul(size_of::<Fr>())
+        .context("EO flat-vector byte estimate overflowed")?;
     let stored_shortint_entries = layout.logical_len;
     let stored_shortint_bytes = stored_shortint_entries
         .checked_mul(storage_element_bytes)
@@ -222,18 +304,31 @@ fn run(arguments: Arguments) -> Result<()> {
                 println!("input_kind=generated_i8");
             }
             Workload::Model(preset) => {
-                let manifest = model_manifest
-                    .as_ref()
-                    .expect("model preset has a validated manifest");
                 println!("family=model");
                 println!("model_preset={preset}");
                 println!("matrix_count={}", shapes.len());
-                println!("input_kind=converted_bva");
-                println!("manifest_path={}", manifest.manifest_path().display());
-                println!("bva_path={}", manifest.bva_path().display());
-                println!("bva_size_bytes={}", manifest.bva_size_bytes());
-                println!("input_sha256_expected={}", manifest.expected_sha256());
-                println!("verify_input_hash={}", arguments.verify_input_hash);
+                if let Some(input) = in_memory_i8.as_ref() {
+                    println!("input_kind=in_memory_safetensors_bva");
+                    println!("source_checkpoint={}", input.source_path.display());
+                    println!("bva_disk_materialized=false");
+                    println!("streamed_bva_entries={}", input.active_entries);
+                    println!("streamed_bva_bytes={}", input.active_entries);
+                    println!("native_i8_tensor_count={}", input.native_i8_tensor_count);
+                    println!(
+                        "converted_float_tensor_count={}",
+                        input.converted_float_tensor_count
+                    );
+                } else {
+                    let manifest = model_manifest
+                        .as_ref()
+                        .expect("model preset has a validated manifest");
+                    println!("input_kind=converted_bva");
+                    println!("manifest_path={}", manifest.manifest_path().display());
+                    println!("bva_path={}", manifest.bva_path().display());
+                    println!("bva_size_bytes={}", manifest.bva_size_bytes());
+                    println!("input_sha256_expected={}", manifest.expected_sha256());
+                    println!("verify_input_hash={}", arguments.verify_input_hash);
+                }
             }
         }
         println!("physical_entries={physical_entries}");
@@ -254,11 +349,21 @@ fn run(arguments: Arguments) -> Result<()> {
         println!("canonical_dory_log={}", canonical_dory_log(setup_log));
         println!("estimated_packed_field_entries={packed_field_entries}");
         println!("estimated_packed_field_bytes={packed_field_bytes}");
+        println!("estimated_eo_flat_vector_count=2");
+        println!("estimated_eo_flat_entries_per_vector={eo_flat_entries_per_vector}");
+        println!("estimated_eo_flat_field_entries={eo_flat_field_entries}");
+        println!("estimated_eo_flat_field_bytes={eo_flat_field_bytes}");
         println!(
             "estimated_witness_plus_packed_bytes={}",
             stored_shortint_bytes
                 .checked_add(packed_field_bytes)
                 .context("combined memory estimate overflowed")?
+        );
+        println!(
+            "estimated_witness_plus_eo_flat_bytes={}",
+            stored_shortint_bytes
+                .checked_add(eo_flat_field_bytes)
+                .context("witness plus EO flat-vector estimate overflowed")?
         );
         println!("manifest_seconds={manifest_seconds:.6}");
         println!("descriptor_seconds={descriptor_seconds:.6}");
@@ -274,8 +379,30 @@ fn run(arguments: Arguments) -> Result<()> {
         input_hash_seconds,
         input_adopt_seconds,
         input_loader_total_seconds,
-    ) = match model_manifest {
-        Some(manifest) => match manifest.storage_dtype() {
+    ) = match (in_memory_i8.take(), model_manifest) {
+        (Some(input), None) => {
+            let loaded = (input.loader)().with_context(|| {
+                format!(
+                    "stream {} directly into the in-memory BVA",
+                    input.source_path.display()
+                )
+            })?;
+            if detailed_output {
+                println!("input_bytes_streamed={}", loaded.profile.bytes_streamed);
+                println!("input_stream_sha256={}", loaded.profile.stream_sha256);
+                println!("input_stream_complete=true");
+                println!("bva_disk_materialized=false");
+            }
+            (
+                ExperimentSource::I8(loaded.source),
+                loaded.profile.allocation_seconds,
+                loaded.profile.stream_seconds,
+                0.0,
+                loaded.profile.adopt_seconds,
+                loaded.profile.total_seconds,
+            )
+        }
+        (None, Some(manifest)) => match manifest.storage_dtype() {
             "i8" => {
                 let loaded = manifest.load_i8(arguments.verify_input_hash)?;
                 if detailed_output {
@@ -308,7 +435,7 @@ fn run(arguments: Arguments) -> Result<()> {
             }
             dtype => bail!("unsupported native BVA storage dtype {dtype}"),
         },
-        None => (
+        (None, None) => (
             ExperimentSource::I8(DenseMatrixBva::from_fn(&shapes, |matrix, _, _| {
                 matrix_value(matrix)
             })?),
@@ -318,6 +445,7 @@ fn run(arguments: Arguments) -> Result<()> {
             0.0,
             0.0,
         ),
+        (Some(_), Some(_)) => unreachable!("model input has one source"),
     };
     let generation_seconds =
         report_stage("generation", generation_started, &monitor, detailed_output);
