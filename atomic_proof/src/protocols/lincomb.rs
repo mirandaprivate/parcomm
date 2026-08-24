@@ -1,13 +1,13 @@
+use ark_crypto_primitives::sponge::Absorb;
 /// Public linear combination of matrices
 ///
 use ark_ff::PrimeField;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
-use ark_crypto_primitives::sponge::Absorb;
-use ark_serialize::{CanonicalSerialize, CanonicalDeserialize};
 
 use fs::helper_trans::Transcript;
-use mat::DenseMatFieldCM;
 use mat::utils::matdef::MatOps;
+use mat::DenseMatFieldCM;
 
 pub struct LinComb<F>
 where
@@ -22,11 +22,7 @@ impl<F> LinComb<F>
 where
     F: PrimeField + UniformRand + Absorb + CanonicalSerialize + CanonicalDeserialize,
 {
-    pub fn new(
-        c_hat_value: F,
-        point_value: (Vec<F>, Vec<F>),
-        coeffs_value: Vec<F>,
-    ) -> Self {
+    pub fn new(c_hat_value: F, point_value: (Vec<F>, Vec<F>), coeffs_value: Vec<F>) -> Self {
         Self {
             c_hat: c_hat_value,
             point: point_value,
@@ -88,11 +84,7 @@ where
         (flag, hat_a_vec, point_vec)
     }
 
-    pub fn verify(
-        &self,
-        trans_seq: &mut Transcript<F>,
-        mats: &Vec<DenseMatFieldCM<F>>,
-    ) -> bool {
+    pub fn verify(&self, trans_seq: &mut Transcript<F>, mats: &Vec<DenseMatFieldCM<F>>) -> bool {
         let (flag, hat_a_vec, point_vec) = self.verify_as_subprotocol(trans_seq);
         if !flag {
             return false;

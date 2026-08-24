@@ -8,7 +8,7 @@ use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::PrimeField;
 use ark_poly::MultilinearExtension;
 use ark_serialize::serialize_to_vec;
-use ark_std::{marker::PhantomData, rand::RngCore, UniformRand, test_rng};
+use ark_std::{marker::PhantomData, rand::RngCore, test_rng, UniformRand};
 
 use blake2::Blake2s256;
 use digest::Digest;

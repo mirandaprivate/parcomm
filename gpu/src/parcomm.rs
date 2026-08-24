@@ -10,7 +10,9 @@ use std::mem::size_of;
 use std::sync::Arc;
 use std::time::Instant;
 
-use ark_bls12_381::{Bls12_381, Fr, G1Projective as ArkG1Projective, G2Projective as ArkG2Projective};
+use ark_bls12_381::{
+    Bls12_381, Fr, G1Projective as ArkG1Projective, G2Projective as ArkG2Projective,
+};
 use ark_ec::pairing::PairingOutput;
 use ark_ec::CurveGroup;
 use ark_std::{One, Zero};
@@ -19,7 +21,8 @@ use batch::bucketed_ip::{
     PackedReducedSpec,
 };
 use icicle_bls12_381::curve::{
-    G1Affine as IcicleG1Affine, G1Projective as IcicleG1Projective, ScalarField as IcicleScalarField,
+    G1Affine as IcicleG1Affine, G1Projective as IcicleG1Projective,
+    ScalarField as IcicleScalarField,
 };
 use icicle_core::msm::{msm, MSMConfig};
 use icicle_core::projective::Projective;
@@ -333,7 +336,10 @@ impl GpuWitness {
             });
         }
         if pp.vec_g.len() < rows || pp.vec_h.len() < cols {
-            return Err(GpuSmartPcError::ParametersTooShort { rows, columns: cols });
+            return Err(GpuSmartPcError::ParametersTooShort {
+                rows,
+                columns: cols,
+            });
         }
         if device_ids.is_empty() {
             return Err(GpuSmartPcError::NoDevices);
@@ -376,9 +382,8 @@ impl GpuWitness {
 
                         let row_count = row_end - row_start;
                         let band = &dense[row_start * cols..row_end * cols];
-                        let mut witness =
-                            DeviceVec::<i8>::device_malloc(band.len().max(1))
-                                .map_err(icicle_error)?;
+                        let mut witness = DeviceVec::<i8>::device_malloc(band.len().max(1))
+                            .map_err(icicle_error)?;
                         if !band.is_empty() {
                             witness
                                 .copy_from_host(HostSlice::from_slice(band))
@@ -392,20 +397,18 @@ impl GpuWitness {
                                 .collect::<Vec<_>>(),
                         );
                         let icicle_bases = ark_g1_to_icicle(&band_bases);
-                        let mut bases = DeviceVec::<IcicleG1Affine>::device_malloc(
-                            icicle_bases.len().max(1),
-                        )
-                        .map_err(icicle_error)?;
+                        let mut bases =
+                            DeviceVec::<IcicleG1Affine>::device_malloc(icicle_bases.len().max(1))
+                                .map_err(icicle_error)?;
                         if !icicle_bases.is_empty() {
                             bases
                                 .copy_from_host(HostSlice::from_slice(&icicle_bases))
                                 .map_err(icicle_error)?;
                         }
 
-                        let mut table = DeviceVec::<IcicleScalarField>::device_malloc(
-                            magnitudes.len(),
-                        )
-                        .map_err(icicle_error)?;
+                        let mut table =
+                            DeviceVec::<IcicleScalarField>::device_malloc(magnitudes.len())
+                                .map_err(icicle_error)?;
                         table
                             .copy_from_host(HostSlice::from_slice(ark_scalars_as_icicle(
                                 magnitudes,
@@ -449,7 +452,6 @@ impl GpuWitness {
         (self.rows, self.cols)
     }
 
-
     /// Computes the tier-one column commitments on the GPUs and folds them into
     /// the SmartPC commitment with a CPU pairing product.
     pub fn commit(
@@ -476,10 +478,9 @@ impl GpuWitness {
                             return Ok((Vec::new(), 0.0));
                         }
 
-                        let chunk = (MSM_SCRATCH_BYTES
-                            / (rows * size_of::<IcicleScalarField>()))
-                        .max(1)
-                        .min(cols);
+                        let chunk = (MSM_SCRATCH_BYTES / (rows * size_of::<IcicleScalarField>()))
+                            .max(1)
+                            .min(cols);
                         let mut scalars =
                             DeviceVec::<IcicleScalarField>::device_malloc(chunk * rows)
                                 .map_err(icicle_error)?;
@@ -696,57 +697,59 @@ impl GpuWitness {
                 .devices
                 .iter()
                 .zip(&bands)
-                .map(|(state, &(window_low, window_high, outer_start, outer_end))| {
-                    let inner_weights = &inner_weights;
-                    scope.spawn(move || -> Result<Vec<Fr>, GpuSmartPcError> {
-                        if outer_start >= outer_end {
-                            return Ok(Vec::new());
-                        }
-                        icicle_runtime::set_device(&Device::new("CUDA", state.device_id))
-                            .map_err(icicle_error)?;
-                        let outer_count = outer_end - outer_start;
-                        let device_base = base as isize - (state.row_start * cols) as isize;
-
-                        let mut device_weights =
-                            DeviceVec::<IcicleScalarField>::device_malloc(inner)
+                .map(
+                    |(state, &(window_low, window_high, outer_start, outer_end))| {
+                        let inner_weights = &inner_weights;
+                        scope.spawn(move || -> Result<Vec<Fr>, GpuSmartPcError> {
+                            if outer_start >= outer_end {
+                                return Ok(Vec::new());
+                            }
+                            icicle_runtime::set_device(&Device::new("CUDA", state.device_id))
                                 .map_err(icicle_error)?;
-                        device_weights
-                            .copy_from_host(HostSlice::from_slice(ark_scalars_as_icicle(
-                                inner_weights,
-                            )))
-                            .map_err(icicle_error)?;
+                            let outer_count = outer_end - outer_start;
+                            let device_base = base as isize - (state.row_start * cols) as isize;
 
-                        let slots = outer_count * PACKING_STRIDE;
-                        let mut device_partial =
-                            DeviceVec::<IcicleScalarField>::device_malloc(slots)
+                            let mut device_weights =
+                                DeviceVec::<IcicleScalarField>::device_malloc(inner)
+                                    .map_err(icicle_error)?;
+                            device_weights
+                                .copy_from_host(HostSlice::from_slice(ark_scalars_as_icicle(
+                                    inner_weights,
+                                )))
                                 .map_err(icicle_error)?;
-                        cuda_result(
-                            unsafe {
-                                parcomm_cross_terms_lane_partials(
-                                    state.witness.as_ptr(),
-                                    device_base,
-                                    window_low,
-                                    window_high,
-                                    inner,
-                                    outer_start,
-                                    outer_count,
-                                    device_weights.as_ptr().cast(),
-                                    state.magnitudes.as_ptr().cast(),
-                                    device_partial.as_mut_ptr().cast(),
-                                )
-                            },
-                            "cross_terms_lane_partials",
-                        )?;
 
-                        let mut host_partial = vec![Fr::zero(); slots];
-                        device_partial
-                            .copy_to_host(HostSlice::from_mut_slice(ark_scalars_as_icicle_mut(
-                                &mut host_partial,
-                            )))
-                            .map_err(icicle_error)?;
-                        Ok(host_partial)
-                    })
-                })
+                            let slots = outer_count * PACKING_STRIDE;
+                            let mut device_partial =
+                                DeviceVec::<IcicleScalarField>::device_malloc(slots)
+                                    .map_err(icicle_error)?;
+                            cuda_result(
+                                unsafe {
+                                    parcomm_cross_terms_lane_partials(
+                                        state.witness.as_ptr(),
+                                        device_base,
+                                        window_low,
+                                        window_high,
+                                        inner,
+                                        outer_start,
+                                        outer_count,
+                                        device_weights.as_ptr().cast(),
+                                        state.magnitudes.as_ptr().cast(),
+                                        device_partial.as_mut_ptr().cast(),
+                                    )
+                                },
+                                "cross_terms_lane_partials",
+                            )?;
+
+                            let mut host_partial = vec![Fr::zero(); slots];
+                            device_partial
+                                .copy_to_host(HostSlice::from_mut_slice(ark_scalars_as_icicle_mut(
+                                    &mut host_partial,
+                                )))
+                                .map_err(icicle_error)?;
+                            Ok(host_partial)
+                        })
+                    },
+                )
                 .collect::<Vec<_>>();
             handles
                 .into_iter()
@@ -766,11 +769,7 @@ impl GpuWitness {
         Ok(lanes)
     }
 
-    fn project(
-        &self,
-        weights: &[Fr],
-        side: ProjectionSide,
-    ) -> Result<Vec<Fr>, GpuSmartPcError> {
+    fn project(&self, weights: &[Fr], side: ProjectionSide) -> Result<Vec<Fr>, GpuSmartPcError> {
         let rows = self.rows;
         let cols = self.cols;
         let live = self.layout.live_rows.len();
@@ -804,76 +803,78 @@ impl GpuWitness {
                 .devices
                 .iter()
                 .map(|state| {
-                    scope.spawn(move || -> Result<(usize, usize, Vec<Fr>), GpuSmartPcError> {
-                        icicle_runtime::set_device(&Device::new("CUDA", state.device_id))
-                            .map_err(icicle_error)?;
-                        let row_start = state.row_start;
-                        let row_end = row_start + state.row_count;
-                        if state.row_count == 0 {
-                            return Ok((row_start, row_end, Vec::new()));
-                        }
-                        let output_len = match side {
-                            ProjectionSide::Left => cols,
-                            ProjectionSide::Right => state.row_count,
-                        };
-                        let band_weights = match side {
-                            ProjectionSide::Left => &weights[row_start..row_end],
-                            ProjectionSide::Right => weights,
-                        };
-
-                        let mut device_weights =
-                            DeviceVec::<IcicleScalarField>::device_malloc(band_weights.len())
+                    scope.spawn(
+                        move || -> Result<(usize, usize, Vec<Fr>), GpuSmartPcError> {
+                            icicle_runtime::set_device(&Device::new("CUDA", state.device_id))
                                 .map_err(icicle_error)?;
-                        device_weights
-                            .copy_from_host(HostSlice::from_slice(ark_scalars_as_icicle(
-                                band_weights,
-                            )))
-                            .map_err(icicle_error)?;
-
-                        // `project_left` accumulates into its output, so the
-                        // band buffer starts at zero.
-                        let host_zero = vec![Fr::zero(); output_len];
-                        let mut device_output =
-                            DeviceVec::<IcicleScalarField>::device_malloc(output_len)
-                                .map_err(icicle_error)?;
-                        device_output
-                            .copy_from_host(HostSlice::from_slice(ark_scalars_as_icicle(
-                                &host_zero,
-                            )))
-                            .map_err(icicle_error)?;
-
-                        let code = unsafe {
-                            match side {
-                                ProjectionSide::Left => parcomm_project_left(
-                                    state.witness.as_ptr(),
-                                    cols,
-                                    0,
-                                    state.row_count,
-                                    device_weights.as_ptr().cast(),
-                                    state.magnitudes.as_ptr().cast(),
-                                    device_output.as_mut_ptr().cast(),
-                                ),
-                                ProjectionSide::Right => parcomm_project_right(
-                                    state.witness.as_ptr(),
-                                    cols,
-                                    0,
-                                    state.row_count,
-                                    device_weights.as_ptr().cast(),
-                                    state.magnitudes.as_ptr().cast(),
-                                    device_output.as_mut_ptr().cast(),
-                                ),
+                            let row_start = state.row_start;
+                            let row_end = row_start + state.row_count;
+                            if state.row_count == 0 {
+                                return Ok((row_start, row_end, Vec::new()));
                             }
-                        };
-                        cuda_result(code, "projection")?;
+                            let output_len = match side {
+                                ProjectionSide::Left => cols,
+                                ProjectionSide::Right => state.row_count,
+                            };
+                            let band_weights = match side {
+                                ProjectionSide::Left => &weights[row_start..row_end],
+                                ProjectionSide::Right => weights,
+                            };
 
-                        let mut host_output = vec![Fr::zero(); output_len];
-                        device_output
-                            .copy_to_host(HostSlice::from_mut_slice(ark_scalars_as_icicle_mut(
-                                &mut host_output,
-                            )))
-                            .map_err(icicle_error)?;
-                        Ok((row_start, row_end, host_output))
-                    })
+                            let mut device_weights =
+                                DeviceVec::<IcicleScalarField>::device_malloc(band_weights.len())
+                                    .map_err(icicle_error)?;
+                            device_weights
+                                .copy_from_host(HostSlice::from_slice(ark_scalars_as_icicle(
+                                    band_weights,
+                                )))
+                                .map_err(icicle_error)?;
+
+                            // `project_left` accumulates into its output, so the
+                            // band buffer starts at zero.
+                            let host_zero = vec![Fr::zero(); output_len];
+                            let mut device_output =
+                                DeviceVec::<IcicleScalarField>::device_malloc(output_len)
+                                    .map_err(icicle_error)?;
+                            device_output
+                                .copy_from_host(HostSlice::from_slice(ark_scalars_as_icicle(
+                                    &host_zero,
+                                )))
+                                .map_err(icicle_error)?;
+
+                            let code = unsafe {
+                                match side {
+                                    ProjectionSide::Left => parcomm_project_left(
+                                        state.witness.as_ptr(),
+                                        cols,
+                                        0,
+                                        state.row_count,
+                                        device_weights.as_ptr().cast(),
+                                        state.magnitudes.as_ptr().cast(),
+                                        device_output.as_mut_ptr().cast(),
+                                    ),
+                                    ProjectionSide::Right => parcomm_project_right(
+                                        state.witness.as_ptr(),
+                                        cols,
+                                        0,
+                                        state.row_count,
+                                        device_weights.as_ptr().cast(),
+                                        state.magnitudes.as_ptr().cast(),
+                                        device_output.as_mut_ptr().cast(),
+                                    ),
+                                }
+                            };
+                            cuda_result(code, "projection")?;
+
+                            let mut host_output = vec![Fr::zero(); output_len];
+                            device_output
+                                .copy_to_host(HostSlice::from_mut_slice(ark_scalars_as_icicle_mut(
+                                    &mut host_output,
+                                )))
+                                .map_err(icicle_error)?;
+                            Ok((row_start, row_end, host_output))
+                        },
+                    )
                 })
                 .collect::<Vec<_>>();
             handles
@@ -948,7 +949,7 @@ fn factor_tensor(factors: &[(Fr, Fr)]) -> Vec<Fr> {
 
 /// Packing stride of the packed EO reduction, fixed by the field width and
 /// mirrored by the device kernel's warp mapping.
-pub const PACKING_STRIDE: usize = 32;
+pub const PACKING_STRIDE: usize = 64;
 
 /// Index bits the device kernel folds in its inner loop.
 ///
@@ -996,7 +997,6 @@ const SHARD_MINIMUM_ENTRIES: usize = 1 << 18;
 
 unsafe impl Send for ResidentVector {}
 unsafe impl Sync for ResidentVector {}
-
 
 /// Keeps the packed EO reduced vectors in device memory for the rounds where
 /// they are large.
@@ -1129,11 +1129,7 @@ impl<'a> GpuReducedVectors<'a> {
 impl PackedEoReducedVectors<Fr> for GpuReducedVectors<'_> {
     type Error = String;
 
-    fn build(
-        &mut self,
-        specs: &[PackedReducedSpec],
-        inverse_powers: &[Fr],
-    ) -> Result<(), String> {
+    fn build(&mut self, specs: &[PackedReducedSpec], inverse_powers: &[Fr]) -> Result<(), String> {
         let started = Instant::now();
         let device_count = self.witness.devices.len();
         // The longest vectors go to distinct devices first, which matters
@@ -1226,9 +1222,7 @@ impl PackedEoReducedVectors<Fr> for GpuReducedVectors<'_> {
                 shards.map_or((Fr::zero(), Fr::zero()), |shards| {
                     shards.into_iter().fold(
                         (Fr::zero(), Fr::zero()),
-                        |(even, odd), (shard_even, shard_odd)| {
-                            (even + shard_even, odd + shard_odd)
-                        },
+                        |(even, odd), (shard_even, shard_odd)| (even + shard_even, odd + shard_odd),
                     )
                 })
             })
@@ -1736,7 +1730,11 @@ mod tests {
 
         let (products, sums) = device_field_roundtrip(0, &left, &right).expect("device arithmetic");
         for index in 0..count {
-            assert_eq!(products[index], left[index] * right[index], "mul at {index}");
+            assert_eq!(
+                products[index],
+                left[index] * right[index],
+                "mul at {index}"
+            );
             assert_eq!(sums[index], left[index] + right[index], "add at {index}");
         }
     }

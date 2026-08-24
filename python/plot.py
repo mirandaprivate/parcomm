@@ -382,6 +382,13 @@ def sum_values(row, *names):
 def normalize_sweep_row(row):
     """Normalize legacy packed-i8 and Section 6 result rows for plotting."""
     normalized = dict(row)
+    for new_name, legacy_name in (
+        ('validity_verify_seconds', 'registration_verify_seconds'),
+        ('validity_prove_seconds', 'registration_prove_seconds'),
+        ('commit_orchestration_seconds', 'registration_orchestration_seconds'),
+    ):
+        if not normalized.get(new_name) and normalized.get(legacy_name):
+            normalized[new_name] = normalized[legacy_name]
     if not normalized.get('size_log'):
         logical_entries = int(normalized['logical_entries'])
         if logical_entries <= 0 or logical_entries & (logical_entries - 1):
@@ -408,7 +415,7 @@ def normalize_sweep_row(row):
     normalized['verify_seconds'] = first_value(
         normalized, 'verify_seconds', 'total_verifier_seconds'
     ) or sum_values(
-        normalized, 'registration_verify_seconds', 'opening_verify_seconds'
+        normalized, 'validity_verify_seconds', 'opening_verify_seconds'
     )
     normalized['peak_rss_gib'] = first_value(normalized, 'peak_rss_gib')
     if not normalized['peak_rss_gib']:
@@ -425,6 +432,20 @@ def normalize_sweep_row(row):
         'final_tbv_seconds',
         'auxiliary_pcs_seconds',
         'auxiliary_opening_seconds',
+        'shape_commitment_seconds',
+        'dense_vector_commitment_seconds',
+        'eo_ip_seconds',
+        'eo_ip_accounted_seconds',
+        'eo_ip_other_seconds',
+        'dense_bva_open_seconds',
+        'point_conversion_seconds',
+        'tbv_evaluation_seconds',
+        'terminal_auxiliary_open_seconds',
+        'point_conversion_plus_tbv_evaluation_seconds',
+        'commit_orchestration_seconds',
+        'opening_orchestration_seconds',
+        'other_prover_seconds',
+        'prover_breakdown_sum_seconds',
         'pi_ip_proof_size_bytes',
         'pi_a_proof_size_bytes',
     ):

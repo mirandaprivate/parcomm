@@ -9,10 +9,7 @@ use rayon::prelude::*;
 
 /// Compute the n-vector xi by using log_2 n random challenges.
 ///
-pub fn xi_from_challenges<F: PrimeField>(challenges: &Vec<F>)
--> Vec<F>
-{
-
+pub fn xi_from_challenges<F: PrimeField>(challenges: &Vec<F>) -> Vec<F> {
     let log_n = challenges.len();
 
     let mut xi = vec![F::one()];
@@ -20,10 +17,10 @@ pub fn xi_from_challenges<F: PrimeField>(challenges: &Vec<F>)
     let mut xi_right: Vec<F>;
 
     for j in 0..log_n {
-        xi_right = xi.par_iter().map(
-            |a|
-            *a * challenges[log_n - j - 1]
-        ).collect::<Vec<F>>();
+        xi_right = xi
+            .par_iter()
+            .map(|a| *a * challenges[log_n - j - 1])
+            .collect::<Vec<F>>();
         xi.append(&mut xi_right);
     }
 
@@ -32,15 +29,12 @@ pub fn xi_from_challenges<F: PrimeField>(challenges: &Vec<F>)
 
 /// Compute the inner product of two tensor-structured-vectors.
 ///
-pub fn xi_ip_from_challenges<F:PrimeField>(
-    challenges1: &Vec<F>,
-    challenges2: &Vec<F>,
-) -> F {
+pub fn xi_ip_from_challenges<F: PrimeField>(challenges1: &Vec<F>, challenges2: &Vec<F>) -> F {
     let len1 = challenges1.len();
     let len2 = challenges2.len();
     let len = std::cmp::min(len1, len2);
-    let challenges1 = &challenges1[len1-len..len1].to_vec();
-    let challenges2 = &challenges2[len2-len..len2].to_vec();
+    let challenges1 = &challenges1[len1 - len..len1].to_vec();
+    let challenges2 = &challenges2[len2 - len..len2].to_vec();
 
     let mut result = F::one();
 
@@ -58,10 +52,7 @@ pub fn xi_ip_from_challenges<F:PrimeField>(
 /// a_{j+1} = a_jL + x_j * a_jR
 /// ip = a_{log_n}
 ///
-pub fn xi_ip_from_challenges_and_vector<F: PrimeField>(
-    vector: &Vec<F>,
-    challenges: &Vec<F>,
-) -> F {
+pub fn xi_ip_from_challenges_and_vector<F: PrimeField>(vector: &Vec<F>, challenges: &Vec<F>) -> F {
     let expected_len = 1usize << challenges.len();
     assert!(
         vector.len() == expected_len,
@@ -98,7 +89,6 @@ pub fn xi_ip_from_challenges_and_vector_non_power_of_two<F: PrimeField>(
 ) -> F {
     let expected_len = 1usize << challenges.len();
 
-
     // Pad to power-of-two length with zeros so folding is well-defined
     let mut acc: Vec<F> = vector.clone();
     if acc.len() < expected_len {
@@ -108,14 +98,15 @@ pub fn xi_ip_from_challenges_and_vector_non_power_of_two<F: PrimeField>(
     xi_ip_from_challenges_and_vector(&acc, challenges)
 }
 
-
-pub fn xi_get_at_position<F: PrimeField>(
-    index: usize,
-    challenges: &[F],
-) -> F {
+pub fn xi_get_at_position<F: PrimeField>(index: usize, challenges: &[F]) -> F {
     let log_n = challenges.len();
     let max_len = 1usize << log_n;
-    assert!(index < max_len, "index {} exceeds 2^|challenges| {}", index, max_len);
+    assert!(
+        index < max_len,
+        "index {} exceeds 2^|challenges| {}",
+        index,
+        max_len
+    );
 
     let mut result = F::one();
     for i in 0..log_n {
@@ -128,10 +119,7 @@ pub fn xi_get_at_position<F: PrimeField>(
 
 /// Compute the projection of an all-ones vector of length `len` onto the xi
 /// basis defined by `challenges`.
-pub fn vec_one_ip_with_challenges<F: PrimeField>(
-    len: usize,
-    challenges: &[F],
-) -> F {
+pub fn vec_one_ip_with_challenges<F: PrimeField>(len: usize, challenges: &[F]) -> F {
     if len == 0 {
         return F::zero();
     }
@@ -165,23 +153,17 @@ pub fn vec_one_ip_with_challenges<F: PrimeField>(
     helper(len, challenges, challenges.len())
 }
 
-pub fn xi_power_from_challenges_power_of_two<F: PrimeField>(
-    base: F,
-    challenges: &[F],
-) -> F {
+pub fn xi_power_from_challenges_power_of_two<F: PrimeField>(base: F, challenges: &[F]) -> F {
     let log_n = challenges.len();
-    let mut base_power = std::iter::successors(Some(base), |x| Some(*x * *x)).take(log_n).collect::<Vec<F>>();
+    let mut base_power = std::iter::successors(Some(base), |x| Some(*x * *x))
+        .take(log_n)
+        .collect::<Vec<F>>();
     base_power.reverse();
     xi_ip_from_challenges(&challenges.to_vec(), &base_power)
 }
 
 /// Handle when size is not power of two
-pub fn xi_power_ip_with_challenges<F: PrimeField>(
-    len: usize,
-    base: F,
-    challenges: &[F],
-) -> F {
-
+pub fn xi_power_ip_with_challenges<F: PrimeField>(len: usize, base: F, challenges: &[F]) -> F {
     if len == 0 {
         return F::zero();
     }
@@ -239,7 +221,6 @@ mod tests {
         assert_eq!(result, Fr::from(242u64));
     }
 
-
     #[test]
     fn test_vec_one_ip_power_of_two() {
         let challenges = vec![Fr::from(2u64), Fr::from(3u64)];
@@ -269,7 +250,12 @@ mod tests {
         let base = Fr::from(2u64);
         let len = 4usize;
 
-        let vec = vec![Fr::from(1u64), Fr::from(2u64), Fr::from(4u64), Fr::from(8u64)];
+        let vec = vec![
+            Fr::from(1u64),
+            Fr::from(2u64),
+            Fr::from(4u64),
+            Fr::from(8u64),
+        ];
         let expected = xi_ip_from_challenges_and_vector(&vec, &challenges);
 
         let got = xi_power_ip_with_challenges(len, base, &challenges);

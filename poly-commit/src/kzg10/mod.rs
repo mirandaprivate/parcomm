@@ -11,8 +11,8 @@ use crate::{BTreeMap, Error, LabeledPolynomial, PCCommitmentState};
 use ark_ec::{pairing::Pairing, scalar_mul::ScalarMul, AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{One, PrimeField, UniformRand, Zero};
 use ark_poly::DenseUVPolynomial;
-use ark_std::{format, marker::PhantomData, ops::Div, ops::Mul, rand::RngCore, vec::Vec};
 use ark_serialize::{CanonicalSerialize, Compress};
+use ark_std::{format, marker::PhantomData, ops::Div, ops::Mul, rand::RngCore, vec::Vec};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -470,7 +470,6 @@ fn convert_to_bigints<F: PrimeField>(p: &[F]) -> Vec<F::BigInt> {
     coeffs
 }
 
-
 impl<E: Pairing, P: DenseUVPolynomial<E::ScalarField>> KZG10<E, P> {
     /// Specializes the public parameters for a given maximum degree `d` for polynomials
     /// `d` should be less that `pp.max_degree()`.
@@ -525,16 +524,18 @@ where
     let p = P::rand(degree, rng);
 
     // Test short bit-width polynomials
-    let coeffs = (0..degree).into_par_iter().map(|_|{
-        use ark_std::{rand::Rng, test_rng};
-        let mut rng = test_rng();
-        E::ScalarField::from(rng.gen_range(-127..127))
-        }).collect();
+    let coeffs = (0..degree)
+        .into_par_iter()
+        .map(|_| {
+            use ark_std::{rand::Rng, test_rng};
+            let mut rng = test_rng();
+            E::ScalarField::from(rng.gen_range(-127..127))
+        })
+        .collect();
     let p_short = P::from_coefficients_vec(coeffs);
 
     let hiding_bound = Some(1);
-    let (comm, rand) =
-        KZG10::<E, P>::commit(&ck, &p_short, hiding_bound, Some(rng)).unwrap();
+    let (comm, rand) = KZG10::<E, P>::commit(&ck, &p_short, hiding_bound, Some(rng)).unwrap();
     let commit_time = start_commit.elapsed().as_secs_f64();
     println!("Commit time: {:?}s", commit_time);
 
@@ -552,7 +553,7 @@ where
 
     let verify_time = Instant::now();
     let verified = KZG10::<E, P>::check(&vk, &comm, point, value, &proof).unwrap();
-    let verify_time = verify_time.elapsed().as_secs_f64()*1000.0;
+    let verify_time = verify_time.elapsed().as_secs_f64() * 1000.0;
     println!("Verify time: {:?}ms", verify_time);
 
     let mut writer = Vec::new();
@@ -560,10 +561,7 @@ where
     let proof_size = writer.len();
     println!("Proof size: {:?}B", proof_size);
 
-    println!(
-        "KZG10 proof verified: {}",
-        verified
-    );
+    println!("KZG10 proof verified: {}", verified);
 }
 
 #[cfg(test)]
@@ -581,7 +579,6 @@ mod tests {
     type UniPoly_381 = DensePoly<<Bls12_381 as Pairing>::ScalarField>;
     type UniPoly_377 = DensePoly<<Bls12_377 as Pairing>::ScalarField>;
     type KZG_Bls12_381 = KZG10<Bls12_381, UniPoly_381>;
-
 
     #[test]
     fn add_commitments_test() {

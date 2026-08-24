@@ -23,9 +23,9 @@ use ark_std::{
     fmt::Debug,
     hash::Hash,
     iter::FromIterator,
+    rand::RngCore,
     string::{String, ToString},
     vec::Vec,
-    rand::RngCore,
 };
 #[cfg(not(feature = "std"))]
 use ark_std::{

@@ -26,6 +26,40 @@ SECTION6_TIMING_FIELDS = (
     "auxiliary_opening_seconds",
 )
 
+PROVER_BREAKDOWN_FIELDS = (
+    "shape_commitment_seconds",
+    "dense_vector_commitment_seconds",
+    "eo_ip_seconds",
+    "eo_ip_accounted_seconds",
+    "eo_ip_other_seconds",
+    "dense_bva_open_seconds",
+    "point_conversion_seconds",
+    "tbv_evaluation_seconds",
+    "terminal_auxiliary_open_seconds",
+    "point_conversion_plus_tbv_evaluation_seconds",
+    "commit_orchestration_seconds",
+    "opening_orchestration_seconds",
+    "other_prover_seconds",
+    "prover_breakdown_sum_seconds",
+)
+
+# Renamed log keys: new name -> legacy fallback.
+KEY_FALLBACKS = {
+    "validity_verify_seconds": "registration_verify_seconds",
+    "validity_prove_seconds": "registration_prove_seconds",
+    "commit_orchestration_seconds": "registration_orchestration_seconds",
+}
+
+
+def renamed_float(values: dict[str, str], name: str) -> float:
+    """Read a float that may still use its legacy key in old logs."""
+    value = values.get(name)
+    if value in (None, ""):
+        value = values.get(KEY_FALLBACKS.get(name, name))
+    if value in (None, ""):
+        raise KeyError(name)
+    return float(value)
+
 SECTION6_PROOF_SIZE_FIELDS = (
     "pi_ip_proof_size_bytes",
     "pi_a_proof_size_bytes",
@@ -48,6 +82,7 @@ CSV_FIELDS = (
     "opening_seconds",
     "open_seconds",
     *SECTION6_TIMING_FIELDS,
+    *PROVER_BREAKDOWN_FIELDS,
     "serialization_seconds",
     "verifier_reduction_seconds",
     "verifier_pairing_seconds",
@@ -85,6 +120,8 @@ def parse_elapsed(value: str) -> float:
 def format_optional_float(values: dict[str, str], name: str) -> str:
     """Format an optional timing while leaving legacy logs representable."""
     value = values.get(name)
+    if value in (None, ""):
+        value = values.get(KEY_FALLBACKS.get(name, name))
     return "" if value in (None, "") else f"{float(value):.6f}"
 
 
@@ -164,17 +201,33 @@ def parse_log(path: Path) -> dict[str, str] | None:
         raise ValueError(f"{path}: missing SHA-256 proof digest")
 
     if is_section6:
+        packed_eo_stage_names = (
+            "packed_eo_packed_cross_terms_seconds",
+            "packed_eo_first_fold_seconds",
+            "packed_eo_reduced_check_seconds",
+            "packed_eo_binary_cross_terms_seconds",
+            "packed_eo_binary_challenge_seconds",
+            "packed_eo_binary_fold_seconds",
+        )
+        if not any(name in values for name in packed_eo_stage_names):
+            packed_eo_stage_names = (
+                "packed_eo_cross_terms_seconds",
+                "packed_eo_fold_seconds",
+                "packed_eo_reduced_check_seconds",
+                "packed_eo_binary_rounds_seconds",
+            )
         packed_eo_seconds = float(
             values.get(
-                "packed_eo_reduction_seconds",
-                sum(
-                    float(values.get(name, 0.0))
-                    for name in (
-                        "packed_eo_cross_terms_seconds",
-                        "packed_eo_fold_seconds",
-                        "packed_eo_reduced_check_seconds",
-                        "packed_eo_binary_rounds_seconds",
-                    )
+                "eo_ip_seconds",
+                values.get(
+                    "packed_eo_seconds",
+                    values.get(
+                        "packed_eo_reduction_seconds",
+                        sum(
+                            float(values.get(name, 0.0))
+                            for name in packed_eo_stage_names
+                        ),
+                    ),
                 ),
             )
         )
@@ -188,8 +241,8 @@ def parse_log(path: Path) -> dict[str, str] | None:
             "packed_eo_seconds": packed_eo_seconds,
             "opening_seconds": max(0.0, open_seconds - packed_eo_seconds),
             "serialization_seconds": float(values["serialization_seconds"]),
-            "verifier_reduction_seconds": float(
-                values["registration_verify_seconds"]
+            "verifier_reduction_seconds": renamed_float(
+                values, "validity_verify_seconds"
             ),
             "verifier_pairing_seconds": float(values["opening_verify_seconds"]),
         }
@@ -205,7 +258,7 @@ def parse_log(path: Path) -> dict[str, str] | None:
             + stages["generation_seconds"]
             + stages["claim_seconds"]
             + stages["commit_seconds"]
-            + float(values["registration_prove_seconds"])
+            + renamed_float(values, "validity_prove_seconds")
             + open_seconds
             + stages["serialization_seconds"]
             + verify_seconds
@@ -245,6 +298,10 @@ def parse_log(path: Path) -> dict[str, str] | None:
         **{
             name: format_optional_float(values, name)
             for name in SECTION6_TIMING_FIELDS
+        },
+        **{
+            name: format_optional_float(values, name)
+            for name in PROVER_BREAKDOWN_FIELDS
         },
         "verify_seconds": f"{verify_seconds:.6f}",
         "convenience_verify_seconds": values.get(

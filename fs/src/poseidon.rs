@@ -3,28 +3,24 @@
 //! This module provides a Poseidon hash function implementation that can generate
 //! R1CS constraints for use in zero-knowledge proof systems.
 
+use ark_crypto_primitives::sponge::poseidon::constraints::PoseidonSpongeVar;
+use ark_crypto_primitives::sponge::{
+    constraints::CryptographicSpongeVar,
+    poseidon::{PoseidonConfig, PoseidonSponge},
+    Absorb, CryptographicSponge,
+};
 use ark_ff::PrimeField;
 use ark_ff::UniformRand;
-use ark_crypto_primitives::{
-    sponge::{
-        poseidon::{PoseidonConfig, PoseidonSponge},
-        Absorb, CryptographicSponge,
-        constraints::CryptographicSpongeVar,
-    },
+use ark_r1cs_std::{fields::fp::FpVar, prelude::*};
+use ark_relations::r1cs::{
+    ConstraintSynthesizer, ConstraintSystem, ConstraintSystemRef, Matrix, SynthesisError,
 };
-use ark_relations::{
-    r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, ConstraintSystem, Matrix},
-};
-use ark_r1cs_std::{
-    fields::fp::FpVar,
-    prelude::*,
-};
-use ark_crypto_primitives::sponge::poseidon::constraints::PoseidonSpongeVar;
 
 // use mat::utils::matdef::SparseFieldMat;
 
 #[derive(Clone, Debug)]
-pub struct Poseidon<F> where
+pub struct Poseidon<F>
+where
     F: PrimeField,
 {
     poseidon_config: PoseidonConfig<F>,
@@ -84,7 +80,8 @@ where
     }
 
     /// Generate recommended Poseidon configuration
-    fn gen_config_with_recommended_params() -> Result<PoseidonConfig<F>, Box<dyn std::error::Error>> {
+    fn gen_config_with_recommended_params() -> Result<PoseidonConfig<F>, Box<dyn std::error::Error>>
+    {
         // Use parameters recommended by Poseidon paper
         let full_rounds = 8;
         let partial_rounds = 31;
@@ -108,7 +105,9 @@ where
         for i in 0..state_size {
             for j in 0..state_size {
                 let diff = x_values[i] - y_values[j];
-                mds[i][j] = diff.inverse().ok_or("Failed to compute inverse of Cauchy matrix element")?;
+                mds[i][j] = diff
+                    .inverse()
+                    .ok_or("Failed to compute inverse of Cauchy matrix element")?;
             }
         }
 
@@ -223,9 +222,8 @@ where
         let witness_assignment = &cs_borrow.witness_assignment;
 
         // Build complete variable vector: [instance variables, witness variables]
-        let mut variable_values = Vec::with_capacity(
-            instance_assignment.len() + witness_assignment.len()
-        );
+        let mut variable_values =
+            Vec::with_capacity(instance_assignment.len() + witness_assignment.len());
         variable_values.extend_from_slice(instance_assignment);
         variable_values.extend_from_slice(witness_assignment);
 
@@ -290,13 +288,12 @@ fn next_power_of_2(n: usize) -> usize {
 //     Ok(sparse_matrix)
 // }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ark_bls12_381::Fr as BlsFr;
     use ark_ff::Zero;
     use ark_std::test_rng;
-    use ark_bls12_381::{Fr as BlsFr};
 
     #[test]
     fn test_poseidon_r1cs_satisfaction() {
@@ -319,11 +316,13 @@ mod tests {
         println!("c = {:?}", c);
 
         // Generate R1CS matrices
-        let (matrix_a, matrix_b, matrix_c) = poseidon.gen_r1cs_mats()
+        let (matrix_a, matrix_b, matrix_c) = poseidon
+            .gen_r1cs_mats()
             .expect("Failed to generate R1CS matrices");
 
         // Generate witness vector
-        let witness = poseidon.gen_r1cs_witness(a, b, c)
+        let witness = poseidon
+            .gen_r1cs_witness(a, b, c)
             .expect("Failed to generate witness");
 
         println!("Generated {} constraints", matrix_a.len());
@@ -349,13 +348,9 @@ mod tests {
             let right_side = c_dot_w;
 
             assert_eq!(
-                left_side,
-                right_side,
+                left_side, right_side,
                 "R1CS constraint {} failed: ({:?}) * ({:?}) != {:?}",
-                constraint_idx,
-                a_dot_w,
-                b_dot_w,
-                c_dot_w
+                constraint_idx, a_dot_w, b_dot_w, c_dot_w
             );
         }
 
@@ -505,7 +500,10 @@ mod tests {
         let c = BlsFr::rand(&mut rng);
         let hash3 = poseidon.hash2to1(a, c);
 
-        assert_ne!(hash1, hash3, "Different inputs should produce different hashes");
+        assert_ne!(
+            hash1, hash3,
+            "Different inputs should produce different hashes"
+        );
 
         println!("✅ Hash consistency tests passed!");
     }
@@ -527,7 +525,8 @@ mod tests {
 
         // If witness generation succeeds, verify it doesn't satisfy constraints
         if let Ok(witness) = result {
-            let (matrix_a, matrix_b, matrix_c) = poseidon.gen_r1cs_mats()
+            let (matrix_a, matrix_b, matrix_c) = poseidon
+                .gen_r1cs_mats()
                 .expect("Failed to generate R1CS matrices");
 
             let mut constraint_satisfied = true;
@@ -543,7 +542,10 @@ mod tests {
                 }
             }
 
-            assert!(!constraint_satisfied, "Wrong hash should not satisfy R1CS constraints");
+            assert!(
+                !constraint_satisfied,
+                "Wrong hash should not satisfy R1CS constraints"
+            );
             println!("✅ Correctly detected invalid witness!");
         } else {
             println!("✅ Witness generation failed as expected for wrong hash!");
@@ -569,7 +571,8 @@ mod tests {
         println!("c = {:?}", c);
 
         // Generate witness vector
-        let witness = poseidon.gen_r1cs_witness(a, b, c)
+        let witness = poseidon
+            .gen_r1cs_witness(a, b, c)
             .expect("Failed to generate witness");
 
         // Create constraint system to get variable information
@@ -581,7 +584,9 @@ mod tests {
             poseidon_config: poseidon.poseidon_config.clone(),
         };
 
-        circuit.generate_constraints(cs.clone()).expect("Failed to generate constraints");
+        circuit
+            .generate_constraints(cs.clone())
+            .expect("Failed to generate constraints");
         cs.finalize();
 
         let cs_borrow = cs.borrow().unwrap();
@@ -606,13 +611,22 @@ mod tests {
         }
 
         if witness.len() > 1 {
-            assert_eq!(c, witness[1], "Second element of witness should match the output of hash");
+            assert_eq!(
+                c, witness[1],
+                "Second element of witness should match the output of hash"
+            );
         }
         if witness.len() > 2 {
-            assert_eq!(a, witness[2], "Third element of witness should match the first input of hash");
+            assert_eq!(
+                a, witness[2],
+                "Third element of witness should match the first input of hash"
+            );
         }
         if witness.len() > 3 {
-            assert_eq!(b, witness[3], "Fourth element of witness should match the second input of hash");
+            assert_eq!(
+                b, witness[3],
+                "Fourth element of witness should match the second input of hash"
+            );
         }
 
         println!("\n✅ Values printed successfully!");
@@ -632,12 +646,12 @@ mod tests {
     // Locally implemented Hadamard product
     #[allow(dead_code)]
     fn hadamard_product<F: PrimeField>(vec1: &[F], vec2: &[F]) -> Vec<F> {
-        assert_eq!(vec1.len(), vec2.len(), "Vectors must have the same length for Hadamard product");
+        assert_eq!(
+            vec1.len(),
+            vec2.len(),
+            "Vectors must have the same length for Hadamard product"
+        );
 
-        vec1.iter()
-            .zip(vec2.iter())
-            .map(|(&a, &b)| a * b)
-            .collect()
+        vec1.iter().zip(vec2.iter()).map(|(&a, &b)| a * b).collect()
     }
-
 }

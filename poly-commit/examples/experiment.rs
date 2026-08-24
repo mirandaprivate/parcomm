@@ -1,6 +1,5 @@
 use std::{
-    env,
-    fs,
+    env, fs,
     io::{self, Write},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -12,9 +11,9 @@ use std::{
 
 use ark_bls12_381::{Bls12_381, Fr};
 use ark_ff::{UniformRand, Zero};
-use poly_commit::{smart_pc::SmartPC, MyInt};
-use ark_std::{rand::Rng, test_rng};
 use ark_serialize::{CanonicalSerialize, Compress};
+use ark_std::{rand::Rng, test_rng};
+use poly_commit::{smart_pc::SmartPC, MyInt};
 use rayon::prelude::*;
 
 const LOG_TOTAL: usize = 30; // vector length = 2^20
@@ -33,8 +32,7 @@ fn main() {
     );
     println!(
         "Running SMART-PC (flat) with 2^{} = {} i8 vector (curve: BLS12-381)",
-        LOG_TOTAL,
-        TOTAL
+        LOG_TOTAL, TOTAL
     );
 
     // generate a flat vector of length 2^20
@@ -50,14 +48,20 @@ fn main() {
     let setup_start = Instant::now();
     let pp = SmartPC::<Bls12_381>::setup(QLOG, &mut rng).expect("setup should succeed");
     println!("Setup time: {:.3}s", setup_start.elapsed().as_secs_f64());
-    println!("Public parameter size: {} bytes", pp.serialized_size(Compress::Yes));
+    println!(
+        "Public parameter size: {} bytes",
+        pp.serialized_size(Compress::Yes)
+    );
 
     // 2) commit (flat)
     let commit_start = Instant::now();
     let (mat_com, tier1) = SmartPC::<Bls12_381>::commit_square_myint_flat(&pp, &flat, Fr::zero())
         .expect("commit should succeed");
     println!("Commit time: {:.3}s", commit_start.elapsed().as_secs_f64());
-    println!("Commitment size: {} bytes", mat_com.serialized_size(Compress::Yes));
+    println!(
+        "Commitment size: {} bytes",
+        mat_com.serialized_size(Compress::Yes)
+    );
 
     // 3) random point evaluation: original shape 1 × 2^20 (eval_my_int_flat projects directly on flat vector without reconstructing matrix)
     let xl_raw: Vec<_> = Vec::new(); // 2^0 = 1 row
@@ -69,8 +73,7 @@ fn main() {
         })
         .collect(); // 2^20 columns
 
-    let (v_com, v_tilde) =
-        SmartPC::<Bls12_381>::eval_my_int_flat(&pp, &flat, &xl_raw, &xr_raw);
+    let (v_com, v_tilde) = SmartPC::<Bls12_381>::eval_my_int_flat(&pp, &flat, &xl_raw, &xr_raw);
 
     // 4) open
     let open_start = Instant::now();
@@ -109,7 +112,9 @@ fn main() {
     println!("Peak RSS during run: {} KB", peak);
 }
 
-fn spawn_mem_monitor(sample: Duration) -> (Arc<AtomicBool>, Arc<AtomicU64>, thread::JoinHandle<()>) {
+fn spawn_mem_monitor(
+    sample: Duration,
+) -> (Arc<AtomicBool>, Arc<AtomicU64>, thread::JoinHandle<()>) {
     let stop = Arc::new(AtomicBool::new(false));
     let peak = Arc::new(AtomicU64::new(0));
     let stop_cloned = stop.clone();
@@ -128,7 +133,10 @@ fn spawn_mem_monitor(sample: Duration) -> (Arc<AtomicBool>, Arc<AtomicU64>, thre
 fn read_rss_kb() -> Option<u64> {
     // print '⌛' every 30 seconds as a heartbeat
     static LAST_HEARTBEAT: OnceLock<Mutex<Instant>> = OnceLock::new();
-    if let Ok(mut t) = LAST_HEARTBEAT.get_or_init(|| Mutex::new(Instant::now())).lock() {
+    if let Ok(mut t) = LAST_HEARTBEAT
+        .get_or_init(|| Mutex::new(Instant::now()))
+        .lock()
+    {
         if t.elapsed() >= Duration::from_secs(30) {
             print!("⌛");
             let _ = io::stdout().flush();
@@ -149,4 +157,3 @@ fn read_rss_kb() -> Option<u64> {
     }
     None
 }
-

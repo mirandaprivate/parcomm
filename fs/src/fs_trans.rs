@@ -1,11 +1,11 @@
 //! Utility functions for the adaptive Fiat-Shamir transformation
 //!
+use ark_crypto_primitives::sponge::Absorb;
 use ark_ff::PrimeField;
 use ark_ff::UniformRand;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::rand::rngs::StdRng;
 use ark_std::rand::SeedableRng;
-use ark_crypto_primitives::sponge::Absorb;
-use ark_serialize::{CanonicalSerialize, CanonicalDeserialize};
 
 use crate::poseidon::Poseidon;
 
@@ -160,7 +160,7 @@ impl<F: PrimeField + UniformRand + Absorb> FiatShamir<F> {
     pub fn from_vectors(
         initial_state: F,
         proof_vec: Vec<F>,
-        state_vec: Vec<F>
+        state_vec: Vec<F>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         if proof_vec.len() != state_vec.len() {
             return Err("Proof vector and state vector must have the same length".into());
@@ -204,7 +204,11 @@ impl<F: PrimeField + UniformRand + Absorb> FiatShamir<F> {
 
     /// Get a snapshot of the current transcript state
     pub fn get_snapshot(&self) -> (F, Vec<F>, Vec<F>) {
-        (self.initial_state, self.proof_vec.clone(), self.state_vec.clone())
+        (
+            self.initial_state,
+            self.proof_vec.clone(),
+            self.state_vec.clone(),
+        )
     }
 
     /// Verify the transcript and return the final state if valid
@@ -222,7 +226,9 @@ impl<F: PrimeField + UniformRand + Absorb> FiatShamir<F> {
 }
 
 // Serialize using ark-serialize
-impl<F: PrimeField + UniformRand + Absorb + CanonicalSerialize + CanonicalDeserialize> FiatShamir<F> {
+impl<F: PrimeField + UniformRand + Absorb + CanonicalSerialize + CanonicalDeserialize>
+    FiatShamir<F>
+{
     /// Serialize the FiatShamir instance to bytes using ark-serialize
     /// Only serializes initial_state and proof_vec
     pub fn serialize(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -315,13 +321,11 @@ impl<F: PrimeField + UniformRand + Absorb + CanonicalSerialize + CanonicalDeseri
     pub fn from_json(json_str: &str) -> Result<Self, Box<dyn std::error::Error>> {
         // Simple JSON parsing - look for the hex data between quotes
         let start_marker = r#""fiat_shamir_data":""#;
-        let start_pos = json_str.find(start_marker)
-            .ok_or("Invalid JSON format")?
-            + start_marker.len();
+        let start_pos =
+            json_str.find(start_marker).ok_or("Invalid JSON format")? + start_marker.len();
 
         let remaining = &json_str[start_pos..];
-        let end_pos = remaining.find('"')
-            .ok_or("Invalid JSON format")?;
+        let end_pos = remaining.find('"').ok_or("Invalid JSON format")?;
 
         let hex_data = &remaining[..end_pos];
         Self::from_hex(hex_data)
@@ -338,8 +342,7 @@ mod tests {
     fn test_fiat_shamir_creation() {
         println!("=== Testing Fiat-Shamir Creation ===");
 
-        let fs = FiatShamir::<BlsFr>::new()
-            .expect("Failed to create Fiat-Shamir instance");
+        let fs = FiatShamir::<BlsFr>::new().expect("Failed to create Fiat-Shamir instance");
 
         println!("Initial state: {:?}", fs.get_initial_state());
         println!("Current state: {:?}", fs.get_current_state());
@@ -480,7 +483,10 @@ mod tests {
 
         // Initial transcript should pass verification
         println!("Initial transcript verification: {}", fs.verify_fs());
-        assert!(fs.verify_fs(), "Initial transcript should pass verification");
+        assert!(
+            fs.verify_fs(),
+            "Initial transcript should pass verification"
+        );
 
         // Add some elements and challenges
         let elem1 = BlsFr::from(2000u64);
@@ -503,7 +509,10 @@ mod tests {
         // Now verification should still pass
         let verification_result = fs.verify_fs();
         println!("Verification result: {}", verification_result);
-        assert!(verification_result, "Valid transcript should pass verification");
+        assert!(
+            verification_result,
+            "Valid transcript should pass verification"
+        );
 
         println!("✅ Fiat-Shamir verification test passed!");
     }
@@ -549,8 +558,9 @@ mod tests {
         let valid_fs = FiatShamir::<BlsFr>::from_vectors(
             initial_state,
             vec![BlsFr::zero()],
-            vec![initial_state]
-        ).expect("Failed to create from valid vectors");
+            vec![initial_state],
+        )
+        .expect("Failed to create from valid vectors");
 
         assert_eq!(valid_fs.get_current_state(), initial_state);
         assert_eq!(valid_fs.proof_len(), 0);
@@ -560,28 +570,28 @@ mod tests {
         let result = FiatShamir::<BlsFr>::from_vectors(
             initial_state,
             vec![BlsFr::from(123u64)], // Wrong first element
-            vec![initial_state]
+            vec![initial_state],
         );
-        assert!(result.is_err(), "Wrong first element in proof_vec should fail");
+        assert!(
+            result.is_err(),
+            "Wrong first element in proof_vec should fail"
+        );
 
         // Test invalid first element in state_vec
         let result = FiatShamir::<BlsFr>::from_vectors(
             initial_state,
             vec![BlsFr::zero()],
-            vec![BlsFr::from(999u64)] // Wrong first element
+            vec![BlsFr::from(999u64)], // Wrong first element
         );
-        assert!(result.is_err(), "Wrong first element in state_vec should fail");
+        assert!(
+            result.is_err(),
+            "Wrong first element in state_vec should fail"
+        );
 
         // Test empty vectors
-        let result = FiatShamir::<BlsFr>::from_vectors(
-            initial_state,
-            vec![],
-            vec![]
-        );
+        let result = FiatShamir::<BlsFr>::from_vectors(initial_state, vec![], vec![]);
         assert!(result.is_err(), "Empty vectors should fail");
 
         println!("✅ from_vectors validation test passed!");
     }
-
-
 }

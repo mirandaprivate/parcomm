@@ -1,15 +1,14 @@
+use ark_crypto_primitives::sponge::Absorb;
 /// Batch prove projections of the same matrix at multiple points (xl, xr)
 /// Unblinded, transcript-based (no commitments).
-
 use ark_ff::PrimeField;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
-use ark_crypto_primitives::sponge::Absorb;
-use ark_serialize::{CanonicalSerialize, CanonicalDeserialize};
 
 use fs::helper_trans::Transcript;
-use mat::DenseMatFieldCM;
 use mat::utils::matdef::MatOps;
 use mat::utils::xi;
+use mat::DenseMatFieldCM;
 use rayon::prelude::*;
 
 use super::litebullet::LiteBullet;
@@ -29,7 +28,11 @@ where
     F: PrimeField + UniformRand + Absorb + CanonicalSerialize + CanonicalDeserialize,
 {
     pub fn new(hats: Vec<F>, points: Vec<(Vec<F>, Vec<F>)>, shape: (usize, usize)) -> Self {
-        Self { hats, points, shape }
+        Self {
+            hats,
+            points,
+            shape,
+        }
     }
 
     /// Prover: batch prove projections of the same matrix at multiple points.
@@ -62,7 +65,6 @@ where
             let hat = mat.proj_lr(xl, xr);
             batch_hat += hat * powers[i];
         }
-
 
         // batch_xi_flatten = sum xi(point_i) * c^i
         let mut batch_xi_flatten: Vec<F> = vec![F::zero(); len_padded];
@@ -127,8 +129,12 @@ where
             cur *= challenge;
         }
 
-
-        let batch_hat: F = self.hats.iter().zip(powers.iter()).map(|(hat, power)| *hat * *power).sum();
+        let batch_hat: F = self
+            .hats
+            .iter()
+            .zip(powers.iter())
+            .map(|(hat, power)| *hat * *power)
+            .sum();
 
         let lb = LiteBullet::new(batch_hat, len_padded);
         let (ok1, hat_a, hat_b, point_a_raw, point_b_raw) = lb.verify_as_subprotocol(trans_seq);
@@ -154,12 +160,7 @@ where
     }
 
     /// Full verify: recompute projections and compare.
-    pub fn verify(
-        &self,
-        trans_seq: &mut Transcript<F>,
-        mat: &DenseMatFieldCM<F>,
-    ) -> bool {
-
+    pub fn verify(&self, trans_seq: &mut Transcript<F>, mat: &DenseMatFieldCM<F>) -> bool {
         let (ok1, hat_a, point_a) = self.verify_as_subprotocol(trans_seq);
         if !ok1 {
             return false;
@@ -204,7 +205,10 @@ mod tests {
         trans_v.reset_pointer();
 
         let ok = protocol.verify(&mut trans_v, &mat);
-        assert!(ok, "BatchPoints verify should return true for matching projections");
+        assert!(
+            ok,
+            "BatchPoints verify should return true for matching projections"
+        );
     }
 
     #[test]
@@ -233,6 +237,9 @@ mod tests {
         trans_v.reset_pointer();
 
         let ok = protocol.verify(&mut trans_v, &mat);
-        assert!(ok, "BatchPoints verify should handle non-power-of-two shapes");
+        assert!(
+            ok,
+            "BatchPoints verify should handle non-power-of-two shapes"
+        );
     }
 }

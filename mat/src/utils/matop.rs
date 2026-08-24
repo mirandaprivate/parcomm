@@ -1,8 +1,8 @@
 //! Parallel matrix operations for DenseMatFieldCM
 //!
+use crate::utils::matdef::DenseMatFieldCM;
 use ark_ff::PrimeField;
 use rayon::prelude::*;
-use crate::utils::matdef::DenseMatFieldCM;
 
 impl<F> DenseMatFieldCM<F>
 where
@@ -12,19 +12,25 @@ where
     // Returns self + other
     pub fn par_add(&self, other: &DenseMatFieldCM<F>) -> DenseMatFieldCM<F> {
         if self.shape != other.shape {
-            panic!("Matrix dimensions must be the same for addition: {:?} vs {:?}", self.shape, other.shape);
+            panic!(
+                "Matrix dimensions must be the same for addition: {:?} vs {:?}",
+                self.shape, other.shape
+            );
         }
 
         let (m, n) = self.shape;
 
-    // Compute matrix addition in parallel by columns
-        let result_data: Vec<Vec<F>> = (0..n).into_par_iter().map(|j| {
-            let mut col = Vec::with_capacity(m);
-            for i in 0..m {
-                col.push(self.data[j][i] + other.data[j][i]);
-            }
-            col
-        }).collect();
+        // Compute matrix addition in parallel by columns
+        let result_data: Vec<Vec<F>> = (0..n)
+            .into_par_iter()
+            .map(|j| {
+                let mut col = Vec::with_capacity(m);
+                for i in 0..m {
+                    col.push(self.data[j][i] + other.data[j][i]);
+                }
+                col
+            })
+            .collect();
 
         DenseMatFieldCM::from_data(result_data)
     }
@@ -33,19 +39,25 @@ where
     // Returns self - other
     pub fn par_sub(&self, other: &DenseMatFieldCM<F>) -> DenseMatFieldCM<F> {
         if self.shape != other.shape {
-            panic!("Matrix dimensions must be the same for subtraction: {:?} vs {:?}", self.shape, other.shape);
+            panic!(
+                "Matrix dimensions must be the same for subtraction: {:?} vs {:?}",
+                self.shape, other.shape
+            );
         }
 
         let (m, n) = self.shape;
 
         // Compute matrix subtraction in parallel by columns
-        let result_data: Vec<Vec<F>> = (0..n).into_par_iter().map(|j| {
-            let mut col = Vec::with_capacity(m);
-            for i in 0..m {
-                col.push(self.data[j][i] - other.data[j][i]);
-            }
-            col
-        }).collect();
+        let result_data: Vec<Vec<F>> = (0..n)
+            .into_par_iter()
+            .map(|j| {
+                let mut col = Vec::with_capacity(m);
+                for i in 0..m {
+                    col.push(self.data[j][i] - other.data[j][i]);
+                }
+                col
+            })
+            .collect();
 
         DenseMatFieldCM::from_data(result_data)
     }
@@ -57,18 +69,24 @@ where
         let (k2, n) = other.shape;
 
         if k != k2 {
-            panic!("Matrix dimensions are not compatible for multiplication: {:?} * {:?}", self.shape, other.shape);
+            panic!(
+                "Matrix dimensions are not compatible for multiplication: {:?} * {:?}",
+                self.shape, other.shape
+            );
         }
 
-        let result_data: Vec<Vec<F>> = (0..n).into_par_iter().map(|j| {
-            let mut col = vec![F::zero(); m];
-            for i in 0..m {
-                for l in 0..k {
-                    col[i] += self.data[l][i] * other.data[j][l];
+        let result_data: Vec<Vec<F>> = (0..n)
+            .into_par_iter()
+            .map(|j| {
+                let mut col = vec![F::zero(); m];
+                for i in 0..m {
+                    for l in 0..k {
+                        col[i] += self.data[l][i] * other.data[j][l];
+                    }
                 }
-            }
-            col
-        }).collect();
+                col
+            })
+            .collect();
 
         DenseMatFieldCM::from_data(result_data)
     }
@@ -77,19 +95,25 @@ where
     // Returns self ⊙ other (element-wise multiplication)
     pub fn par_hadamard(&self, other: &DenseMatFieldCM<F>) -> DenseMatFieldCM<F> {
         if self.shape != other.shape {
-            panic!("Matrix dimensions must be the same for Hadamard product: {:?} vs {:?}", self.shape, other.shape);
+            panic!(
+                "Matrix dimensions must be the same for Hadamard product: {:?} vs {:?}",
+                self.shape, other.shape
+            );
         }
 
         let (m, n) = self.shape;
 
-    // Compute Hadamard product in parallel by columns
-        let result_data: Vec<Vec<F>> = (0..n).into_par_iter().map(|j| {
-            let mut col = Vec::with_capacity(m);
-            for i in 0..m {
-                col.push(self.data[j][i] * other.data[j][i]);
-            }
-            col
-        }).collect();
+        // Compute Hadamard product in parallel by columns
+        let result_data: Vec<Vec<F>> = (0..n)
+            .into_par_iter()
+            .map(|j| {
+                let mut col = Vec::with_capacity(m);
+                for i in 0..m {
+                    col.push(self.data[j][i] * other.data[j][i]);
+                }
+                col
+            })
+            .collect();
 
         DenseMatFieldCM::from_data(result_data)
     }
@@ -100,13 +124,16 @@ where
         let (m, n) = self.shape;
 
         // Col major
-        let result_data: Vec<Vec<F>> = (0..n).into_par_iter().map(|j| {
-            let mut col = Vec::with_capacity(m);
-            for i in 0..m {
-                col.push(scalar * self.data[j][i]);
-            }
-            col
-        }).collect();
+        let result_data: Vec<Vec<F>> = (0..n)
+            .into_par_iter()
+            .map(|j| {
+                let mut col = Vec::with_capacity(m);
+                for i in 0..m {
+                    col.push(scalar * self.data[j][i]);
+                }
+                col
+            })
+            .collect();
 
         DenseMatFieldCM::from_data(result_data)
     }
@@ -116,13 +143,16 @@ where
     pub fn par_transpose(&self) -> DenseMatFieldCM<F> {
         let (m, n) = self.shape;
 
-        let result_data: Vec<Vec<F>> = (0..m).into_par_iter().map(|i| {
-            let mut row = Vec::with_capacity(n);
-            for j in 0..n {
-                row.push(self.data[j][i]);
-            }
-            row
-        }).collect();
+        let result_data: Vec<Vec<F>> = (0..m)
+            .into_par_iter()
+            .map(|i| {
+                let mut row = Vec::with_capacity(n);
+                for j in 0..n {
+                    row.push(self.data[j][i]);
+                }
+                row
+            })
+            .collect();
 
         DenseMatFieldCM {
             shape: (n, m), // Transposed shape
@@ -137,34 +167,46 @@ where
         Op: Fn(F, F) -> F + Send + Sync,
     {
         if self.shape != other.shape {
-            panic!("Matrix dimensions must be the same for element-wise operation: {:?} vs {:?}", self.shape, other.shape);
+            panic!(
+                "Matrix dimensions must be the same for element-wise operation: {:?} vs {:?}",
+                self.shape, other.shape
+            );
         }
 
         let (m, n) = self.shape;
 
-        let result_data: Vec<Vec<F>> = (0..n).into_par_iter().map(|j| {
-            let mut col = Vec::with_capacity(m);
-            for i in 0..m {
-                col.push(op(self.data[j][i], other.data[j][i]));
-            }
-            col
-        }).collect();
+        let result_data: Vec<Vec<F>> = (0..n)
+            .into_par_iter()
+            .map(|j| {
+                let mut col = Vec::with_capacity(m);
+                for i in 0..m {
+                    col.push(op(self.data[j][i], other.data[j][i]));
+                }
+                col
+            })
+            .collect();
 
         DenseMatFieldCM::from_data(result_data)
     }
 
     // Parallel reduction to compute matrix sum (sum of all elements)
     pub fn par_sum(&self) -> F {
-        self.data.par_iter().map(|col| {
-            col.par_iter().cloned().reduce(|| F::zero(), |a, b| a + b)
-        }).reduce(|| F::zero(), |a, b| a + b)
+        self.data
+            .par_iter()
+            .map(|col| col.par_iter().cloned().reduce(|| F::zero(), |a, b| a + b))
+            .reduce(|| F::zero(), |a, b| a + b)
     }
 
     // Parallel computation of matrix norm squared (Frobenius norm squared)
     pub fn par_norm_squared(&self) -> F {
-        self.data.par_iter().map(|col| {
-            col.par_iter().map(|&x| x * x).reduce(|| F::zero(), |a, b| a + b)
-        }).reduce(|| F::zero(), |a, b| a + b)
+        self.data
+            .par_iter()
+            .map(|col| {
+                col.par_iter()
+                    .map(|&x| x * x)
+                    .reduce(|| F::zero(), |a, b| a + b)
+            })
+            .reduce(|| F::zero(), |a, b| a + b)
     }
 
     // Parallel matrix-vector multiplication
@@ -173,16 +215,23 @@ where
         let (m, n) = self.shape;
 
         if n != vec.len() {
-            panic!("Vector dimension {} does not match matrix columns {}", vec.len(), n);
+            panic!(
+                "Vector dimension {} does not match matrix columns {}",
+                vec.len(),
+                n
+            );
         }
 
-        (0..m).into_par_iter().map(|i| {
-            let mut sum = F::zero();
-            for j in 0..n {
-                sum += self.data[j][i] * vec[j];
-            }
-            sum
-        }).collect()
+        (0..m)
+            .into_par_iter()
+            .map(|i| {
+                let mut sum = F::zero();
+                for j in 0..n {
+                    sum += self.data[j][i] * vec[j];
+                }
+                sum
+            })
+            .collect()
     }
 
     // Parallel vector-matrix multiplication
@@ -191,17 +240,24 @@ where
         let (m, n) = self.shape;
 
         if m != vec.len() {
-            panic!("Vector dimension {} does not match matrix rows {}", vec.len(), m);
+            panic!(
+                "Vector dimension {} does not match matrix rows {}",
+                vec.len(),
+                m
+            );
         }
 
-    // Compute vector-matrix multiplication in parallel by columns
-        (0..n).into_par_iter().map(|j| {
-            let mut sum = F::zero();
-            for i in 0..m {
-                sum += vec[i] * self.data[j][i];
-            }
-            sum
-        }).collect()
+        // Compute vector-matrix multiplication in parallel by columns
+        (0..n)
+            .into_par_iter()
+            .map(|j| {
+                let mut sum = F::zero();
+                for i in 0..m {
+                    sum += vec[i] * self.data[j][i];
+                }
+                sum
+            })
+            .collect()
     }
 }
 

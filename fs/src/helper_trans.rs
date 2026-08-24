@@ -1,9 +1,9 @@
 //! Utility functions for the adaptive Fiat-Shamir transformation
 //!
+use ark_crypto_primitives::sponge::Absorb;
 use ark_ff::PrimeField;
 use ark_ff::UniformRand;
-use ark_crypto_primitives::sponge::Absorb;
-use ark_serialize::{CanonicalSerialize, CanonicalDeserialize};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 // Import FiatShamir from the correct path based on error message suggestion
 use crate::FiatShamir;
@@ -22,9 +22,11 @@ pub struct Transcript<F: PrimeField> {
     pub challenge_count: usize,
 }
 
-impl<F: PrimeField + UniformRand + Absorb + CanonicalSerialize + CanonicalDeserialize> Transcript<F> {
+impl<F: PrimeField + UniformRand + Absorb + CanonicalSerialize + CanonicalDeserialize>
+    Transcript<F>
+{
     /// Create a new transcript
-    pub fn new(root:F) -> Self {
+    pub fn new(root: F) -> Self {
         let fs = FiatShamir::new_with_state(root).unwrap();
         let mut trans_seq_value = Vec::new();
         trans_seq_value.push(TransElem::Response(root)); // Initialize with a dummy Response
@@ -122,7 +124,6 @@ impl<F: PrimeField + UniformRand + Absorb + CanonicalSerialize + CanonicalDeseri
         }
         (challenges, responses)
     }
-
 }
 
 #[cfg(test)]
@@ -366,10 +367,19 @@ mod tests {
         let proof_vec = transcript.get_fs_proof_vec();
         let state_vec = transcript.get_fs_state_vec();
 
-        println!("Large transcript test passed with {} elements", transcript.trans_seq.len());
-        println!("Proof vector: {} elements, State vector: {} elements",
-                 proof_vec.len(), state_vec.len());
-        println!("Final pointers - transcript.pointer: {}", transcript.pointer);
+        println!(
+            "Large transcript test passed with {} elements",
+            transcript.trans_seq.len()
+        );
+        println!(
+            "Proof vector: {} elements, State vector: {} elements",
+            proof_vec.len(),
+            state_vec.len()
+        );
+        println!(
+            "Final pointers - transcript.pointer: {}",
+            transcript.pointer
+        );
     }
 
     #[test]
@@ -383,12 +393,18 @@ mod tests {
         // Check pointer consistency for empty transcript
         assert_eq!(transcript.pointer, transcript.trans_seq.len());
 
-        println!("Empty transcript - Proof vector: {} elements, State vector: {} elements",
-                 proof_vec.len(), state_vec.len());
+        println!(
+            "Empty transcript - Proof vector: {} elements, State vector: {} elements",
+            proof_vec.len(),
+            state_vec.len()
+        );
 
         // Test serialization of empty transcript
         let serialized_result = transcript.publish_trans();
-        assert!(serialized_result.is_ok(), "Empty transcript serialization should succeed");
+        assert!(
+            serialized_result.is_ok(),
+            "Empty transcript serialization should succeed"
+        );
 
         println!("Empty transcript operations test passed!");
     }
@@ -409,17 +425,28 @@ mod tests {
 
         for (i, (op_type, value)) in operations.iter().enumerate() {
             match *op_type {
-                "challenge" => { transcript.gen_challenge(); },
+                "challenge" => {
+                    transcript.gen_challenge();
+                }
                 "response" => transcript.push_response(*value),
                 _ => panic!("Unknown operation type"),
             }
 
             // Check consistency after each operation
-            assert_eq!(transcript.pointer, transcript.trans_seq.len(),
-                      "Pointer mismatch after operation {} ({})", i, op_type);
+            assert_eq!(
+                transcript.pointer,
+                transcript.trans_seq.len(),
+                "Pointer mismatch after operation {} ({})",
+                i,
+                op_type
+            );
 
-            println!("After operation {}: pointer={}, trans_seq.len()={}",
-                     i, transcript.pointer, transcript.trans_seq.len());
+            println!(
+                "After operation {}: pointer={}, trans_seq.len()={}",
+                i,
+                transcript.pointer,
+                transcript.trans_seq.len()
+            );
         }
 
         println!("Comprehensive pointer consistency test passed!");

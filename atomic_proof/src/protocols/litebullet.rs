@@ -2,17 +2,15 @@
 ///
 /// Use transcript-based Fiat-Shamir for challenges.
 /// No commitments or blinding logic.
-
 use rayon::prelude::*;
 
-use ark_ff::PrimeField;
-use ark_std::UniformRand;
 use ark_crypto_primitives::sponge::Absorb;
-use ark_serialize::{CanonicalSerialize, CanonicalDeserialize};
+use ark_ff::PrimeField;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_std::UniformRand;
 
-use mat::utils::{linear, xi};
 use fs::helper_trans::Transcript;
-
+use mat::utils::{linear, xi};
 
 pub struct LiteBullet<F>
 where
@@ -38,8 +36,7 @@ where
         trans_seq: &mut Transcript<F>,
         vec_a: &Vec<F>,
         vec_b: &Vec<F>,
-    ) -> (F, F, Vec<F>, Vec<F>)
-    {
+    ) -> (F, F, Vec<F>, Vec<F>) {
         let n = self.length.next_power_of_two();
         let log_n = n.trailing_zeros() as usize;
 
@@ -67,17 +64,12 @@ where
         for j in 0..log_n {
             let current_len = n / 2usize.pow(j as u32);
 
-            let (a_left, a_right) =
-                vec_a_current.as_slice().split_at(current_len/2);
+            let (a_left, a_right) = vec_a_current.as_slice().split_at(current_len / 2);
 
-            let (b_left, b_right) =
-                vec_b_current.as_slice().split_at(current_len/2);
+            let (b_left, b_right) = vec_b_current.as_slice().split_at(current_len / 2);
 
-            let l_tr =
-                linear::inner_product(&a_left.to_vec(), &b_right.to_vec());
-             let r_tr =
-                linear::inner_product(&a_right.to_vec(), &b_left.to_vec());
-
+            let l_tr = linear::inner_product(&a_left.to_vec(), &b_right.to_vec());
+            let r_tr = linear::inner_product(&a_right.to_vec(), &b_left.to_vec());
 
             // record inner products as transcript responses
             trans_seq.push_response(l_tr);
@@ -90,17 +82,17 @@ where
             challenges.push(x_j);
             challenges_inv.push(x_j_inv);
 
-            vec_a_value = (0..current_len/2)
-            .into_par_iter()
-            .map(|i| a_left[i] + a_right[i] * x_j_inv)
-            .collect();
+            vec_a_value = (0..current_len / 2)
+                .into_par_iter()
+                .map(|i| a_left[i] + a_right[i] * x_j_inv)
+                .collect();
 
             vec_a_current = &vec_a_value;
 
-            vec_b_value = (0..current_len/2)
-            .into_par_iter()
-            .map(|i| b_left[i] + b_right[i] * x_j)
-            .collect();
+            vec_b_value = (0..current_len / 2)
+                .into_par_iter()
+                .map(|i| b_left[i] + b_right[i] * x_j)
+                .collect();
 
             vec_b_current = &vec_b_value;
         }
@@ -112,19 +104,13 @@ where
         trans_seq.push_response(a_reduce);
         trans_seq.push_response(b_reduce);
 
-        (
-            a_reduce,
-            b_reduce,
-            challenges_inv,
-            challenges,
-        )
+        (a_reduce, b_reduce, challenges_inv, challenges)
     }
 
     pub fn verify_as_subprotocol(
         &self,
         trans_seq: &mut Transcript<F>,
     ) -> (bool, F, F, Vec<F>, Vec<F>) {
-
         let mut challenges: Vec<F> = Vec::new();
         let mut challenges_inv: Vec<F> = Vec::new();
 
@@ -167,14 +153,10 @@ where
         (ok, a_reduce, b_reduce, challenges_inv, challenges)
     }
 
-    pub fn verify(
-        &self,
-        trans_seq: &mut Transcript<F>,
-        vec_a: &Vec<F>,
-        vec_b: &Vec<F>,
-    ) -> bool {
+    pub fn verify(&self, trans_seq: &mut Transcript<F>, vec_a: &Vec<F>, vec_b: &Vec<F>) -> bool {
         let n = self.length.next_power_of_two();
-        let (ok, a_reduce, b_reduce, challenges_inv, challenges) = self.verify_as_subprotocol(trans_seq);
+        let (ok, a_reduce, b_reduce, challenges_inv, challenges) =
+            self.verify_as_subprotocol(trans_seq);
 
         let mut a_padded;
         let mut vec_a_ptr = vec_a;
@@ -198,7 +180,6 @@ where
 
         ok && a_check && b_check && trans_seq.fs.verify_fs()
     }
-
 }
 
 #[cfg(test)]
@@ -227,7 +208,10 @@ mod tests {
         transcript_verifier.reset_pointer();
 
         let ok = lb.verify(&mut transcript_verifier, &vec_a, &vec_b);
-        assert!(ok, "LiteBullet verify should return true for matching c = <a,b>");
+        assert!(
+            ok,
+            "LiteBullet verify should return true for matching c = <a,b>"
+        );
     }
 
     #[test]
@@ -249,6 +233,9 @@ mod tests {
         transcript_verifier.reset_pointer();
 
         let ok = lb.verify(&mut transcript_verifier, &vec_a, &vec_b);
-        assert!(ok, "LiteBullet verify should work for non-power-of-two length");
+        assert!(
+            ok,
+            "LiteBullet verify should work for non-power-of-two length"
+        );
     }
 }

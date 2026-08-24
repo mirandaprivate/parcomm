@@ -1,16 +1,15 @@
 #![deny(trivial_numeric_casts, variant_size_differences)]
 /// This module contains utility functions for the smart polynomial commitment scheme.
-use ark_ec::{pairing::{Pairing, PairingOutput},
-};
+use ark_ec::pairing::{Pairing, PairingOutput};
 use ark_ff::UniformRand;
 use ark_std::rand::RngCore;
 // use ark_serialize::CanonicalSerialize;
 use ark_std::ops::{Add, Mul};
 
-use super::UniversalParams;
+use super::utils;
 use super::xi;
 use super::FiatShamir;
-use super::utils;
+use super::UniversalParams;
 
 /// Proves knowledge of `value` and `hiding` in one linear GT representation.
 pub fn linear_prove<E: Pairing, R: RngCore>(
@@ -34,13 +33,12 @@ pub fn linear_prove<E: Pairing, R: RngCore>(
 }
 
 /// Prove the Schnorr proof for the commitment.
-pub fn schnorr1_prove<E:Pairing>(
+pub fn schnorr1_prove<E: Pairing>(
     pp: &UniversalParams<E>,
     com: PairingOutput<E>,
     witness: E::ScalarField,
     fs: &mut FiatShamir,
-) -> (PairingOutput<E>, E::ScalarField)
-{
+) -> (PairingOutput<E>, E::ScalarField) {
     fs.push::<PairingOutput<E>>(&com);
 
     let rng = &mut ark_std::test_rng();
@@ -60,13 +58,12 @@ pub fn schnorr1_prove<E:Pairing>(
 }
 
 /// Verify the Schnorr proof for the tilde commitment.
-pub fn schnorr1_verify<E:Pairing>(
+pub fn schnorr1_verify<E: Pairing>(
     pp: &UniversalParams<E>,
     com: PairingOutput<E>,
     tr: (PairingOutput<E>, E::ScalarField),
     fs: &mut FiatShamir,
-) -> bool
-{
+) -> bool {
     fs.push::<PairingOutput<E>>(&com);
 
     let u_tilde = pp.tilde_u;
@@ -79,15 +76,14 @@ pub fn schnorr1_verify<E:Pairing>(
 }
 
 /// Prove the Schnorr proof for the commitment.
-pub fn schnorr2_prove<E:Pairing>(
+pub fn schnorr2_prove<E: Pairing>(
     pp: &UniversalParams<E>,
     base: PairingOutput<E>,
     com: PairingOutput<E>,
     witness: E::ScalarField,
     hiding_factor: E::ScalarField,
     fs: &mut FiatShamir,
-) -> (PairingOutput<E>, E::ScalarField, E::ScalarField)
-{
+) -> (PairingOutput<E>, E::ScalarField, E::ScalarField) {
     fs.push::<PairingOutput<E>>(&com);
 
     let rng = &mut ark_std::test_rng();
@@ -96,8 +92,7 @@ pub fn schnorr2_prove<E:Pairing>(
 
     let u_tilde = pp.tilde_u;
 
-    let tr_1 =
-    base.mul(rand1) + u_tilde.mul(rand2);
+    let tr_1 = base.mul(rand1) + u_tilde.mul(rand2);
 
     let challenge = fs.gen_challenge::<E>();
 
@@ -108,14 +103,13 @@ pub fn schnorr2_prove<E:Pairing>(
 }
 
 /// Verify the Schnorr proof for the tilde commitment.
-pub fn schnorr2_verify<E:Pairing>(
+pub fn schnorr2_verify<E: Pairing>(
     pp: &UniversalParams<E>,
     base: PairingOutput<E>,
     com: PairingOutput<E>,
     tr: (PairingOutput<E>, E::ScalarField, E::ScalarField),
     fs: &mut FiatShamir,
-) -> bool
-{
+) -> bool {
     fs.push::<PairingOutput<E>>(&com);
 
     let u_tilde = pp.tilde_u;
@@ -133,8 +127,7 @@ pub fn pip_g1_prove<E: Pairing>(
     pp: &UniversalParams<E>,
     challenges: &Vec<E::ScalarField>,
     fs: &mut FiatShamir,
-) -> (<E as Pairing>::G1, <E as Pairing>::G1)
-{
+) -> (<E as Pairing>::G1, <E as Pairing>::G1) {
     let s = fs.gen_challenge::<E>();
     pip_g1_prove_with_challenge(pp, challenges, s)
 }
@@ -144,8 +137,7 @@ pub fn pip_g1_prove_with_challenge<E: Pairing>(
     pp: &UniversalParams<E>,
     challenges: &Vec<E::ScalarField>,
     s: E::ScalarField,
-) -> (<E as Pairing>::G1, <E as Pairing>::G1)
-{
+) -> (<E as Pairing>::G1, <E as Pairing>::G1) {
     let xi = xi::xi_from_challenges::<E>(challenges);
 
     let qotient_poly = xi::quotient_poly::<E>(&xi, s);
@@ -165,8 +157,7 @@ pub fn pip_g1_verify<E: Pairing>(
     v_prime: E::G1,
     w: E::G1,
     fs: &mut FiatShamir,
-) -> bool
-{
+) -> bool {
     let s = fs.gen_challenge::<E>();
     let phi_s = xi::phi_s::<E>(s, &challenges);
 
@@ -183,15 +174,13 @@ pub fn pip_g1_verify<E: Pairing>(
     p1 == p2 && p3 == p4
 }
 
-
 /// Prove V_H is correctly computed
 ///
 pub fn pip_g2_prove<E: Pairing>(
     pp: &UniversalParams<E>,
     challenges: &Vec<E::ScalarField>,
     fs: &mut FiatShamir,
-) -> (<E as Pairing>::G2, <E as Pairing>::G1)
-{
+) -> (<E as Pairing>::G2, <E as Pairing>::G1) {
     let s = fs.gen_challenge::<E>();
     pip_g2_prove_with_challenge(pp, challenges, s)
 }
@@ -201,8 +190,7 @@ pub fn pip_g2_prove_with_challenge<E: Pairing>(
     pp: &UniversalParams<E>,
     challenges: &Vec<E::ScalarField>,
     s: E::ScalarField,
-) -> (<E as Pairing>::G2, <E as Pairing>::G1)
-{
+) -> (<E as Pairing>::G2, <E as Pairing>::G1) {
     let xi = xi::xi_from_challenges::<E>(&challenges);
     let qotient_poly = xi::quotient_poly::<E>(&xi, s);
 
@@ -221,8 +209,7 @@ pub fn pip_g2_verify<E: Pairing>(
     v_prime: E::G2,
     w: E::G1,
     fs: &mut FiatShamir,
-) -> bool
-{
+) -> bool {
     let s = fs.gen_challenge::<E>();
     let phi_s = xi::phi_s::<E>(s, &challenges);
 
@@ -239,18 +226,15 @@ pub fn pip_g2_verify<E: Pairing>(
     p1 == p2 && p3 == p4
 }
 
-
-
 #[cfg(test)]
-mod tests{
+mod tests {
 
     use super::*;
     use crate::smart_pc::SmartPC;
     use ark_bls12_381::Bls12_381;
 
     #[test]
-    fn test_subprotocol_smart()
-    {
+    fn test_subprotocol_smart() {
         let rng = &mut ark_std::test_rng();
         type Fr = <Bls12_381 as Pairing>::ScalarField;
 
@@ -258,21 +242,17 @@ mod tests{
 
         let log_n = 5;
 
-        let xs: Vec<Fr> = (0..log_n).map(|_|
-            Fr::rand(rng)
-        ).collect::<Vec<Fr>>();
+        let xs: Vec<Fr> = (0..log_n).map(|_| Fr::rand(rng)).collect::<Vec<Fr>>();
 
         let xi: Vec<Fr> = xi::xi_from_challenges::<Bls12_381>(&xs);
 
-        let pp =
-        SmartPC::<Bls12_381>::setup(log_n as usize, rng).unwrap();
+        let pp = SmartPC::<Bls12_381>::setup(log_n as usize, rng).unwrap();
 
         let v = utils::msm_g2::<Bls12_381>(&pp.vec_h, &xi);
 
         fs.push(&v);
 
-        let (v_prime, w) =
-        pip_g2_prove::<Bls12_381>(&pp, &xs, fs);
+        let (v_prime, w) = pip_g2_prove::<Bls12_381>(&pp, &xs, fs);
 
         let fs_verify = &mut FiatShamir::new();
         fs_verify.push(&v);
@@ -284,23 +264,18 @@ mod tests{
         let tilde_a = Fr::rand(rng);
         let com_a = pp.u.mul(a) + pp.tilde_u.mul(tilde_a);
 
-        let (tr_1, tr_2, tr_3) =
-        schnorr2_prove::<Bls12_381>(&pp, pp.u, com_a, a, tilde_a, fs);
+        let (tr_1, tr_2, tr_3) = schnorr2_prove::<Bls12_381>(&pp, pp.u, com_a, a, tilde_a, fs);
 
-        let result_schnoor =
-        schnorr2_verify(&pp, pp.u, com_a, (tr_1, tr_2, tr_3), fs_verify);
+        let result_schnoor = schnorr2_verify(&pp, pp.u, com_a, (tr_1, tr_2, tr_3), fs_verify);
 
         assert_eq!(result_schnoor, true);
 
         let b = Fr::rand(rng);
         let com_b = pp.tilde_u.mul(b);
-        let (tr_1, tr_2) =
-        schnorr1_prove(&pp, com_b, b, fs);
+        let (tr_1, tr_2) = schnorr1_prove(&pp, com_b, b, fs);
 
-        let result_schnoor1 =
-        schnorr1_verify(&pp, com_b, (tr_1, tr_2), fs_verify);
+        let result_schnoor1 = schnorr1_verify(&pp, com_b, (tr_1, tr_2), fs_verify);
 
         assert_eq!(result_schnoor1, true);
-
     }
 }

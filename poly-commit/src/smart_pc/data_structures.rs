@@ -4,15 +4,15 @@
 //!
 // use ark_ff::ToConstraintField;
 #![deny(missing_docs, trivial_numeric_casts, variant_size_differences)]
-use ark_ec::pairing::{Pairing,PairingOutput};
+use ark_ec::pairing::{Pairing, PairingOutput};
 use ark_serialize::{
-    CanonicalDeserialize, CanonicalSerialize, Compress,
-    SerializationError, Valid,
-    Validate,
+    CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
 };
 use ark_std::io::{Read, Write};
-use ark_std::{ops::{Add, Mul}, Zero};
-
+use ark_std::{
+    ops::{Add, Mul},
+    Zero,
+};
 
 // `UniversalParams` are the universal parameters for the SMART-PC scheme.
 #[derive(Derivative)]
@@ -63,8 +63,6 @@ pub struct UniversalParams<E: Pairing> {
     pub vec_nu_h: Vec<E::G2>,
 }
 
-
-
 impl<E: Pairing> Valid for UniversalParams<E> {
     fn check(&self) -> Result<(), SerializationError> {
         self.q.check()?;
@@ -99,7 +97,6 @@ impl<E: Pairing> Valid for UniversalParams<E> {
     }
 }
 
-
 impl<E: Pairing> CanonicalSerialize for UniversalParams<E> {
     fn serialize_with_mode<W: Write>(
         &self,
@@ -121,7 +118,8 @@ impl<E: Pairing> CanonicalSerialize for UniversalParams<E> {
         self.tilde_u.serialize_with_mode(&mut writer, compress)?;
         self.vec_g.serialize_with_mode(&mut writer, compress)?;
         self.vec_h.serialize_with_mode(&mut writer, compress)?;
-        self.vec_g_prime.serialize_with_mode(&mut writer, compress)?;
+        self.vec_g_prime
+            .serialize_with_mode(&mut writer, compress)?;
         self.vec_nu_g.serialize_with_mode(&mut writer, compress)?;
         self.vec_nu_h.serialize_with_mode(&mut writer, compress)
     }
@@ -154,42 +152,25 @@ impl<E: Pairing> CanonicalDeserialize for UniversalParams<E> {
         compress: Compress,
         validate: Validate,
     ) -> Result<Self, SerializationError> {
-        let q = usize::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let num_vars = usize::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let g_hat = E::G1::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let h_hat = E::G2::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let s_h = E::G2::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let sq_h = E::G2::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let nu_g = E::G1::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let nu_h = E::G2::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let g_0 = E::G1::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let tilde_g = E::G1::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let tilde_h = E::G2::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let u = PairingOutput::<E>::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let tilde_u = PairingOutput::<E>::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let vec_g = Vec::<E::G1>::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let vec_h = Vec::<E::G2>::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let vec_g_prime = Vec::<E::G1>::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let vec_nu_g = Vec::<E::G1>::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
-        let vec_nu_h = Vec::<E::G2>::deserialize_with_mode(
-            &mut reader, compress, Validate::No)?;
+        let q = usize::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let num_vars = usize::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let g_hat = E::G1::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let h_hat = E::G2::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let s_h = E::G2::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let sq_h = E::G2::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let nu_g = E::G1::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let nu_h = E::G2::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let g_0 = E::G1::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let tilde_g = E::G1::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let tilde_h = E::G2::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let u = PairingOutput::<E>::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let tilde_u =
+            PairingOutput::<E>::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let vec_g = Vec::<E::G1>::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let vec_h = Vec::<E::G2>::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let vec_g_prime = Vec::<E::G1>::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let vec_nu_g = Vec::<E::G1>::deserialize_with_mode(&mut reader, compress, Validate::No)?;
+        let vec_nu_h = Vec::<E::G2>::deserialize_with_mode(&mut reader, compress, Validate::No)?;
 
         let result = Self {
             q,
@@ -218,7 +199,6 @@ impl<E: Pairing> CanonicalDeserialize for UniversalParams<E> {
         Ok(result)
     }
 }
-
 
 /// One row-fold message represented and hidden in its source groups.
 #[derive(Derivative)]
@@ -343,8 +323,6 @@ impl<E: Pairing> Trans<E> {
 }
 
 impl<E: Pairing> Valid for Trans<E> {
-
-
     fn check(&self) -> Result<(), SerializationError> {
         self.vec_l_gt.check()?;
         self.vec_r_gt.check()?;
@@ -371,8 +349,10 @@ impl<E: Pairing> CanonicalSerialize for Trans<E> {
     ) -> Result<(), SerializationError> {
         self.vec_l_gt.serialize_with_mode(&mut writer, compress)?;
         self.vec_r_gt.serialize_with_mode(&mut writer, compress)?;
-        self.vec_l_native.serialize_with_mode(&mut writer, compress)?;
-        self.vec_r_native.serialize_with_mode(&mut writer, compress)?;
+        self.vec_l_native
+            .serialize_with_mode(&mut writer, compress)?;
+        self.vec_r_native
+            .serialize_with_mode(&mut writer, compress)?;
         self.v_g.serialize_with_mode(&mut writer, compress)?;
         self.v_h.serialize_with_mode(&mut writer, compress)?;
         self.v_g_prime.serialize_with_mode(&mut writer, compress)?;
@@ -439,16 +419,8 @@ impl<E: Pairing> CanonicalDeserialize for Trans<E> {
                 compress,
                 Validate::No,
             )?,
-            linear_z_a: E::ScalarField::deserialize_with_mode(
-                &mut reader,
-                compress,
-                Validate::No,
-            )?,
-            linear_z_t: E::ScalarField::deserialize_with_mode(
-                &mut reader,
-                compress,
-                Validate::No,
-            )?,
+            linear_z_a: E::ScalarField::deserialize_with_mode(&mut reader, compress, Validate::No)?,
+            linear_z_t: E::ScalarField::deserialize_with_mode(&mut reader, compress, Validate::No)?,
         };
         if let Validate::Yes = validate {
             result.check()?;
@@ -493,12 +465,13 @@ impl<E: Pairing> SmartPcVerificationEquation<E> {
                 .into_iter()
                 .map(|(scalar, value)| (scalar * coefficient, value)),
         );
-        self.pairing_rows.extend(other.pairing_rows.into_iter().map(|mut row| {
-            for (scalar, _) in &mut row.g1_terms {
-                *scalar *= coefficient;
-            }
-            row
-        }));
+        self.pairing_rows
+            .extend(other.pairing_rows.into_iter().map(|mut row| {
+                for (scalar, _) in &mut row.g1_terms {
+                    *scalar *= coefficient;
+                }
+                row
+            }));
     }
 
     /// Evaluates the sparse source-group operations and the final pairing equation.
@@ -560,8 +533,7 @@ mod tests {
             SmartPC::<Bls12_381>::commit_full(&pp, &matrix, matrix_hiding).unwrap();
         let xl = vec![Fr::from(2_u64), Fr::from(3_u64)];
         let xr = vec![Fr::from(5_u64), Fr::from(7_u64)];
-        let (value_commitment, value_hiding) =
-            SmartPC::<Bls12_381>::eval(&pp, &matrix, &xl, &xr);
+        let (value_commitment, value_hiding) = SmartPC::<Bls12_381>::eval(&pp, &matrix, &xl, &xr);
         let proof = SmartPC::<Bls12_381>::open(
             &pp,
             &matrix,
@@ -577,8 +549,7 @@ mod tests {
 
         let mut encoded = Vec::new();
         proof.serialize_compressed(&mut encoded).unwrap();
-        let decoded =
-            Trans::<Bls12_381>::deserialize_compressed(encoded.as_slice()).unwrap();
+        let decoded = Trans::<Bls12_381>::deserialize_compressed(encoded.as_slice()).unwrap();
 
         assert_eq!(decoded, proof);
         assert_eq!(decoded.serialized_size(Compress::Yes), encoded.len());

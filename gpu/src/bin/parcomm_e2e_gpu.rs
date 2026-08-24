@@ -83,6 +83,10 @@ impl BvaI8Source for ByteBvaSource {
         &self.layout
     }
 
+    fn indexed_vectors(&self) -> Option<Vec<&[i8]>> {
+        Some(self.vectors.iter().map(Vec::as_slice).collect())
+    }
+
     fn for_each_vector(&mut self, visit: &mut dyn FnMut(usize, &[i8])) -> Result<(), Self::Error> {
         for (vector_index, vector) in self.vectors.iter().enumerate() {
             visit(vector_index, vector);
@@ -163,7 +167,10 @@ fn load_or_setup_parameters(
     let mut rng = ark_std::rand::thread_rng();
     let parameters = SmartPC::<Bls12_381>::setup(requested_qlog, &mut rng)
         .expect("generate SmartPC public parameters");
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent).expect("create SmartPC parameter directory");
     }
     let bytes =
@@ -232,10 +239,7 @@ fn main() -> Result<(), GpuSmartPcError> {
     let dense = dense_packed_witness(&mut source)?;
     let (rows, cols) = (dense.layout.rows, dense.layout.cols);
     let stored_rows = dense.layout.live_rows.len();
-    println!(
-        "dense_seconds={:.6}",
-        dense_started.elapsed().as_secs_f64()
-    );
+    println!("dense_seconds={:.6}", dense_started.elapsed().as_secs_f64());
     assert_eq!((rows, cols), packed_bva_shape(logical_entries).unwrap());
     println!("stored_rows={stored_rows} of {rows}");
 
@@ -254,10 +258,7 @@ fn main() -> Result<(), GpuSmartPcError> {
         .expect("valid global tensor basis vector");
     let claim_started = Instant::now();
     let claimed = gpu.global_tensor_claim(&challenges)?;
-    println!(
-        "claim_seconds={:.6}",
-        claim_started.elapsed().as_secs_f64()
-    );
+    println!("claim_seconds={:.6}", claim_started.elapsed().as_secs_f64());
 
     if arguments.check_cpu {
         let cpu_started = Instant::now();
@@ -269,12 +270,15 @@ fn main() -> Result<(), GpuSmartPcError> {
             cpu_started.elapsed().as_secs_f64()
         );
         println!("claim_matches_cpu={}", cpu_claimed == claimed);
-        assert_eq!(cpu_claimed, claimed, "GPU claim disagrees with the CPU prover");
+        assert_eq!(
+            cpu_claimed, claimed,
+            "GPU claim disagrees with the CPU prover"
+        );
     }
 
     let packing_stride =
         packing_stride_for_bit_width::<Fr>(logical_entries, BIT_WIDTH).expect("valid i8 packing");
-    assert_eq!(packing_stride, 32);
+    assert_eq!(packing_stride, 64);
 
     let mut prover_rng = ark_std::rand::thread_rng();
     let matrix_hiding = Fr::rand(&mut prover_rng);
