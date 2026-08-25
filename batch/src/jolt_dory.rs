@@ -66,6 +66,12 @@ pub struct DorySetupProfile {
     pub total_seconds: f64,
 }
 
+const MAX_BLINDFOLD_CAPACITY_LOG: usize = 6;
+
+fn blindfold_capacity(max_num_vars: usize) -> usize {
+    1_usize << (max_num_vars.next_multiple_of(2) / 2).min(MAX_BLINDFOLD_CAPACITY_LOG)
+}
+
 /// Generate or load Jolt's canonical even-sized Dory URS.
 pub fn setup_dory_parameters(
     max_num_vars: usize,
@@ -87,12 +93,12 @@ pub fn setup_dory_parameters_profiled(
     let setup = DenseI8DorySetup::new(max_num_vars);
     let pcs_setup_seconds = pcs_setup_started.elapsed().as_secs_f64();
     // BlindFold rows only carry sumcheck round coefficients and packed output
-    // claims, so cap the Pedersen row width at 2^7: revealed vector openings
-    // stay constant-size instead of tracking the Dory row width (2^15 at a
-    // 2^30 setup would leak megabyte-scale combined vectors per proof).
+    // claims, so cap the Pedersen row width at 2^6: output sets are chunked into
+    // 64-wide rows, while revealed vector openings stay constant-size instead
+    // of tracking the Dory row width.
     let blindfold_setup_started = Instant::now();
-    let blindfold_capacity = 1_usize << (max_num_vars.next_multiple_of(2) / 2).min(7);
-    let blindfold = PedersenSetup::<Bn254G1>::derive(&setup.prover, blindfold_capacity);
+    let blindfold =
+        PedersenSetup::<Bn254G1>::derive(&setup.prover, blindfold_capacity(max_num_vars));
     let blindfold_setup_seconds = blindfold_setup_started.elapsed().as_secs_f64();
     (
         DoryProverParameters {
@@ -1751,13 +1757,22 @@ mod tests {
     use crate::jolt_dory_adapter::{DenseI16Prefix, DenseI8Prefix};
 
     use super::{
-        commit_field_matrix_columns_zk, commit_field_vector_zk, evaluate_field_vector_standard,
-        normalize_monomial_mle_claim, open_field_vector_zk, open_hidden_field_vectors_batch_zk,
-        prove_packed_i16_parcomm, prove_packed_i8_parcomm, setup_dory_parameters,
-        standard_mle_evaluate_i8, verify_field_vector_zk, verify_hidden_field_vectors_batch_zk,
-        verify_packed_i16_parcomm, verify_packed_i8_parcomm, ClaimedArkFieldPolynomial,
-        ClaimedFieldPolynomial, DenseI16BvaSource, DenseI8BvaSource, PackedI8ParCommProof,
+        blindfold_capacity, commit_field_matrix_columns_zk, commit_field_vector_zk,
+        evaluate_field_vector_standard, normalize_monomial_mle_claim, open_field_vector_zk,
+        open_hidden_field_vectors_batch_zk, prove_packed_i16_parcomm, prove_packed_i8_parcomm,
+        setup_dory_parameters, standard_mle_evaluate_i8, verify_field_vector_zk,
+        verify_hidden_field_vectors_batch_zk, verify_packed_i16_parcomm, verify_packed_i8_parcomm,
+        ClaimedArkFieldPolynomial, ClaimedFieldPolynomial, DenseI16BvaSource, DenseI8BvaSource,
+        PackedI8ParCommProof,
     };
+
+    #[test]
+    fn blindfold_capacity_is_capped_at_sixty_four_generators() {
+        assert_eq!(blindfold_capacity(2), 2);
+        assert_eq!(blindfold_capacity(8), 16);
+        assert_eq!(blindfold_capacity(12), 64);
+        assert_eq!(blindfold_capacity(34), 64);
+    }
 
     struct CountingPolynomial<'a> {
         values: &'a [JoltFr],

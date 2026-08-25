@@ -22,18 +22,17 @@ use batch::{
     model_bva::{default_model_data_root, ModelBvaManifest, ModelPreset},
     section6_data::{Section6Layout, Section6MatrixClaim},
     validity_protocol::{
-        commit_opening_collection_profiled, prove_opening, prove_shape_validity_for_collection,
-        validity_required_dory_log, verify_shape_commitment, verify_validity_opening_profiled,
+        commit_opening_collection_profiled, prove_opening, prove_opening_with_shape_validity,
+        validity_required_dory_log, verify_opening_profiled, verify_validity_opening_profiled,
         ValidityCommitStatement, ValidityOpeningProof,
     },
-    validity_shape::ShapeValidityProof,
 };
 use bincode::Options;
 use sha2::{Digest, Sha256};
 
 const HOMOGENEOUS_BIT_WIDTH: usize = 8;
 const DEFAULT_SEED: u64 = 0x4558_5045_5249_4d54;
-const PROOF_MAGIC: [u8; 8] = *b"S6BENCH2";
+const PROOF_MAGIC: [u8; 8] = *b"S6BENCH3";
 const EXPERIMENT_STAGE_COUNT: usize = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -504,7 +503,7 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
     report_active_stage(5, "Shape and dense BVA commitments")?;
     let prover_wall_started = Instant::now();
     let commit_started = Instant::now();
-    let (committed, mut commit_profile) = match &source {
+    let (committed, commit_profile) = match &source {
         ExperimentSource::I8(source) => {
             commit_opening_collection_profiled(&prover_parameters, source, bit_width)?
         }
@@ -512,14 +511,10 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
             commit_opening_collection_profiled(&prover_parameters, source, bit_width)?
         }
     };
-    let validity_proof = if arguments.shape_validity_proof {
-        let (proof, seconds) =
-            prove_shape_validity_for_collection(&prover_parameters, &committed, &mut rng)?;
-        commit_profile.validity_prove_seconds = seconds;
-        Some(proof)
-    } else {
-        None
-    };
+    ensure!(
+        commit_profile.validity_prove_seconds == 0.0,
+        "shape validity must be deferred to the joint opening"
+    );
     let commit_phase_seconds =
         report_stage("commit_phase", commit_started, &monitor, detailed_output);
     let statement_clone_started = Instant::now();
@@ -528,11 +523,25 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
 
     report_active_stage(6, "Opening prover")?;
     let opening_started = Instant::now();
-    let (opening_proof, opening_profile) = match &mut source {
-        ExperimentSource::I8(source) => {
+    let (opening_proof, opening_profile) = match (&mut source, arguments.shape_validity_proof) {
+        (ExperimentSource::I8(source), true) => prove_opening_with_shape_validity(
+            &prover_parameters,
+            &committed,
+            source,
+            &claims,
+            &mut rng,
+        )?,
+        (ExperimentSource::I16(source), true) => prove_opening_with_shape_validity(
+            &prover_parameters,
+            &committed,
+            source,
+            &claims,
+            &mut rng,
+        )?,
+        (ExperimentSource::I8(source), false) => {
             prove_opening(&prover_parameters, &committed, source, &claims, &mut rng)?
         }
-        ExperimentSource::I16(source) => {
+        (ExperimentSource::I16(source), false) => {
             prove_opening(&prover_parameters, &committed, source, &claims, &mut rng)?
         }
     };
@@ -543,18 +552,23 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
     report_active_stage(7, "Proof serialization and decoding")?;
     let serialization_started = Instant::now();
     let proof_component_sizing_started = Instant::now();
+    let shape_validity_reduction_size_bytes = serialized_size(&opening_proof.shape_validity)?;
     let x_statement_size_bytes = serialized_size(&opening_proof.x)?;
     let tbv_statement_size_bytes = serialized_size(&opening_proof.tbv)?;
     let point_reduction_size_bytes = serialized_size(&opening_proof.point)?;
     let point_aux_size_bytes = serialized_size(&opening_proof.point.aux)?;
     let point_keys_size_bytes = serialized_size(&opening_proof.point.keys)?;
     let point_identity_size_bytes = 0_usize;
-    let point_lookup_size_bytes = serialized_size(&opening_proof.point.lookup)?;
-    let point_lookup_aux_size_bytes =
-        serialized_size(&opening_proof.point.lookup.auxiliary_commitments)?;
-    let point_lookup_identity_size_bytes =
-        serialized_size(&opening_proof.point.lookup.identity_reduction)?;
-    let point_lookup_sum_size_bytes = serialized_size(&opening_proof.point.lookup.sum_reduction)?;
+    let joint_lookup_size_bytes = serialized_size(&opening_proof.point.lookup)?;
+    let mut joint_lookup_aux_size_bytes = serialized_size(&Vec::<u8>::new())?;
+    let mut joint_lookup_identity_size_bytes = 0_usize;
+    let mut joint_lookup_sum_size_bytes = 0_usize;
+    for domain in &opening_proof.point.lookup.domains {
+        joint_lookup_aux_size_bytes += serialized_size(&domain.auxiliary_commitments)?;
+        joint_lookup_identity_size_bytes += serialized_size(&domain.identity_reduction)?;
+        joint_lookup_sum_size_bytes += serialized_size(&domain.sum_reduction)?;
+        joint_lookup_sum_size_bytes += serialized_size(&domain.claimed_sum_commitment)?;
+    }
     let packed_eo_size_bytes = serialized_size(&opening_proof.packed_eo)?;
     let packed_eo_scalar_commitment_count = opening_proof.packed_eo.scalar_commitment_count();
     let packed_eo_stride_size_bytes = serialized_size(&opening_proof.packed_eo.packing_stride)?;
@@ -588,34 +602,34 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
     let terminal_blindfold_size_bytes = serialized_size(&opening_proof.terminal_opening.blindfold)?;
     let proof_component_sizing_seconds = proof_component_sizing_started.elapsed().as_secs_f64();
     let proof_encode_started = Instant::now();
-    let (proof_bytes, component_sizes) =
-        encode_proof(&statement, validity_proof.as_ref(), &opening_proof)?;
+    let (proof_bytes, component_sizes) = encode_proof(&statement, &opening_proof)?;
     let proof_encode_seconds = proof_encode_started.elapsed().as_secs_f64();
     ensure!(
-        x_statement_size_bytes
+        shape_validity_reduction_size_bytes
+            + x_statement_size_bytes
             + tbv_statement_size_bytes
             + point_reduction_size_bytes
             + packed_eo_size_bytes
             + final_evaluation_size_bytes
             + bva_opening_size_bytes
             + terminal_opening_size_bytes
-            == component_sizes[2],
+            == component_sizes[1],
         "opening proof component sizes are not exhaustive"
     );
     ensure!(
         point_aux_size_bytes
             + point_keys_size_bytes
             + point_identity_size_bytes
-            + point_lookup_size_bytes
+            + joint_lookup_size_bytes
             == point_reduction_size_bytes,
         "point reduction component sizes are not exhaustive"
     );
     ensure!(
-        point_lookup_aux_size_bytes
-            + point_lookup_identity_size_bytes
-            + point_lookup_sum_size_bytes
-            == point_lookup_size_bytes,
-        "tagged lookup component sizes are not exhaustive"
+        joint_lookup_aux_size_bytes
+            + joint_lookup_identity_size_bytes
+            + joint_lookup_sum_size_bytes
+            == joint_lookup_size_bytes,
+        "joint lookup component sizes are not exhaustive"
     );
     ensure!(
         packed_eo_stride_size_bytes
@@ -652,9 +666,9 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
     let proof_sha256 = Sha256::digest(&proof_bytes);
     let proof_hash_seconds = proof_hash_started.elapsed().as_secs_f64();
     let proof_decode_started = Instant::now();
-    let (decoded_statement, decoded_validity, decoded_opening) = decode_proof(&proof_bytes)?;
+    let (decoded_statement, decoded_opening) = decode_proof(&proof_bytes)?;
     ensure!(
-        decoded_validity.is_some() == arguments.shape_validity_proof,
+        decoded_opening.shape_validity.is_some() == arguments.shape_validity_proof,
         "decoded shape validity mode differs from the requested mode"
     );
     let proof_decode_seconds = proof_decode_started.elapsed().as_secs_f64();
@@ -674,24 +688,23 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
     );
 
     report_active_stage(8, "Verification and final validation")?;
-    let validity_verify_seconds = if let Some(proof) = decoded_validity.as_ref() {
-        let started = Instant::now();
-        verify_shape_commitment(&verifier_parameters, &decoded_statement, proof)?;
-        report_stage("validity_verify", started, &monitor, detailed_output)
-    } else {
-        if detailed_output {
-            println!("validity_verify_seconds=0.000000");
-        }
-        0.0
-    };
     let opening_verify_started = Instant::now();
     let claimed_values = claims.iter().map(|claim| claim.value).collect::<Vec<_>>();
-    let (verification, verifier_profile) = verify_validity_opening_profiled(
-        &verifier_parameters,
-        &decoded_statement,
-        &claimed_values,
-        &decoded_opening,
-    )?;
+    let (verification, verifier_profile) = if arguments.shape_validity_proof {
+        verify_validity_opening_profiled(
+            &verifier_parameters,
+            &decoded_statement,
+            &claimed_values,
+            &decoded_opening,
+        )?
+    } else {
+        verify_opening_profiled(
+            &verifier_parameters,
+            &decoded_statement,
+            &claimed_values,
+            &decoded_opening,
+        )?
+    };
     let opening_verify_seconds = report_stage(
         "opening_verify",
         opening_verify_started,
@@ -699,7 +712,10 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
         detailed_output,
     );
 
+    let validity_verify_seconds =
+        verifier_profile.shape_prepare_seconds + verifier_profile.shape_verify_seconds;
     ensure!(opening_proof.physical_dory_proof_count() == 2);
+    ensure!(opening_proof.physical_logup_reduction_count() == 1);
     ensure!(
         opening_profile.padding.materialized_padding_entries == materialized_padding_entries as u64
     );
@@ -708,7 +724,7 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
         "Packed EO did not visit the complete active BVA prefix"
     );
     let total_prover_seconds = commit_phase_seconds + opening_prove_seconds;
-    let total_verifier_seconds = validity_verify_seconds + opening_verify_seconds;
+    let total_verifier_seconds = opening_verify_seconds;
     let total_seconds = experiment_started.elapsed().as_secs_f64();
     let peak_rss_kib = monitor.finish();
 
@@ -717,6 +733,8 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
         - commit_profile.validity_prove_seconds
         - commit_profile.bva_commit_seconds)
         .max(0.0);
+    let shape_validity_prove_seconds =
+        opening_profile.shape_prepare_seconds + opening_profile.shape_prove_seconds;
     let point_conversion_seconds = opening_profile.x_commit_seconds
         + opening_profile.point_witness_seconds
         + opening_profile.tbv_commit_seconds
@@ -728,6 +746,7 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
         + opening_profile.final_aux_commit_seconds
         + opening_profile.final_prove_seconds;
     let opening_classified_seconds = opening_profile.validation_seconds
+        + shape_validity_prove_seconds
         + opening_profile.batch_point_seconds
         + point_conversion_seconds
         + opening_profile.packed_binding_seconds
@@ -770,6 +789,8 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
         (opening_profile.packed_eo_seconds - eo_ip_accounted_seconds).max(0.0);
 
     let verifier_classified_seconds = verifier_profile.statement_validation_seconds
+        + verifier_profile.shape_prepare_seconds
+        + verifier_profile.shape_verify_seconds
         + verifier_profile.batch_point_seconds
         + verifier_profile.point_prepare_seconds
         + verifier_profile.point_verify_seconds
@@ -859,7 +880,7 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
             commit_profile.bva_commit_seconds
         );
         println!(
-            "validity_prove_seconds={:.6}",
+            "commit_validity_prove_seconds={:.6}",
             commit_profile.validity_prove_seconds
         );
         println!("commit_phase_seconds={commit_phase_seconds:.6}");
@@ -868,6 +889,15 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
             "opening_validation_seconds={:.6}",
             opening_profile.validation_seconds
         );
+        println!(
+            "shape_validity_prepare_seconds={:.6}",
+            opening_profile.shape_prepare_seconds
+        );
+        println!(
+            "shape_validity_reduction_seconds={:.6}",
+            opening_profile.shape_prove_seconds
+        );
+        println!("validity_prove_seconds={shape_validity_prove_seconds:.6}");
         println!(
             "batch_point_seconds={:.6}",
             opening_profile.batch_point_seconds
@@ -1049,23 +1079,20 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
             opening_profile.terminal_claim_count
         );
         println!("commit_statement_size_bytes={}", component_sizes[0]);
-        println!("validity_proof_size_bytes={}", component_sizes[1]);
-        println!("opening_proof_size_bytes={}", component_sizes[2]);
-        println!(
-            "cached_registration_size_bytes={}",
-            component_sizes[0] + component_sizes[1]
-        );
-        println!("per_opening_proof_size_bytes={}", component_sizes[2]);
+        println!("shape_validity_reduction_size_bytes={shape_validity_reduction_size_bytes}");
+        println!("opening_proof_size_bytes={}", component_sizes[1]);
+        println!("cached_registration_size_bytes={}", component_sizes[0]);
+        println!("per_opening_proof_size_bytes={}", component_sizes[1]);
         println!("x_statement_size_bytes={x_statement_size_bytes}");
         println!("tbv_statement_size_bytes={tbv_statement_size_bytes}");
         println!("point_reduction_size_bytes={point_reduction_size_bytes}");
         println!("point_aux_size_bytes={point_aux_size_bytes}");
         println!("point_keys_size_bytes={point_keys_size_bytes}");
         println!("point_identity_size_bytes={point_identity_size_bytes}");
-        println!("point_lookup_size_bytes={point_lookup_size_bytes}");
-        println!("point_lookup_aux_size_bytes={point_lookup_aux_size_bytes}");
-        println!("point_lookup_identity_size_bytes={point_lookup_identity_size_bytes}");
-        println!("point_lookup_sum_size_bytes={point_lookup_sum_size_bytes}");
+        println!("joint_lookup_size_bytes={joint_lookup_size_bytes}");
+        println!("joint_lookup_aux_size_bytes={joint_lookup_aux_size_bytes}");
+        println!("joint_lookup_identity_size_bytes={joint_lookup_identity_size_bytes}");
+        println!("joint_lookup_sum_size_bytes={joint_lookup_sum_size_bytes}");
         println!("packed_eo_size_bytes={packed_eo_size_bytes}");
         println!("packed_eo_scalar_commitment_count={packed_eo_scalar_commitment_count}");
         println!("packed_eo_stride_size_bytes={packed_eo_stride_size_bytes}");
@@ -1110,6 +1137,10 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
             "physical_dory_proof_count={}",
             opening_proof.physical_dory_proof_count()
         );
+        println!(
+            "physical_logup_reduction_count={}",
+            opening_proof.physical_logup_reduction_count()
+        );
         println!("proof_component_sizing_seconds={proof_component_sizing_seconds:.6}");
         println!("proof_encode_seconds={proof_encode_seconds:.6}");
         println!("proof_hash_seconds={proof_hash_seconds:.6}");
@@ -1121,6 +1152,14 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
         println!(
             "verifier_statement_validation_seconds={:.6}",
             verifier_profile.statement_validation_seconds
+        );
+        println!(
+            "verifier_shape_validity_prepare_seconds={:.6}",
+            verifier_profile.shape_prepare_seconds
+        );
+        println!(
+            "verifier_shape_validity_reduction_seconds={:.6}",
+            verifier_profile.shape_verify_seconds
         );
         println!(
             "verifier_batch_point_seconds={:.6}",
@@ -1259,29 +1298,31 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
     println!("verified_marker=SECTION6_E2E_VERIFIED");
     let commit_other_seconds = (commit_phase_seconds
         - commit_profile.bva_commit_seconds
-        - commit_profile.shape_commit_seconds)
+        - commit_profile.shape_commit_seconds
+        - commit_profile.validity_prove_seconds)
         .max(0.0);
     let tbv_compilation_evaluation_seconds = point_conversion_seconds + tbv_evaluation_seconds;
     let opening_other_seconds = (opening_prove_seconds
+        - shape_validity_prove_seconds
         - opening_profile.bva_open_seconds
         - opening_profile.packed_eo_seconds
         - tbv_compilation_evaluation_seconds
         - opening_profile.terminal_open_seconds)
         .max(0.0);
-    let reported_proof_size_bytes = component_sizes[1]
-        .checked_add(component_sizes[2])
-        .context("reported proof size overflowed")?;
+    let reported_proof_size_bytes = component_sizes[1];
     let tbv_compilation_evaluation_proof_size_bytes = x_statement_size_bytes
         .checked_add(tbv_statement_size_bytes)
-        .and_then(|size| size.checked_add(point_reduction_size_bytes))
+        .and_then(|size| size.checked_add(point_aux_size_bytes))
+        .and_then(|size| size.checked_add(point_keys_size_bytes))
+        .and_then(|size| size.checked_add(point_identity_size_bytes))
         .and_then(|size| size.checked_add(final_evaluation_size_bytes))
         .context("TBV compilation and evaluation proof size overflowed")?;
-    let proof_other_size_bytes = component_sizes[1];
     let reported_proof_breakdown_size_bytes = bva_opening_size_bytes
         .checked_add(packed_eo_size_bytes)
+        .and_then(|size| size.checked_add(shape_validity_reduction_size_bytes))
+        .and_then(|size| size.checked_add(joint_lookup_size_bytes))
         .and_then(|size| size.checked_add(tbv_compilation_evaluation_proof_size_bytes))
         .and_then(|size| size.checked_add(terminal_opening_size_bytes))
-        .and_then(|size| size.checked_add(proof_other_size_bytes))
         .context("reported proof size breakdown overflowed")?;
     ensure!(
         reported_proof_breakdown_size_bytes == reported_proof_size_bytes,
@@ -1294,7 +1335,8 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
     let grouped_verifier_seconds = verifier_profile.bva_open_verify_seconds
         + verifier_profile.packed_eo_verify_seconds
         + tbv_compilation_evaluation_verify_seconds
-        + verifier_profile.terminal_open_verify_seconds;
+        + verifier_profile.terminal_open_verify_seconds
+        + validity_verify_seconds;
     let verifier_other_seconds = (total_verifier_seconds - grouped_verifier_seconds).max(0.0);
 
     println!();
@@ -1311,22 +1353,23 @@ fn run(arguments: Arguments, mut in_memory: Option<InMemoryModelInput>) -> Resul
         format_bytes(component_sizes[0]),
     );
     println!(
-        "| Open time | {opening_prove_seconds:.3} s | BVA open {:.3} s; EO-LiteBullet {:.3} s; TBV compilation + evaluation proof {tbv_compilation_evaluation_seconds:.3} s; Terminal open {:.3} s; Other {opening_other_seconds:.3} s |",
+        "| Open time | {opening_prove_seconds:.3} s | Shape validity reduction {shape_validity_prove_seconds:.3} s; BVA open {:.3} s; EO-LiteBullet {:.3} s; Joint lookup + TBV compilation + evaluation proof {tbv_compilation_evaluation_seconds:.3} s; Joint terminal open {:.3} s; Other {opening_other_seconds:.3} s |",
         opening_profile.bva_open_seconds,
         opening_profile.packed_eo_seconds,
         opening_profile.terminal_open_seconds,
     );
     println!(
-        "| Proof size | {} | BVA open {}; EO-LiteBullet {}; TBV compilation + evaluation proof {}; Terminal open {}; Other {} |",
+        "| Proof size | {} | Shape validity reduction {}; Joint LogUp {}; BVA open {}; EO-LiteBullet {}; TBV compilation + evaluation proof {}; Joint terminal open {} |",
         format_bytes(reported_proof_size_bytes),
+        format_bytes(shape_validity_reduction_size_bytes),
+        format_bytes(joint_lookup_size_bytes),
         format_bytes(bva_opening_size_bytes),
         format_bytes(packed_eo_size_bytes),
         format_bytes(tbv_compilation_evaluation_proof_size_bytes),
         format_bytes(terminal_opening_size_bytes),
-        format_bytes(proof_other_size_bytes),
     );
     println!(
-        "| Verifier time | {total_verifier_seconds:.3} s | BVA open verify {:.3} s; EO-LiteBullet verify {:.3} s; TBV compilation + evaluation proof verify {tbv_compilation_evaluation_verify_seconds:.3} s; Terminal open verify {:.3} s; Other {verifier_other_seconds:.3} s |",
+        "| Verifier time | {total_verifier_seconds:.3} s | Shape validity reduction {validity_verify_seconds:.3} s; BVA open verify {:.3} s; EO-LiteBullet verify {:.3} s; Joint lookup + TBV compilation + evaluation proof verify {tbv_compilation_evaluation_verify_seconds:.3} s; Joint terminal open verify {:.3} s; Other {verifier_other_seconds:.3} s |",
         verifier_profile.bva_open_verify_seconds,
         verifier_profile.packed_eo_verify_seconds,
         verifier_profile.terminal_open_verify_seconds,
@@ -1367,7 +1410,7 @@ fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Option
     let mut target_log = None;
     let mut seed = DEFAULT_SEED;
     let mut allow_non_64_threads = false;
-    let mut shape_validity_proof = false;
+    let mut shape_validity_proof = true;
     let mut summary_only = false;
     while let Some(argument) = arguments.next() {
         let value = |name: &str, arguments: &mut std::vec::IntoIter<String>| {
@@ -1397,6 +1440,7 @@ fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Option
             }
             "--allow-non-64-threads" => allow_non_64_threads = true,
             "--shape-validity-proof" | "--shape-validity" => shape_validity_proof = true,
+            "--skip-shape-validity-proof" => shape_validity_proof = false,
             "--summary-only" => summary_only = true,
             "-h" | "--help" => {
                 print_help();
@@ -1458,7 +1502,9 @@ fn print_help() {
            --verify-input-hash      Verify model BVA SHA-256 (default)\n\
            --skip-input-hash        Skip only the model BVA SHA-256 pass\n\
            --allow-non-64-threads   Permit a local smoke run\n\
-           --shape-validity-proof   Include the optional shape validity proof\n\
+           --shape-validity-proof   Explicitly enable shape validity proving (default)\n\
+           --skip-shape-validity-proof\n\
+                                   Disable shape validity proving for a performance-only run\n\
            --summary-only           Hide detailed key=value metrics and retain Final results\n\
            -h, --help               Print this help"
     );
@@ -1539,15 +1585,10 @@ fn proof_codec() -> impl Options {
 
 fn encode_proof(
     statement: &ValidityCommitStatement,
-    validity: Option<&ShapeValidityProof>,
     opening: &ValidityOpeningProof,
-) -> Result<(Vec<u8>, [usize; 3])> {
+) -> Result<(Vec<u8>, [usize; 2])> {
     let components = [
         proof_codec().serialize(statement)?,
-        validity
-            .map(|proof| proof_codec().serialize(proof))
-            .transpose()?
-            .unwrap_or_default(),
         proof_codec().serialize(opening)?,
     ];
     let sizes = components.each_ref().map(Vec::len);
@@ -1562,16 +1603,10 @@ fn encode_proof(
     Ok((bytes, sizes))
 }
 
-fn decode_proof(
-    bytes: &[u8],
-) -> Result<(
-    ValidityCommitStatement,
-    Option<ShapeValidityProof>,
-    ValidityOpeningProof,
-)> {
-    let header = PROOF_MAGIC.len() + 3 * size_of::<u64>();
+fn decode_proof(bytes: &[u8]) -> Result<(ValidityCommitStatement, ValidityOpeningProof)> {
+    let header = PROOF_MAGIC.len() + 2 * size_of::<u64>();
     ensure!(bytes.len() >= header && bytes[..PROOF_MAGIC.len()] == PROOF_MAGIC);
-    let mut sizes = [0_usize; 3];
+    let mut sizes = [0_usize; 2];
     for (index, size) in sizes.iter_mut().enumerate() {
         let start = PROOF_MAGIC.len() + index * size_of::<u64>();
         *size = usize::try_from(u64::from_le_bytes(bytes[start..start + 8].try_into()?))?;
@@ -1585,15 +1620,9 @@ fn decode_proof(
         "proof has truncated or trailing bytes"
     );
     let statement_end = header + sizes[0];
-    let validity_end = statement_end + sizes[1];
     Ok((
         proof_codec().deserialize(&bytes[header..statement_end])?,
-        if sizes[1] == 0 {
-            None
-        } else {
-            Some(proof_codec().deserialize(&bytes[statement_end..validity_end])?)
-        },
-        proof_codec().deserialize(&bytes[validity_end..])?,
+        proof_codec().deserialize(&bytes[statement_end..])?,
     ))
 }
 
@@ -1728,20 +1757,41 @@ mod tests {
                 cols: 9
             }
         );
-        assert!(!arguments.shape_validity_proof);
+        assert!(arguments.shape_validity_proof);
         assert!(arguments.summary_only);
     }
 
     #[test]
-    fn parses_each_model_preset_without_enabling_shape_validity() {
+    fn parses_each_model_preset_with_shape_validity_by_default() {
         for preset in ["llama8b-i8", "llama8b-i16", "llama70b-i8"] {
             let arguments = parse_arguments([preset].into_iter().map(String::from))
                 .unwrap()
                 .unwrap();
             assert!(matches!(arguments.workload, Workload::Model(_)));
-            assert!(!arguments.shape_validity_proof);
+            assert!(arguments.shape_validity_proof);
             assert!(!arguments.summary_only);
             assert!(arguments.verify_input_hash);
         }
+    }
+
+    #[test]
+    fn explicit_skip_disables_shape_validity() {
+        let arguments = parse_arguments(
+            [
+                "homogeneous",
+                "--matrix-count",
+                "1",
+                "--rows",
+                "3",
+                "--cols",
+                "3",
+                "--skip-shape-validity-proof",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!arguments.shape_validity_proof);
     }
 }

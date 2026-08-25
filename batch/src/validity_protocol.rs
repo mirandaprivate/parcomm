@@ -1,9 +1,9 @@
 //! End-to-end orchestration for the committed-shape Section 6 protocol.
 //!
-//! The one-time commit phase commits the mask matrix `[D_eta | D_Z]` on the
-//! small auxiliary grid and commits the dense byte BVA on its native
-//! source-sized grid. The optional size-private mode additionally proves the
-//! shape validity argument with its own terminal Dory batch.
+//! The commit phase commits the mask matrix `[D_eta | D_Z]` on the small
+//! auxiliary grid and commits the dense byte BVA on its native source-sized
+//! grid. In size-private mode the shape-validity reductions are produced at
+//! opening time so their lookup and terminal claims can be batched jointly.
 //!
 //! Each opening then commits the claim-point matrix `X`, derives the tensor
 //! batching point by Fiat--Shamir, commits the compiled TBV `[eta | Z]`, the
@@ -55,19 +55,20 @@ use crate::{
     validity_point::{
         build_point_prover_plan, build_point_verifier_plan, commit_point_aux_on_grid_zk,
         commit_point_keys_on_grid_zk, commit_point_matrix_on_grid_zk, commit_tbv_on_grid_zk,
-        derive_point_challenges, prove_point_compilation_deferred,
-        verify_point_compilation_deferred, PointAuxColumns, PointCompilationError,
-        PointCompilationProof, PointKeyColumns, PointMatrixStatement, PointPublicTables,
-        TbvStatement,
+        derive_point_challenges, prove_point_compilation_with_lookup_families_deferred,
+        verify_point_compilation_with_lookup_families_deferred, PointAuxColumns,
+        PointCompilationError, PointCompilationProof, PointKeyColumns, PointMatrixStatement,
+        PointPublicTables, TbvStatement,
     },
     validity_shape::{
-        commit_shape_masks_from_descriptor_on_grid_zk, prove_shape_validity,
-        shape_validity_aux_padded_cols, verify_shape_validity, CommittedShapeMasks,
+        commit_shape_masks_from_descriptor_on_grid_zk, prepare_shape_validity_prover_context,
+        prepare_shape_validity_verifier_context, prove_shape_validity_deferred,
+        shape_validity_aux_padded_cols, verify_shape_validity_deferred, CommittedShapeMasks,
         ShapeCommitStatement, ShapeValidityError, ShapeValidityProof,
     },
 };
 
-const TERMINAL_OPENING_ROLE: &[u8] = b"validity-terminal-opening-v1";
+const TERMINAL_OPENING_ROLE: &[u8] = b"validity-terminal-opening-v2";
 
 /// Public commit-phase statement shared with every verifier.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -105,20 +106,14 @@ impl CommittedOpeningCollection {
     }
 }
 
-/// Size-private committed state carrying the optional one-time validity proof.
+/// Size-private committed state whose validity proof is deferred to opening.
 pub struct CommittedValidityCollection {
     opening: CommittedOpeningCollection,
-    validity: ShapeValidityProof,
 }
 
 impl CommittedValidityCollection {
     pub fn statement(&self) -> &ValidityCommitStatement {
         self.opening.statement()
-    }
-
-    /// The one-time shape validity proof shipped alongside the statement.
-    pub fn validity(&self) -> &ShapeValidityProof {
-        &self.validity
     }
 
     pub fn shapes(&self) -> &CommittedShapeMasks {
@@ -134,7 +129,10 @@ impl CommittedValidityCollection {
     }
 }
 
-/// Commit-phase timings for the persistent commitments and their proof.
+/// Commit-phase timings for the persistent commitments.
+///
+/// `validity_prove_seconds` remains zero because the validity reductions now
+/// run inside the joint opening and are reported by `ValidityOpeningProfile`.
 #[derive(Clone, Copy, Debug)]
 pub struct ValidityCommitProfile {
     pub shape_commit_seconds: f64,
@@ -146,6 +144,8 @@ pub struct ValidityCommitProfile {
 /// contain physical Dory openings.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ValidityOpeningProof {
+    /// Deferred shape reduction, present exactly in size-private mode.
+    pub shape_validity: Option<ShapeValidityProof>,
     pub x: PointMatrixStatement,
     pub tbv: TbvStatement,
     pub point: PointCompilationProof,
@@ -158,17 +158,45 @@ pub struct ValidityOpeningProof {
 impl ValidityOpeningProof {
     /// One dense BVA opening plus one terminal auxiliary batch opening.
     pub fn physical_dory_proof_count(&self) -> usize {
-        1 + self.terminal_opening.physical_dory_proof_count()
+        1 + self.auxiliary_terminal_dory_proof_count()
     }
 
-    /// `X`, the TBV, the compilation auxiliary, the key matrix, and the
-    /// final auxiliary each add one GT element.
+    /// Every deferred auxiliary claim shares this one terminal opening.
+    pub fn auxiliary_terminal_dory_proof_count(&self) -> usize {
+        self.terminal_opening.physical_dory_proof_count()
+    }
+
+    /// Count the GT commitments serialized by all opening-time auxiliary
+    /// matrices, including every native-length LogUp domain.
     pub fn auxiliary_dory_commitment_count(&self) -> usize {
-        5
+        let lookup_commitments = self
+            .point
+            .lookup
+            .domains
+            .iter()
+            .map(|domain| {
+                [
+                    &domain.auxiliary_commitments.query_keys,
+                    &domain.auxiliary_commitments.table_keys,
+                    &domain.auxiliary_commitments.multiplicities,
+                    &domain.auxiliary_commitments.query_inverses,
+                    &domain.auxiliary_commitments.table_inverses,
+                ]
+                .into_iter()
+                .filter(|commitment| commitment.is_some())
+                .count()
+            })
+            .sum::<usize>();
+        5 + usize::from(self.shape_validity.is_some()) + lookup_commitments
+    }
+
+    /// Every source, point-power, and shape-power lookup shares this proof.
+    pub fn physical_logup_reduction_count(&self) -> usize {
+        1
     }
 }
 
-/// Prover profile for the Packed EO stage and the terminal claim batch.
+/// Prover profile for the integrated shape, Packed EO, and terminal stages.
 #[derive(Clone, Debug)]
 pub struct ValidityOpeningProfile {
     pub padding: PaddingWorkCounters,
@@ -176,6 +204,8 @@ pub struct ValidityOpeningProfile {
     pub bva_open: HiddenBvaOpeningProverProfile,
     pub terminal_open: Section6FinalOpeningProverProfile,
     pub validation_seconds: f64,
+    pub shape_prepare_seconds: f64,
+    pub shape_prove_seconds: f64,
     pub batch_point_seconds: f64,
     pub x_commit_seconds: f64,
     pub point_witness_seconds: f64,
@@ -213,6 +243,8 @@ pub struct ValidityOpeningVerifierProfile {
     pub bva_open: HiddenBvaOpeningVerifierProfile,
     pub terminal_open: Section6FinalOpeningVerifierProfile,
     pub statement_validation_seconds: f64,
+    pub shape_prepare_seconds: f64,
+    pub shape_verify_seconds: f64,
     pub batch_point_seconds: f64,
     pub point_prepare_seconds: f64,
     pub point_verify_seconds: f64,
@@ -236,6 +268,8 @@ pub enum ValidityProtocolError {
     PackedVerifier(HiddenPackedEoError),
     Opening(Section6FinalOpeningError),
     ClaimShape,
+    MissingShapeValidityProof,
+    UnexpectedShapeValidityProof,
     Encoding(String),
     LengthOverflow,
 }
@@ -457,15 +491,42 @@ pub fn validity_auxiliary_dory_log(
     let point_aux_cols = PointAuxColumns::new(pair, layout.eta_width()).padded_cols();
     let key_cols = PointKeyColumns::padded_cols();
     let final_cols = FinalAuxColumns::new(pair).padded_cols();
+    let point_table_parts = (layout.point_log() + 1).div_ceil(rows);
+    let shape_table_len = 1_usize
+        .checked_shl(layout.point_log() as u32)
+        .and_then(|length| length.checked_add(1))
+        .ok_or(ValidityProtocolError::LengthOverflow)?;
+    let full_shape_table_cover = shape_table_len
+        .checked_next_power_of_two()
+        .ok_or(ValidityProtocolError::LengthOverflow)?;
+    let short_table_parts = 1_usize
+        .checked_add(point_table_parts)
+        .and_then(|parts| parts.checked_add(if full_shape_table_cover == rows { 2 } else { 0 }))
+        .ok_or(ValidityProtocolError::LengthOverflow)?;
+    let short_lookup_cols = short_table_parts
+        .checked_next_power_of_two()
+        .ok_or(ValidityProtocolError::LengthOverflow)?
+        .max(4);
     let widest_cols = mask_cols
         .max(shape_aux_cols)
         .max(tbv_cols)
         .max(point_aux_cols)
         .max(key_cols)
-        .max(final_cols);
-    let auxiliary_len = rows
+        .max(final_cols)
+        .max(short_lookup_cols);
+    let row_domain_len = rows
         .checked_mul(widest_cols)
         .ok_or(ValidityProtocolError::LengthOverflow)?;
+    // The two shape-power families are two columns of one native-length
+    // auxiliary matrix. They are never split into row-sized table parts.
+    let shape_table_domain_len = if full_shape_table_cover == rows {
+        0
+    } else {
+        full_shape_table_cover
+            .checked_mul(2)
+            .ok_or(ValidityProtocolError::LengthOverflow)?
+    };
+    let auxiliary_len = row_domain_len.max(shape_table_domain_len);
     let auxiliary_log = auxiliary_len.ilog2() as usize;
 
     // The widest identity in either batch has degree 3, and the hidden
@@ -487,7 +548,7 @@ fn validity_bva_dory_log(layout: &Section6Layout) -> Result<usize, ValidityProto
     Ok((layout.logical_len.ilog2() as usize).max(2))
 }
 
-/// Commit the shape masks and BVA, then produce the size-private validity proof.
+/// Commit the shape masks and BVA for a later joint validity opening.
 pub fn commit_validity_collection<Integer: Section6Integer>(
     parameters: &DoryProverParameters,
     source: &DenseMatrixBva<Integer>,
@@ -502,13 +563,10 @@ pub fn commit_validity_collection_profiled<Integer: Section6Integer>(
     parameters: &DoryProverParameters,
     source: &DenseMatrixBva<Integer>,
     bit_width: usize,
-    rng: &mut impl RngCore,
+    _rng: &mut impl RngCore,
 ) -> Result<(CommittedValidityCollection, ValidityCommitProfile), ValidityProtocolError> {
-    let (opening, mut profile) = commit_opening_collection_profiled(parameters, source, bit_width)?;
-    let (validity, validity_prove_seconds) =
-        prove_shape_validity_for_collection(parameters, &opening, rng)?;
-    profile.validity_prove_seconds = validity_prove_seconds;
-    Ok((CommittedValidityCollection { opening, validity }, profile))
+    let (opening, profile) = commit_opening_collection_profiled(parameters, source, bit_width)?;
+    Ok((CommittedValidityCollection { opening }, profile))
 }
 
 /// Commit the persistent shape masks and BVA without a shape validity proof.
@@ -562,36 +620,6 @@ pub fn commit_opening_collection_profiled<Integer: Section6Integer>(
     ))
 }
 
-/// Prove shape validity explicitly for size-private collection registration.
-pub fn prove_shape_validity_for_collection(
-    parameters: &DoryProverParameters,
-    committed: &CommittedOpeningCollection,
-    rng: &mut impl RngCore,
-) -> Result<(ShapeValidityProof, f64), ValidityProtocolError> {
-    validate_committed_state(committed)?;
-    let grid = Section6DoryGrid::new(validity_auxiliary_dory_log(&committed.statement.layout)?)?;
-    let started = Instant::now();
-    let proof = prove_shape_validity(parameters, &grid, &committed.shapes, rng)?;
-    Ok((proof, started.elapsed().as_secs_f64()))
-}
-
-/// Verify the one-time shape validity proof against the public statement.
-pub fn verify_shape_commitment(
-    parameters: &DoryVerifierParameters,
-    statement: &ValidityCommitStatement,
-    validity: &ShapeValidityProof,
-) -> Result<(), ValidityProtocolError> {
-    let grid = Section6DoryGrid::new(validity_auxiliary_dory_log(&statement.layout)?)?;
-    verify_shape_validity(
-        parameters,
-        &grid,
-        &statement.layout,
-        &statement.shape,
-        validity,
-    )?;
-    Ok(())
-}
-
 /// Execute the complete prover flow with a streamed byte opening.
 pub fn prove_validity_opening<Integer: Section6Integer>(
     parameters: &DoryProverParameters,
@@ -600,7 +628,18 @@ pub fn prove_validity_opening<Integer: Section6Integer>(
     claims: &[Section6MatrixClaim<Fr>],
     rng: &mut impl RngCore,
 ) -> Result<(ValidityOpeningProof, ValidityOpeningProfile), ValidityProtocolError> {
-    prove_opening(parameters, committed.opening(), source, claims, rng)
+    prove_opening_with_shape_validity(parameters, committed.opening(), source, claims, rng)
+}
+
+/// Execute the integrated shape-validity and matrix-opening prover flow.
+pub fn prove_opening_with_shape_validity<Integer: Section6Integer>(
+    parameters: &DoryProverParameters,
+    committed: &CommittedOpeningCollection,
+    source: &mut DenseMatrixBva<Integer>,
+    claims: &[Section6MatrixClaim<Fr>],
+    rng: &mut impl RngCore,
+) -> Result<(ValidityOpeningProof, ValidityOpeningProfile), ValidityProtocolError> {
+    prove_opening_internal(parameters, committed, source, claims, true, rng)
 }
 
 /// Execute the complete opening flow without generating a shape validity proof.
@@ -611,6 +650,17 @@ pub fn prove_opening<Integer: Section6Integer>(
     claims: &[Section6MatrixClaim<Fr>],
     rng: &mut impl RngCore,
 ) -> Result<(ValidityOpeningProof, ValidityOpeningProfile), ValidityProtocolError> {
+    prove_opening_internal(parameters, committed, source, claims, false, rng)
+}
+
+fn prove_opening_internal<Integer: Section6Integer>(
+    parameters: &DoryProverParameters,
+    committed: &CommittedOpeningCollection,
+    source: &mut DenseMatrixBva<Integer>,
+    claims: &[Section6MatrixClaim<Fr>],
+    include_shape_validity: bool,
+    rng: &mut impl RngCore,
+) -> Result<(ValidityOpeningProof, ValidityOpeningProfile), ValidityProtocolError> {
     let validation_started = Instant::now();
     let layout = committed.shapes.layout().clone();
     layout.validate_descriptor(source.descriptor())?;
@@ -618,6 +668,29 @@ pub fn prove_opening<Integer: Section6Integer>(
     validate_committed_state(committed)?;
     let grid = Section6DoryGrid::new(validity_auxiliary_dory_log(&layout)?)?;
     let validation_seconds = validation_started.elapsed().as_secs_f64();
+
+    let shape_prepare_started = Instant::now();
+    let shape_context = if include_shape_validity {
+        Some(prepare_shape_validity_prover_context(
+            parameters,
+            &grid,
+            &committed.shapes,
+        )?)
+    } else {
+        None
+    };
+    let shape_prepare_seconds = shape_prepare_started.elapsed().as_secs_f64();
+    let shape_prove_started = Instant::now();
+    let shape_reduction = match shape_context.as_ref() {
+        Some(context) => Some(prove_shape_validity_deferred(
+            parameters,
+            &committed.shapes,
+            context,
+            rng,
+        )?),
+        None => None,
+    };
+    let shape_prove_seconds = shape_prove_started.elapsed().as_secs_f64();
 
     // Commit the claim points before the batching point is known.
     let x_commit_started = Instant::now();
@@ -684,7 +757,11 @@ pub fn prove_opening<Integer: Section6Integer>(
         &challenges,
         &batch_point,
     )?;
-    let (point_proof, point_openings) = prove_point_compilation_deferred(
+    let shape_lookup_families = match shape_context.as_ref() {
+        Some(context) => context.power_lookup_families()?,
+        None => Vec::new(),
+    };
+    let (point_proof, point_openings) = prove_point_compilation_with_lookup_families_deferred(
         &batch_binding,
         parameters,
         &grid,
@@ -695,13 +772,20 @@ pub fn prove_opening<Integer: Section6Integer>(
         &keys,
         &point_publics,
         &batch_point,
+        shape_lookup_families,
         rng,
     )?;
     let point_prove_seconds = point_prove_started.elapsed().as_secs_f64();
 
     // Packed EO against the public aggregated claim over the virtual TBV.
     let packed_binding_started = Instant::now();
-    let packed_binding = packed_stage_binding(&batch_binding, tbv.statement(), &point_proof)?;
+    let shape_validity = shape_reduction.as_ref().map(|(proof, _)| proof);
+    let packed_binding = packed_stage_binding(
+        &batch_binding,
+        tbv.statement(),
+        &point_proof,
+        shape_validity,
+    )?;
     let packed_binding_seconds = packed_binding_started.elapsed().as_secs_f64();
     let tbv_reconstruct_started = Instant::now();
     let virtual_tbv = point_witness.reconstruct_tbv(&layout)?;
@@ -767,6 +851,10 @@ pub fn prove_opening<Integer: Section6Integer>(
     // all LogUp auxiliary-vector openings - into one terminal Dory opening.
     let terminal_claim_collection_started = Instant::now();
     let mut terminal_claims = Section6ProverClaimCollection::new();
+    if let Some((_, openings)) = shape_reduction.as_ref() {
+        terminal_claims.push_relation(&openings.identity, &grid)?;
+        terminal_claims.push_relation(&openings.coverage, &grid)?;
+    }
     // The compiled and tested joint reduction includes every Point identity.
     let lookup_openings = point_openings
         .lookup
@@ -777,8 +865,13 @@ pub fn prove_opening<Integer: Section6Integer>(
     }
     terminal_claims.push_relation(&final_openings.joint_identity, &grid)?;
     let v_claim = final_openings.resolve_v_terminal_claim(&final_aux, &grid)?;
-    let terminal_binding =
-        terminal_stage_binding(&packed_binding, &packed_eo, &final_eval, &bva_opening)?;
+    let terminal_binding = terminal_stage_binding(
+        &packed_binding,
+        shape_validity,
+        &packed_eo,
+        &final_eval,
+        &bva_opening,
+    )?;
     let mut final_claims = terminal_claims.claims();
     final_claims.push(v_claim.as_claim(&final_openings.average));
     let terminal_claim_count = final_claims.len();
@@ -796,7 +889,9 @@ pub fn prove_opening<Integer: Section6Integer>(
     let terminal_open_seconds = terminal_open_started.elapsed().as_secs_f64();
 
     let result_assembly_started = Instant::now();
+    let shape_validity = shape_reduction.map(|(proof, _)| proof);
     let proof = ValidityOpeningProof {
+        shape_validity,
         x: x.statement().clone(),
         tbv: tbv.statement().clone(),
         point: point_proof,
@@ -814,6 +909,8 @@ pub fn prove_opening<Integer: Section6Integer>(
             bva_open: bva_open_profile,
             terminal_open: terminal_open_profile,
             validation_seconds,
+            shape_prepare_seconds,
+            shape_prove_seconds,
             batch_point_seconds,
             x_commit_seconds,
             point_witness_seconds,
@@ -839,25 +936,52 @@ pub fn prove_opening<Integer: Section6Integer>(
     ))
 }
 
-/// Verify the complete flow without shape data, BVA bytes, or claim points.
-///
-/// The one-time shape validity proof is verified separately by
-/// [`verify_shape_commitment`].
+/// Verify a size-private opening, including its joint shape-validity proof.
 pub fn verify_validity_opening(
     parameters: &DoryVerifierParameters,
     statement: &ValidityCommitStatement,
     claimed_values: &[Fr],
     proof: &ValidityOpeningProof,
 ) -> Result<ValidityOpeningVerification, ValidityProtocolError> {
-    Ok(verify_validity_opening_profiled(parameters, statement, claimed_values, proof)?.0)
+    Ok(verify_opening_internal(parameters, statement, claimed_values, proof, true)?.0)
 }
 
-/// Verify an opening and retain mutually exclusive stage timings.
+/// Verify an opening that intentionally omits shape validity.
+pub fn verify_opening(
+    parameters: &DoryVerifierParameters,
+    statement: &ValidityCommitStatement,
+    claimed_values: &[Fr],
+    proof: &ValidityOpeningProof,
+) -> Result<ValidityOpeningVerification, ValidityProtocolError> {
+    Ok(verify_opening_internal(parameters, statement, claimed_values, proof, false)?.0)
+}
+
+/// Verify a size-private opening and retain mutually exclusive timings.
 pub fn verify_validity_opening_profiled(
     parameters: &DoryVerifierParameters,
     statement: &ValidityCommitStatement,
     claimed_values: &[Fr],
     proof: &ValidityOpeningProof,
+) -> Result<(ValidityOpeningVerification, ValidityOpeningVerifierProfile), ValidityProtocolError> {
+    verify_opening_internal(parameters, statement, claimed_values, proof, true)
+}
+
+/// Verify a non-validating opening and retain mutually exclusive timings.
+pub fn verify_opening_profiled(
+    parameters: &DoryVerifierParameters,
+    statement: &ValidityCommitStatement,
+    claimed_values: &[Fr],
+    proof: &ValidityOpeningProof,
+) -> Result<(ValidityOpeningVerification, ValidityOpeningVerifierProfile), ValidityProtocolError> {
+    verify_opening_internal(parameters, statement, claimed_values, proof, false)
+}
+
+fn verify_opening_internal(
+    parameters: &DoryVerifierParameters,
+    statement: &ValidityCommitStatement,
+    claimed_values: &[Fr],
+    proof: &ValidityOpeningProof,
+    require_shape_validity: bool,
 ) -> Result<(ValidityOpeningVerification, ValidityOpeningVerifierProfile), ValidityProtocolError> {
     let total_started = Instant::now();
     let statement_validation_started = Instant::now();
@@ -870,7 +994,33 @@ pub fn verify_validity_opening_profiled(
     let grid = Section6DoryGrid::new(validity_auxiliary_dory_log(layout)?)?;
     proof.x.validate(layout)?;
     proof.tbv.validate(layout)?;
+    match (require_shape_validity, proof.shape_validity.is_some()) {
+        (true, false) => return Err(ValidityProtocolError::MissingShapeValidityProof),
+        (false, true) => return Err(ValidityProtocolError::UnexpectedShapeValidityProof),
+        _ => {}
+    }
     let statement_validation_seconds = statement_validation_started.elapsed().as_secs_f64();
+
+    let shape_prepare_started = Instant::now();
+    let shape_context = proof
+        .shape_validity
+        .as_ref()
+        .map(|validity| prepare_shape_validity_verifier_context(layout, &statement.shape, validity))
+        .transpose()?;
+    let shape_prepare_seconds = shape_prepare_started.elapsed().as_secs_f64();
+    let shape_verify_started = Instant::now();
+    let shape_openings = match (proof.shape_validity.as_ref(), shape_context.as_ref()) {
+        (Some(validity), Some(context)) => Some(verify_shape_validity_deferred(
+            parameters,
+            layout,
+            &statement.shape,
+            validity,
+            context,
+        )?),
+        (None, None) => None,
+        _ => return Err(ValidityProtocolError::ClaimShape),
+    };
+    let shape_verify_seconds = shape_verify_started.elapsed().as_secs_f64();
 
     let batch_point_started = Instant::now();
     let (batch_point, batch_binding) = derive_batch_point(statement, claimed_values, &proof.x)?;
@@ -901,7 +1051,12 @@ pub fn verify_validity_opening_profiled(
     )?;
     let point_prepare_seconds = point_prepare_started.elapsed().as_secs_f64();
     let point_verify_started = Instant::now();
-    let point_openings = verify_point_compilation_deferred(
+    let shape_lookup_families = match (shape_context.as_ref(), proof.shape_validity.as_ref()) {
+        (Some(context), Some(validity)) => context.power_lookup_families(layout, validity)?,
+        (None, None) => Vec::new(),
+        _ => return Err(ValidityProtocolError::ClaimShape),
+    };
+    let point_openings = verify_point_compilation_with_lookup_families_deferred(
         &batch_binding,
         parameters,
         &grid,
@@ -912,11 +1067,17 @@ pub fn verify_validity_opening_profiled(
         &point_publics,
         &batch_point,
         &proof.point,
+        shape_lookup_families,
     )?;
     let point_verify_seconds = point_verify_started.elapsed().as_secs_f64();
 
     let packed_eo_verify_started = Instant::now();
-    let packed_binding = packed_stage_binding(&batch_binding, &proof.tbv, &proof.point)?;
+    let packed_binding = packed_stage_binding(
+        &batch_binding,
+        &proof.tbv,
+        &proof.point,
+        proof.shape_validity.as_ref(),
+    )?;
     let packed = verify_hidden_packed_i8_reduction(
         parameters,
         &statement.bva_commitment,
@@ -964,6 +1125,10 @@ pub fn verify_validity_opening_profiled(
 
     let terminal_claim_collection_started = Instant::now();
     let mut terminal_claims = Section6VerifierClaimCollection::new();
+    if let Some(openings) = shape_openings.as_ref() {
+        terminal_claims.push_relation(&openings.identity, &grid)?;
+        terminal_claims.push_relation(&openings.coverage, &grid)?;
+    }
     // The joint reduction verified below includes every Point identity.
     let lookup_openings = point_openings
         .lookup
@@ -976,6 +1141,7 @@ pub fn verify_validity_opening_profiled(
     let v_claim = final_openings.resolve_v_terminal_claim(&grid)?;
     let terminal_binding = terminal_stage_binding(
         &packed_binding,
+        proof.shape_validity.as_ref(),
         &proof.packed_eo,
         &proof.final_eval,
         &proof.bva_opening,
@@ -1009,6 +1175,8 @@ pub fn verify_validity_opening_profiled(
             bva_open: bva_open_profile,
             terminal_open: terminal_open_profile,
             statement_validation_seconds,
+            shape_prepare_seconds,
+            shape_verify_seconds,
             batch_point_seconds,
             point_prepare_seconds,
             point_verify_seconds,
@@ -1081,24 +1249,28 @@ fn packed_stage_binding(
     batch_binding: &[u8; 32],
     tbv_statement: &TbvStatement,
     point: &PointCompilationProof,
+    shape_validity: Option<&ShapeValidityProof>,
 ) -> Result<[u8; 32], ValidityProtocolError> {
     let mut hasher = Sha256::new();
-    hasher.update(b"parcomm-validity-packed-stage-v1");
+    hasher.update(b"parcomm-validity-packed-stage-v2");
     hasher.update(batch_binding);
     append_serialized(&mut hasher, tbv_statement)?;
     append_serialized(&mut hasher, point)?;
+    append_serialized(&mut hasher, &shape_validity)?;
     Ok(hasher.finalize().into())
 }
 
 fn terminal_stage_binding(
     packed_binding: &[u8; 32],
+    shape_validity: Option<&ShapeValidityProof>,
     packed: &HiddenPackedEoProof,
     final_eval: &FinalEvaluationProof,
     bva: &HiddenBvaOpeningProof,
 ) -> Result<[u8; 32], ValidityProtocolError> {
     let mut hasher = Sha256::new();
-    hasher.update(b"parcomm-validity-terminal-stage-v1");
+    hasher.update(b"parcomm-validity-terminal-stage-v2");
     hasher.update(packed_binding);
+    append_serialized(&mut hasher, &shape_validity)?;
     append_serialized(&mut hasher, packed)?;
     append_serialized(&mut hasher, final_eval)?;
     append_serialized(&mut hasher, bva)?;
@@ -1182,13 +1354,7 @@ mod tests {
 
         let (private_committed, private_profile) =
             commit_validity_collection_profiled(&prover_parameters, &source, 8, &mut rng).unwrap();
-        assert!(private_profile.validity_prove_seconds >= 0.0);
-        verify_shape_commitment(
-            &verifier_parameters,
-            private_committed.statement(),
-            private_committed.validity(),
-        )
-        .unwrap();
+        assert_eq!(private_profile.validity_prove_seconds, 0.0);
 
         let m = committed.statement().layout.point_log();
         let claims = matrices
@@ -1202,9 +1368,9 @@ mod tests {
             .collect::<Vec<_>>();
         let claimed_values = claims.iter().map(|claim| claim.value).collect::<Vec<_>>();
 
-        let (proof, profile) = prove_opening(
+        let (proof, profile) = prove_validity_opening(
             &prover_parameters,
-            &committed,
+            &private_committed,
             &mut source,
             &claims,
             &mut rng,
@@ -1212,10 +1378,19 @@ mod tests {
         .unwrap();
         assert!(profile.terminal_claim_count > 0);
         assert_eq!(proof.physical_dory_proof_count(), 2);
+        assert_eq!(proof.physical_logup_reduction_count(), 1);
+        assert_eq!(
+            proof
+                .shape_validity
+                .as_ref()
+                .expect("size-private proof")
+                .physical_dory_proof_count(),
+            0
+        );
 
         let verification = verify_validity_opening(
             &verifier_parameters,
-            committed.statement(),
+            private_committed.statement(),
             &claimed_values,
             &proof,
         )
@@ -1230,7 +1405,7 @@ mod tests {
         bad_values[0] += Fr::from(1_u64);
         assert!(verify_validity_opening(
             &verifier_parameters,
-            committed.statement(),
+            private_committed.statement(),
             &bad_values,
             &proof,
         )
@@ -1241,7 +1416,7 @@ mod tests {
         bad_proof.tbv.commitment = proof.x.commitment.clone();
         assert!(verify_validity_opening(
             &verifier_parameters,
-            committed.statement(),
+            private_committed.statement(),
             &claimed_values,
             &bad_proof,
         )
@@ -1256,11 +1431,87 @@ mod tests {
             .blindfold_transcript_state[0] ^= 1;
         assert!(verify_validity_opening(
             &verifier_parameters,
-            committed.statement(),
+            private_committed.statement(),
             &claimed_values,
             &bad_joint,
         )
         .is_err());
+
+        // Shape reductions, the single joint LogUp, and the sole terminal
+        // opening are all transcript-bound to the integrated proof.
+        let mut bad_shape = proof.clone();
+        bad_shape
+            .shape_validity
+            .as_mut()
+            .expect("size-private proof")
+            .identity
+            .relation
+            .blindfold_transcript_state[0] ^= 1;
+        assert!(verify_validity_opening(
+            &verifier_parameters,
+            private_committed.statement(),
+            &claimed_values,
+            &bad_shape,
+        )
+        .is_err());
+
+        let mut bad_lookup = proof.clone();
+        let query_domain = bad_lookup
+            .point
+            .lookup
+            .domains
+            .iter_mut()
+            .find(|domain| domain.auxiliary_commitments.query_inverses.is_some())
+            .expect("query lookup domain");
+        query_domain.auxiliary_commitments.query_inverses = Some(proof.x.commitment.clone());
+        assert!(verify_validity_opening(
+            &verifier_parameters,
+            private_committed.statement(),
+            &claimed_values,
+            &bad_lookup,
+        )
+        .is_err());
+
+        let mut bad_terminal = proof.clone();
+        bad_terminal.terminal_opening.blindfold_transcript_state[0] ^= 1;
+        assert!(verify_validity_opening(
+            &verifier_parameters,
+            private_committed.statement(),
+            &claimed_values,
+            &bad_terminal,
+        )
+        .is_err());
+
+        let (point_only, _) = prove_opening(
+            &prover_parameters,
+            private_committed.opening(),
+            &mut source,
+            &claims,
+            &mut rng,
+        )
+        .unwrap();
+        let mut spliced = proof.clone();
+        spliced.point.lookup = point_only.point.lookup;
+        spliced.terminal_opening = point_only.terminal_opening;
+        assert!(verify_validity_opening(
+            &verifier_parameters,
+            private_committed.statement(),
+            &claimed_values,
+            &spliced,
+        )
+        .is_err());
+
+        let mut missing_shape = proof.clone();
+        missing_shape.shape_validity = None;
+        assert!(matches!(
+            verify_validity_opening(
+                &verifier_parameters,
+                private_committed.statement(),
+                &claimed_values,
+                &missing_shape,
+            ),
+            Err(ValidityProtocolError::MissingShapeValidityProof)
+        ));
     }
 
     #[test]
@@ -1307,7 +1558,7 @@ mod tests {
             &mut rng,
         )
         .unwrap();
-        let verification = verify_validity_opening(
+        let verification = verify_opening(
             &verifier_parameters,
             committed.statement(),
             &claimed_values,
@@ -1319,5 +1570,25 @@ mod tests {
             profile.terminal_claim_count
         );
         assert_eq!(proof.physical_dory_proof_count(), 2);
+    }
+
+    #[test]
+    fn auxiliary_grid_covers_single_full_shape_power_tables() {
+        let descriptor = crate::matrix_collection::DenseBvaDescriptor::from_shapes(&[(
+            (1_usize << 15) - 1,
+            (1_usize << 15) - 1,
+        )])
+        .unwrap();
+        let layout = Section6Layout::from_descriptor(&descriptor, 8).unwrap();
+        let rows = layout.row_cover().unwrap();
+        let point_parts = (layout.point_log() + 1).div_ceil(rows);
+        let short_table_cols = (1 + point_parts).next_power_of_two().max(4);
+        let short_required_entries = rows * short_table_cols;
+        let full_table_cover = ((1_usize << layout.point_log()) + 1).next_power_of_two();
+        let full_table_required_entries = full_table_cover * 2;
+        let grid_log = validity_auxiliary_dory_log(&layout).unwrap();
+        assert!((1_usize << grid_log) >= short_required_entries);
+        assert!((1_usize << grid_log) >= full_table_required_entries);
+        assert_eq!(1_usize << grid_log, full_table_required_entries);
     }
 }

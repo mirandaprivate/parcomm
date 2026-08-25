@@ -47,6 +47,7 @@ impl<'a> From<&'a CommittedDoryFieldVector> for HiddenRowProductColumnStatement<
             commitment: &committed.commitment,
             logical_len: committed.logical_len,
             matrix: committed.matrix.as_ref().map(|matrix| HiddenMatrixColumn {
+                logical_cols: matrix.logical_cols,
                 padded_cols: matrix.padded_cols,
                 column: committed.matrix_column,
             }),
@@ -338,6 +339,7 @@ pub fn verify_hidden_row_product(
                     commitment,
                     logical_len,
                     matrix: Some(HiddenMatrixColumn {
+                        logical_cols: prefix_count,
                         padded_cols,
                         column,
                     }),

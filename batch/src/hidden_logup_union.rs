@@ -9,12 +9,16 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     hidden_logup::{
-        prove_hidden_logup_openings_batch, prove_hidden_logup_parts_deferred,
-        prove_hidden_logup_parts_deferred_on_grid, verify_hidden_logup_openings_batch,
-        verify_hidden_logup_parts_deferred, verify_hidden_logup_parts_deferred_on_grid,
-        HiddenLogUpError, HiddenLogUpPartsProof, HiddenLogUpPartsReductionProof,
-        HiddenLogUpProverOpeningState, HiddenLogUpSide, HiddenLogUpVerifierOpeningState,
-        MixedLogUpColumn, MixedLogUpColumnStatement,
+        prove_hidden_logup_heterogeneous_parts_deferred_on_grid, prove_hidden_logup_openings_batch,
+        prove_hidden_logup_parts_deferred, prove_hidden_logup_parts_deferred_on_grid,
+        verify_hidden_logup_heterogeneous_parts_deferred_on_grid,
+        verify_hidden_logup_openings_batch, verify_hidden_logup_parts_deferred,
+        verify_hidden_logup_parts_deferred_on_grid, HiddenLogUpError,
+        HiddenLogUpHeterogeneousProverOpeningState, HiddenLogUpHeterogeneousReductionProof,
+        HiddenLogUpHeterogeneousVerifierOpeningState, HiddenLogUpPartsProof,
+        HiddenLogUpPartsReductionProof, HiddenLogUpProverOpeningState, HiddenLogUpSide,
+        HiddenLogUpVerifierOpeningState, MixedLogUpColumn, MixedLogUpColumnStatement,
+        TaggedMixedLogUpProverPart, TaggedMixedLogUpVerifierPart,
     },
     hidden_relation::{HiddenRelationTable, HiddenRelationTableStatement, PublicRelationTable},
     jolt_dory::{DoryProverParameters, DoryVerifierParameters},
@@ -35,6 +39,24 @@ pub struct HiddenLogUpUnionProverFamily<'a> {
 pub struct HiddenLogUpUnionVerifierFamily<'a> {
     pub query_parts: &'a [Vec<MixedLogUpColumnStatement<'a>>],
     pub table_parts: &'a [Vec<MixedLogUpColumnStatement<'a>>],
+}
+
+/// One owned prover-side family together with the long-lived hidden table
+/// views used to rebind its deferred terminal claims.
+pub struct HiddenLogUpUnionProverFamilyData<'a> {
+    pub query_parts: Vec<Vec<MixedLogUpColumn<'a>>>,
+    pub table_parts: Vec<Vec<MixedLogUpColumn<'a>>>,
+    pub query_hidden_parts: Vec<Vec<HiddenRelationTable<'a>>>,
+    pub table_hidden_parts: Vec<Vec<HiddenRelationTable<'a>>>,
+}
+
+/// One owned verifier-side family together with the long-lived hidden table
+/// statements used to rebind its deferred terminal claims.
+pub struct HiddenLogUpUnionVerifierFamilyData<'a> {
+    pub query_parts: Vec<Vec<MixedLogUpColumnStatement<'a>>>,
+    pub table_parts: Vec<Vec<MixedLogUpColumnStatement<'a>>>,
+    pub query_hidden_parts: Vec<Vec<HiddenRelationTableStatement<'a>>>,
+    pub table_hidden_parts: Vec<Vec<HiddenRelationTableStatement<'a>>>,
 }
 
 #[derive(Debug)]
@@ -234,6 +256,55 @@ pub fn prove_hidden_logup_union_deferred_on_grid_with_hidden_tables<'a>(
     ))
 }
 
+/// Reduce owned lookup families on the shared grid and retain only their
+/// long-lived hidden table views in the terminal state.
+pub fn prove_hidden_logup_union_family_data_deferred_on_grid<'a>(
+    label: &[u8],
+    parameters: &DoryProverParameters,
+    grid: &Section6DoryGrid,
+    family_data: &[HiddenLogUpUnionProverFamilyData<'a>],
+    rng: &mut impl RngCore,
+) -> Result<
+    (
+        HiddenLogUpHeterogeneousReductionProof,
+        HiddenLogUpHeterogeneousProverOpeningState<'a>,
+    ),
+    HiddenLogUpUnionError,
+> {
+    let shape = union_shape(
+        family_data
+            .iter()
+            .map(|family| (family.query_parts.as_slice(), family.table_parts.as_slice())),
+        prover_column_len,
+    )?;
+    validate_family_data_prover_hidden_tables(family_data)?;
+    let mut query_parts = Vec::new();
+    let mut table_parts = Vec::new();
+    for (family_index, family) in family_data.iter().enumerate() {
+        let tag = Fr::from(family_index as u64 + 1);
+        query_parts.extend(
+            family
+                .query_parts
+                .iter()
+                .map(|columns| TaggedMixedLogUpProverPart { tag, columns }),
+        );
+        table_parts.extend(
+            family
+                .table_parts
+                .iter()
+                .map(|columns| TaggedMixedLogUpProverPart { tag, columns }),
+        );
+    }
+    Ok(prove_hidden_logup_heterogeneous_parts_deferred_on_grid(
+        &union_label(label, &shape),
+        parameters,
+        grid,
+        &query_parts,
+        &table_parts,
+        rng,
+    )?)
+}
+
 /// Verify all lookup families with one tagged multipart LogUp proof.
 pub fn verify_hidden_logup_union(
     label: &[u8],
@@ -364,6 +435,49 @@ pub fn verify_hidden_logup_union_deferred_on_grid_with_hidden_tables<'a>(
     Ok(pending.rebind_parts_hidden_tables(proof, query_hidden_parts, table_hidden_parts)?)
 }
 
+/// Verify owned lookup families on the shared grid and retain only their
+/// long-lived hidden table statements in the terminal state.
+pub fn verify_hidden_logup_union_family_data_deferred_on_grid<'a>(
+    label: &[u8],
+    parameters: &DoryVerifierParameters,
+    grid: &Section6DoryGrid,
+    family_data: &[HiddenLogUpUnionVerifierFamilyData<'a>],
+    proof: &'a HiddenLogUpHeterogeneousReductionProof,
+) -> Result<HiddenLogUpHeterogeneousVerifierOpeningState<'a>, HiddenLogUpUnionError> {
+    let shape = union_shape(
+        family_data
+            .iter()
+            .map(|family| (family.query_parts.as_slice(), family.table_parts.as_slice())),
+        verifier_column_len,
+    )?;
+    validate_family_data_verifier_hidden_tables(family_data)?;
+    let mut query_parts = Vec::new();
+    let mut table_parts = Vec::new();
+    for (family_index, family) in family_data.iter().enumerate() {
+        let tag = Fr::from(family_index as u64 + 1);
+        query_parts.extend(
+            family
+                .query_parts
+                .iter()
+                .map(|columns| TaggedMixedLogUpVerifierPart { tag, columns }),
+        );
+        table_parts.extend(
+            family
+                .table_parts
+                .iter()
+                .map(|columns| TaggedMixedLogUpVerifierPart { tag, columns }),
+        );
+    }
+    Ok(verify_hidden_logup_heterogeneous_parts_deferred_on_grid(
+        &union_label(label, &shape),
+        parameters,
+        grid,
+        &query_parts,
+        &table_parts,
+        proof,
+    )?)
+}
+
 struct UnionShape {
     logical_len: usize,
     max_width: usize,
@@ -444,6 +558,74 @@ fn verifier_column_len(column: &MixedLogUpColumnStatement<'_>) -> usize {
         MixedLogUpColumnStatement::Hidden(table) => table.logical_len,
         MixedLogUpColumnStatement::Public(table) => table.logical_len(),
     }
+}
+
+fn validate_family_data_prover_hidden_tables(
+    family_data: &[HiddenLogUpUnionProverFamilyData<'_>],
+) -> Result<(), HiddenLogUpUnionError> {
+    for family in family_data {
+        for (parts, supplied) in [
+            (&family.query_parts, &family.query_hidden_parts),
+            (&family.table_parts, &family.table_hidden_parts),
+        ] {
+            if parts.len() != supplied.len() {
+                return Err(HiddenLogUpError::ProofShape.into());
+            }
+            for (part, supplied_part) in parts.iter().zip(supplied) {
+                let extracted = part
+                    .iter()
+                    .filter_map(|column| match column {
+                        MixedLogUpColumn::Hidden(table) => Some(*table),
+                        MixedLogUpColumn::Public(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                if extracted.len() != supplied_part.len()
+                    || extracted.iter().zip(supplied_part).any(|(left, right)| {
+                        left.values.len() != right.values.len()
+                            || left.values.as_ptr() != right.values.as_ptr()
+                            || !std::ptr::eq(left.committed, right.committed)
+                    })
+                {
+                    return Err(HiddenLogUpError::ProofShape.into());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_family_data_verifier_hidden_tables(
+    family_data: &[HiddenLogUpUnionVerifierFamilyData<'_>],
+) -> Result<(), HiddenLogUpUnionError> {
+    for family in family_data {
+        for (parts, supplied) in [
+            (&family.query_parts, &family.query_hidden_parts),
+            (&family.table_parts, &family.table_hidden_parts),
+        ] {
+            if parts.len() != supplied.len() {
+                return Err(HiddenLogUpError::ProofShape.into());
+            }
+            for (part, supplied_part) in parts.iter().zip(supplied) {
+                let extracted = part
+                    .iter()
+                    .filter_map(|column| match column {
+                        MixedLogUpColumnStatement::Hidden(table) => Some(*table),
+                        MixedLogUpColumnStatement::Public(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                if extracted.len() != supplied_part.len()
+                    || extracted.iter().zip(supplied_part).any(|(left, right)| {
+                        left.commitment != right.commitment
+                            || left.logical_len != right.logical_len
+                            || left.matrix != right.matrix
+                    })
+                {
+                    return Err(HiddenLogUpError::ProofShape.into());
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn family_tag_columns(family_count: usize, logical_len: usize) -> Vec<Vec<Fr>> {
@@ -575,11 +757,16 @@ fn union_label(label: &[u8], shape: &UnionShape) -> [u8; 32] {
 mod tests {
     use super::*;
     use ark_bn254::Fr;
+    use ark_ff::Field;
     use ark_std::rand::{rngs::StdRng, SeedableRng};
 
     use crate::{
         hidden_logup::{MixedLogUpColumn, MixedLogUpColumnStatement},
-        hidden_relation::{HiddenRelationTable, HiddenRelationTableStatement, PublicRelationTable},
+        hidden_relation::{
+            prove_hidden_relation_openings_batch, verify_hidden_relation_openings_batch,
+            HiddenRelationTable, HiddenRelationTableStatement, HiddenScalarWitness,
+            PublicRelationTable,
+        },
         jolt_dory::{commit_field_vector_zk, setup_dory_parameters},
         section6_final_opening::{
             resolve_section6_hidden_relation_prover_claim,
@@ -927,5 +1114,207 @@ mod tests {
         );
         verify_hidden_logup_openings_batch(&verifier_parameters, &[&verifier_pending], &opening)
             .unwrap();
+    }
+
+    fn heterogeneous_full_table_round_trip(table_len: usize) -> (usize, usize, usize) {
+        let grid = Section6DoryGrid::new(8).unwrap();
+        let (prover_parameters, verifier_parameters) = setup_dory_parameters(grid.num_vars());
+        let query_exponents = (0..4)
+            .map(|value| Fr::from(value as u64))
+            .collect::<Vec<_>>();
+        let query_powers = (0..4)
+            .map(|value| Fr::from(2_u64).pow([value as u64]))
+            .collect::<Vec<_>>();
+        let table_exponents = (0..table_len)
+            .map(|value| Fr::from(value as u64))
+            .collect::<Vec<_>>();
+        let table_powers = (0..table_len)
+            .map(|value| Fr::from(2_u64).pow([value as u64]))
+            .collect::<Vec<_>>();
+        let query_parts = vec![vec![
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&query_exponents)),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&query_powers)),
+        ]];
+        let table_parts = vec![vec![
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&table_exponents)),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&table_powers)),
+        ]];
+        let prover_families = [HiddenLogUpUnionProverFamilyData {
+            query_parts,
+            table_parts,
+            query_hidden_parts: vec![Vec::new()],
+            table_hidden_parts: vec![Vec::new()],
+        }];
+        let mut rng = StdRng::seed_from_u64(0x4845_5445_524f + table_len as u64);
+        let (proof, pending) = prove_hidden_logup_union_family_data_deferred_on_grid(
+            b"heterogeneous-full-table",
+            &prover_parameters,
+            &grid,
+            &prover_families,
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(proof.domains.len(), 2);
+
+        let verifier_query_parts = vec![vec![
+            MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(&query_exponents)),
+            MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(&query_powers)),
+        ]];
+        let verifier_table_parts = vec![vec![
+            MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(&table_exponents)),
+            MixedLogUpColumnStatement::Public(PublicRelationTable::Dense(&table_powers)),
+        ]];
+        let verifier_families = [HiddenLogUpUnionVerifierFamilyData {
+            query_parts: verifier_query_parts,
+            table_parts: verifier_table_parts,
+            query_hidden_parts: vec![Vec::new()],
+            table_hidden_parts: vec![Vec::new()],
+        }];
+        let verifier_pending = verify_hidden_logup_union_family_data_deferred_on_grid(
+            b"heterogeneous-full-table",
+            &verifier_parameters,
+            &grid,
+            &verifier_families,
+            &proof,
+        )
+        .unwrap();
+        let prover_openings = pending.relation_openings().unwrap();
+        let verifier_openings = verifier_pending.relation_openings().unwrap();
+        let hidden_claims = prover_openings
+            .iter()
+            .map(|opening| opening.hidden_tables().len())
+            .sum();
+        assert_eq!(prover_openings.len(), verifier_openings.len());
+        let opening =
+            prove_hidden_relation_openings_batch(&prover_parameters, &prover_openings, &mut rng)
+                .unwrap();
+        verify_hidden_relation_openings_batch(&verifier_parameters, &verifier_openings, &opening)
+            .unwrap();
+
+        let mut tampered = proof.clone();
+        let delta = HiddenScalarWitness::commit(&prover_parameters, Fr::from(1_u64), &mut rng);
+        tampered.domains[0].claimed_sum_commitment += delta.commitment;
+        assert!(verify_hidden_logup_union_family_data_deferred_on_grid(
+            b"heterogeneous-full-table",
+            &verifier_parameters,
+            &grid,
+            &verifier_families,
+            &tampered,
+        )
+        .is_err());
+        (proof.domains.len(), prover_openings.len(), hidden_claims)
+    }
+
+    #[test]
+    fn heterogeneous_tagged_power_lookup_round_trips_without_table_splitting() {
+        let metrics = heterogeneous_full_table_round_trip(8);
+        assert_eq!(metrics.0, 2);
+        assert_eq!(metrics.1, 4);
+    }
+
+    #[test]
+    fn terminal_claim_count_is_independent_of_full_power_table_length() {
+        assert_eq!(
+            heterogeneous_full_table_round_trip(8),
+            heterogeneous_full_table_round_trip(64)
+        );
+    }
+
+    #[test]
+    fn heterogeneous_power_lookup_rejects_wrong_power() {
+        let grid = Section6DoryGrid::new(6).unwrap();
+        let (prover_parameters, _) = setup_dory_parameters(grid.num_vars());
+        let query_exponents = field_column(&[0, 1, 2, 3]);
+        let query_powers = field_column(&[1, 2, 5, 8]);
+        let table_exponents = field_column(&[0, 1, 2, 3, 4, 5, 6, 7]);
+        let table_powers = (0..8)
+            .map(|value| Fr::from(2_u64).pow([value]))
+            .collect::<Vec<_>>();
+        let query_parts = vec![vec![
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&query_exponents)),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&query_powers)),
+        ]];
+        let table_parts = vec![vec![
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&table_exponents)),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&table_powers)),
+        ]];
+        let families = [HiddenLogUpUnionProverFamilyData {
+            query_parts,
+            table_parts,
+            query_hidden_parts: vec![Vec::new()],
+            table_hidden_parts: vec![Vec::new()],
+        }];
+        let mut rng = StdRng::seed_from_u64(0xBAD0_5000);
+        assert!(matches!(
+            prove_hidden_logup_union_family_data_deferred_on_grid(
+                b"heterogeneous-wrong-power",
+                &prover_parameters,
+                &grid,
+                &families,
+                &mut rng,
+            ),
+            Err(HiddenLogUpUnionError::LogUp(
+                HiddenLogUpError::MissingQueryTuple { query_index: 2 }
+            ))
+        ));
+    }
+
+    #[test]
+    fn heterogeneous_family_tags_reject_cross_family_matches() {
+        let grid = Section6DoryGrid::new(6).unwrap();
+        let (prover_parameters, _) = setup_dory_parameters(grid.num_vars());
+        let query_exponents = field_column(&[2, 2, 2, 2]);
+        let base_two_query_powers = field_column(&[9, 9, 9, 9]);
+        let base_three_query_powers = field_column(&[4, 4, 4, 4]);
+        let table_exponents = field_column(&[0, 1, 2, 3, 4, 5, 6, 7]);
+        let base_two_table_powers = (0..8)
+            .map(|value| Fr::from(2_u64).pow([value]))
+            .collect::<Vec<_>>();
+        let base_three_table_powers = (0..8)
+            .map(|value| Fr::from(3_u64).pow([value]))
+            .collect::<Vec<_>>();
+        let first_query = vec![vec![
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&query_exponents)),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&base_two_query_powers)),
+        ]];
+        let first_table = vec![vec![
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&table_exponents)),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&base_two_table_powers)),
+        ]];
+        let second_query = vec![vec![
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&query_exponents)),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&base_three_query_powers)),
+        ]];
+        let second_table = vec![vec![
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&table_exponents)),
+            MixedLogUpColumn::Public(PublicRelationTable::Dense(&base_three_table_powers)),
+        ]];
+        let families = [
+            HiddenLogUpUnionProverFamilyData {
+                query_parts: first_query,
+                table_parts: first_table,
+                query_hidden_parts: vec![Vec::new()],
+                table_hidden_parts: vec![Vec::new()],
+            },
+            HiddenLogUpUnionProverFamilyData {
+                query_parts: second_query,
+                table_parts: second_table,
+                query_hidden_parts: vec![Vec::new()],
+                table_hidden_parts: vec![Vec::new()],
+            },
+        ];
+        let mut rng = StdRng::seed_from_u64(0xC205_5FA1);
+        assert!(matches!(
+            prove_hidden_logup_union_family_data_deferred_on_grid(
+                b"heterogeneous-cross-family",
+                &prover_parameters,
+                &grid,
+                &families,
+                &mut rng,
+            ),
+            Err(HiddenLogUpUnionError::LogUp(
+                HiddenLogUpError::MissingQueryTuple { query_index: 0 }
+            ))
+        ));
     }
 }

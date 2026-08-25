@@ -35,13 +35,14 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     hidden_logup::{
-        HiddenLogUpError, HiddenLogUpPartsReductionProof, HiddenLogUpProverOpeningState,
-        HiddenLogUpVerifierOpeningState, MixedLogUpColumn, MixedLogUpColumnStatement,
+        HiddenLogUpError, HiddenLogUpHeterogeneousProverOpeningState,
+        HiddenLogUpHeterogeneousReductionProof, HiddenLogUpHeterogeneousVerifierOpeningState,
+        MixedLogUpColumn, MixedLogUpColumnStatement,
     },
     hidden_logup_union::{
-        prove_hidden_logup_union_deferred_on_grid_with_hidden_tables,
-        verify_hidden_logup_union_deferred_on_grid_with_hidden_tables, HiddenLogUpUnionError,
-        HiddenLogUpUnionProverFamily, HiddenLogUpUnionVerifierFamily,
+        prove_hidden_logup_union_family_data_deferred_on_grid,
+        verify_hidden_logup_union_family_data_deferred_on_grid, HiddenLogUpUnionError,
+        HiddenLogUpUnionProverFamilyData, HiddenLogUpUnionVerifierFamilyData,
     },
     hidden_relation::{
         HiddenRelationError, HiddenRelationTable, HiddenRelationTableStatement, OwnedPublicColumn,
@@ -146,10 +147,11 @@ impl PointMatrixStatement {
         Ok(())
     }
 
-    pub fn column(&self, column: usize) -> HiddenRelationTableStatement<'_> {
+    pub fn column(&self, logical_cols: usize, column: usize) -> HiddenRelationTableStatement<'_> {
         HiddenRelationTableStatement::matrix_column(
             &self.commitment,
             self.padded_rows,
+            logical_cols,
             self.padded_cols,
             column,
         )
@@ -207,6 +209,7 @@ impl TbvStatement {
         HiddenRelationTableStatement::matrix_column(
             &self.commitment,
             self.padded_rows,
+            self.logical_cols(),
             self.padded_cols(),
             0,
         )
@@ -216,6 +219,7 @@ impl TbvStatement {
         HiddenRelationTableStatement::matrix_column(
             &self.commitment,
             self.padded_rows,
+            self.logical_cols(),
             self.padded_cols(),
             1 + coordinate,
         )
@@ -317,6 +321,7 @@ impl PointAuxStatement {
         HiddenRelationTableStatement::matrix_column(
             &self.commitment,
             self.padded_rows,
+            self.columns().count(),
             self.columns().padded_cols(),
             column,
         )
@@ -379,6 +384,7 @@ impl PointKeyStatement {
         HiddenRelationTableStatement::matrix_column(
             &self.commitment,
             self.padded_rows,
+            PointKeyColumns::COUNT,
             PointKeyColumns::padded_cols(),
             column,
         )
@@ -410,17 +416,17 @@ impl CommittedPointKeys {
 pub struct PointCompilationProof {
     pub aux: PointAuxStatement,
     pub keys: PointKeyStatement,
-    pub lookup: HiddenLogUpPartsReductionProof,
+    pub lookup: HiddenLogUpHeterogeneousReductionProof,
 }
 
 /// Prover-side deferred openings produced by one point compilation.
 pub struct PointProverOpenings<'a> {
-    pub lookup: HiddenLogUpProverOpeningState<'a>,
+    pub lookup: HiddenLogUpHeterogeneousProverOpeningState<'a>,
 }
 
 /// Verifier-side deferred openings mirroring the prover structure.
 pub struct PointVerifierOpenings<'a> {
-    pub lookup: HiddenLogUpVerifierOpeningState<'a>,
+    pub lookup: HiddenLogUpHeterogeneousVerifierOpeningState<'a>,
 }
 
 /// Challenges derived after `X`, the TBV, and the auxiliary matrix are
@@ -1185,7 +1191,7 @@ fn resolve_verifier_table<'a>(
     match reference {
         PointTableRef::DEta(h) => shape_statement.mask_column(*h),
         PointTableRef::DZ(h) => shape_statement.mask_column(eta_width + *h),
-        PointTableRef::X(h) => x_statement.column(*h),
+        PointTableRef::X(h) => x_statement.column(layout.pair_width(), *h),
         PointTableRef::AuxX(h) => aux_statement.column(aux_columns.x_selected(*h)),
         PointTableRef::EtaPrefix(h) => aux_statement.column(aux_columns.eta_prefix(*h)),
         PointTableRef::GammaR => aux_statement.column(aux_columns.gamma_r()),
@@ -1294,6 +1300,38 @@ pub fn prove_point_compilation_deferred<'a>(
     batch_point: &[Fr],
     rng: &mut impl RngCore,
 ) -> Result<(PointCompilationProof, PointProverOpenings<'a>), PointCompilationError> {
+    prove_point_compilation_with_lookup_families_deferred(
+        label,
+        parameters,
+        grid,
+        shapes,
+        x,
+        tbv,
+        aux,
+        keys,
+        publics,
+        batch_point,
+        Vec::new(),
+        rng,
+    )
+}
+
+/// Reduce point compilation together with additional tagged lookup families.
+#[allow(clippy::too_many_arguments)]
+pub fn prove_point_compilation_with_lookup_families_deferred<'a>(
+    label: &[u8],
+    parameters: &DoryProverParameters,
+    grid: &Section6DoryGrid,
+    shapes: &'a CommittedShapeMasks,
+    x: &'a CommittedPointMatrix,
+    tbv: &'a CommittedTbv,
+    aux: &'a CommittedPointAux,
+    keys: &'a CommittedPointKeys,
+    publics: &'a PointPublicTables,
+    batch_point: &[Fr],
+    mut additional_lookup_families: Vec<HiddenLogUpUnionProverFamilyData<'a>>,
+    rng: &mut impl RngCore,
+) -> Result<(PointCompilationProof, PointProverOpenings<'a>), PointCompilationError> {
     let layout = shapes.layout();
     let (_, binding) = derive_point_challenges(
         label,
@@ -1338,26 +1376,26 @@ pub fn prove_point_compilation_deferred<'a>(
             ]
         })
         .collect::<Vec<_>>();
-    let families = [
-        HiddenLogUpUnionProverFamily {
-            query_parts: &source_query,
-            table_parts: &source_tables,
+    let mut families = vec![
+        HiddenLogUpUnionProverFamilyData {
+            query_parts: source_query,
+            table_parts: source_tables,
+            query_hidden_parts: vec![vec![q_key_table]],
+            table_hidden_parts: vec![vec![t_key_table]],
         },
-        HiddenLogUpUnionProverFamily {
-            query_parts: &power_query,
-            table_parts: &power_tables,
+        HiddenLogUpUnionProverFamilyData {
+            query_parts: power_query,
+            table_hidden_parts: (0..power_tables.len()).map(|_| Vec::new()).collect(),
+            table_parts: power_tables,
+            query_hidden_parts: vec![vec![gamma_r_table, power_table]],
         },
     ];
-    let query_hidden_parts = vec![vec![q_key_table], vec![gamma_r_table, power_table]];
-    let mut table_hidden_parts = vec![vec![t_key_table]];
-    table_hidden_parts.extend((0..power_tables.len()).map(|_| Vec::new()));
-    let (lookup, lookup_state) = prove_hidden_logup_union_deferred_on_grid_with_hidden_tables(
+    families.append(&mut additional_lookup_families);
+    let (lookup, lookup_state) = prove_hidden_logup_union_family_data_deferred_on_grid(
         &scoped_label(b"lookup-union", &binding),
         parameters,
         grid,
         &families,
-        query_hidden_parts,
-        table_hidden_parts,
         rng,
     )?;
 
@@ -1386,6 +1424,36 @@ pub fn verify_point_compilation_deferred<'a>(
     publics: &'a PointPublicTables,
     batch_point: &[Fr],
     proof: &'a PointCompilationProof,
+) -> Result<PointVerifierOpenings<'a>, PointCompilationError> {
+    verify_point_compilation_with_lookup_families_deferred(
+        label,
+        parameters,
+        grid,
+        layout,
+        shape_statement,
+        x_statement,
+        tbv_statement,
+        publics,
+        batch_point,
+        proof,
+        Vec::new(),
+    )
+}
+
+/// Verify point compilation together with additional tagged lookup families.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_point_compilation_with_lookup_families_deferred<'a>(
+    label: &[u8],
+    parameters: &DoryVerifierParameters,
+    grid: &Section6DoryGrid,
+    layout: &Section6Layout,
+    shape_statement: &'a ShapeCommitStatement,
+    x_statement: &'a PointMatrixStatement,
+    tbv_statement: &'a TbvStatement,
+    publics: &'a PointPublicTables,
+    batch_point: &[Fr],
+    proof: &'a PointCompilationProof,
+    mut additional_lookup_families: Vec<HiddenLogUpUnionVerifierFamilyData<'a>>,
 ) -> Result<PointVerifierOpenings<'a>, PointCompilationError> {
     layout.validate()?;
     shape_statement.validate(layout)?;
@@ -1425,33 +1493,30 @@ pub fn verify_point_compilation_deferred<'a>(
             ]
         })
         .collect::<Vec<_>>();
-    let families = [
-        HiddenLogUpUnionVerifierFamily {
-            query_parts: &source_query,
-            table_parts: &source_tables,
+    let mut families = vec![
+        HiddenLogUpUnionVerifierFamilyData {
+            query_parts: source_query,
+            table_parts: source_tables,
+            query_hidden_parts: vec![vec![proof.keys.column(PointKeyColumns::Q_KEY)]],
+            table_hidden_parts: vec![vec![proof.keys.column(PointKeyColumns::T_KEY)]],
         },
-        HiddenLogUpUnionVerifierFamily {
-            query_parts: &power_query,
-            table_parts: &power_tables,
+        HiddenLogUpUnionVerifierFamilyData {
+            query_parts: power_query,
+            table_hidden_parts: (0..power_tables.len()).map(|_| Vec::new()).collect(),
+            table_parts: power_tables,
+            query_hidden_parts: vec![vec![
+                proof.aux.column(proof.aux.columns().gamma_r()),
+                proof.keys.column(PointKeyColumns::POWER),
+            ]],
         },
     ];
-    let query_hidden_parts = vec![
-        vec![proof.keys.column(PointKeyColumns::Q_KEY)],
-        vec![
-            proof.aux.column(proof.aux.columns().gamma_r()),
-            proof.keys.column(PointKeyColumns::POWER),
-        ],
-    ];
-    let mut table_hidden_parts = vec![vec![proof.keys.column(PointKeyColumns::T_KEY)]];
-    table_hidden_parts.extend((0..power_tables.len()).map(|_| Vec::new()));
-    let lookup = verify_hidden_logup_union_deferred_on_grid_with_hidden_tables(
+    families.append(&mut additional_lookup_families);
+    let lookup = verify_hidden_logup_union_family_data_deferred_on_grid(
         &scoped_label(b"lookup-union", &binding),
         parameters,
         grid,
         &families,
         &proof.lookup,
-        query_hidden_parts,
-        table_hidden_parts,
     )?;
 
     Ok(PointVerifierOpenings { lookup })

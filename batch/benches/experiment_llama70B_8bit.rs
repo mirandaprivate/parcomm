@@ -647,9 +647,10 @@ fn parse_arguments(
             "--allow-noncanonical-layout" | "--allow-non-70b-layout" => {
                 allow_noncanonical_layout = true
             }
-            "--shape-validity-proof" | "--shape-validity" | "--summary-only" => {
-                experiment_arguments.push(argument)
-            }
+            "--shape-validity-proof"
+            | "--shape-validity"
+            | "--skip-shape-validity-proof"
+            | "--summary-only" => experiment_arguments.push(argument),
             "--bench" => {}
             "--manifest" | "--bva" | "--conversion-output-dir" | "--force-conversion" => {
                 bail!("{argument} is disabled: this benchmark never materializes a disk BVA")
@@ -746,7 +747,9 @@ fn print_help(mode: StreamMode) {
            --allow-non-64-threads   Permit a local smoke run and skip the formal RAM gate\n\
            --allow-noncanonical-layout\n\
                                    Permit a tiny checkpoint only for a local smoke run\n\
-           --shape-validity-proof   Include the optional shape-validity proof\n\
+           --shape-validity-proof   Explicitly enable shape validity proving (default)\n\
+           --skip-shape-validity-proof\n\
+                                   Disable shape validity proving for a performance-only run\n\
            --summary-only           Hide detailed protocol metrics\n\
            -h, --help               Print this help",
         mode.bench_name(),

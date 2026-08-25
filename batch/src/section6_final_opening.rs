@@ -9,14 +9,13 @@ use jolt_blindfold::{
     prove as prove_blindfold, BlindFoldProof, BlindFoldProtocol, BlindFoldWitness,
 };
 use jolt_claims::{constant, opening, Expr};
-use jolt_crypto::{Bn254G1, HomomorphicCommitment, Pedersen, VectorCommitment};
+use jolt_crypto::{Bn254G1, HomomorphicCommitment, JoltGroup, Pedersen, VectorCommitment};
 use jolt_dory::{DoryCommitment, DoryHint, DoryScheme};
 use jolt_field::{Fr, FromPrimitiveInt};
 use jolt_openings::{
-    AdditivelyHomomorphic, HomomorphicBatch, StreamingCommitment, ZkBatchOpeningScheme,
-    ZkEvaluationClaim, ZkOpeningScheme,
+    AdditivelyHomomorphic, StreamingCommitment, ZkEvaluationClaim, ZkOpeningScheme,
 };
-use jolt_poly::{EqPolynomial, MultilinearPoly, Point, RlcSource, UnivariatePoly};
+use jolt_poly::{eq_index_msb, EqPolynomial, MultilinearPoly, Point, RlcSource, UnivariatePoly};
 use jolt_sumcheck::{
     CommittedSumcheckBuilder, CommittedSumcheckProof, SumcheckDomainSpec, SumcheckProof,
     SumcheckStatement,
@@ -218,6 +217,11 @@ pub struct CommittedSection6DorySource {
 #[derive(Clone, Copy)]
 pub enum Section6FinalOpeningData<'a> {
     Field(&'a [ArkFr]),
+    WholeMatrix {
+        values: &'a [ArkFr],
+        padded_rows: usize,
+        padded_cols: usize,
+    },
     MatrixColumn {
         values: &'a [ArkFr],
         padded_rows: usize,
@@ -230,6 +234,7 @@ impl Section6FinalOpeningData<'_> {
     fn physical_len(self) -> usize {
         match self {
             Self::Field(values) => values.len(),
+            Self::WholeMatrix { values, .. } => values.len(),
             Self::MatrixColumn { values, .. } => values.len(),
         }
     }
@@ -237,9 +242,42 @@ impl Section6FinalOpeningData<'_> {
     fn value(self, index: usize) -> Fr {
         match self {
             Self::Field(values) => Fr::from(values[index]),
+            Self::WholeMatrix { values, .. } => Fr::from(values[index]),
             Self::MatrixColumn { values, .. } => Fr::from(values[index]),
         }
     }
+}
+
+/// Functional applied to one committed source before the terminal opening.
+///
+/// Point claims use the ordinary multilinear equality polynomial at
+/// `point_msb`. Sparse matrix claims retain the same tensor point but restrict
+/// its column equality factor to the listed logical columns.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Section6FinalOpeningFunctional<'a> {
+    Point,
+    SparseMatrixColumns {
+        padded_rows: usize,
+        logical_cols: usize,
+        padded_cols: usize,
+        selected_columns: &'a [usize],
+    },
+}
+
+/// A Pedersen commitment used by the terminal relation link.
+///
+/// Matrix-column reductions retain their original column commitments until
+/// the final batching coefficients are known. This lets the verifier evaluate
+/// all terminal commitment expressions with one global MSM.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Section6EvaluationCommitment<'a> {
+    Direct(Bn254G1),
+    MatrixColumns {
+        logical_cols: usize,
+        padded_cols: usize,
+        selected_columns: &'a [usize],
+        commitments: &'a [Bn254G1],
+    },
 }
 
 /// One hidden arbitrary-point MLE claim held by the prover.
@@ -248,7 +286,9 @@ pub struct Section6FinalOpeningProverClaim<'a> {
     pub data: Section6FinalOpeningData<'a>,
     pub committed: &'a CommittedSection6DorySource,
     pub point_msb: &'a [ArkFr],
+    pub functional: Section6FinalOpeningFunctional<'a>,
     pub evaluation: &'a HiddenScalarWitness,
+    pub evaluation_commitment: Section6EvaluationCommitment<'a>,
 }
 
 /// Commitment-only view of one arbitrary-point MLE claim.
@@ -257,15 +297,46 @@ pub struct Section6FinalOpeningVerifierClaim<'a> {
     pub commitment: &'a DoryCommitment,
     pub logical_len: usize,
     pub point_msb: &'a [ArkFr],
-    pub evaluation_commitment: Bn254G1,
+    pub functional: Section6FinalOpeningFunctional<'a>,
+    pub evaluation_commitment: Section6EvaluationCommitment<'a>,
 }
 
 enum ResolvedFieldData<'a> {
     Vector(&'a [ArkFr]),
+    WholeMatrix(Arc<CommittedDoryFieldMatrix>),
     Matrix {
         matrix: Arc<CommittedDoryFieldMatrix>,
         column: usize,
     },
+}
+
+enum ResolvedFieldFunctional {
+    Point,
+    SparseMatrixColumns {
+        padded_rows: usize,
+        logical_cols: usize,
+        padded_cols: usize,
+        selected_columns: Vec<usize>,
+    },
+}
+
+impl ResolvedFieldFunctional {
+    fn as_functional(&self) -> Section6FinalOpeningFunctional<'_> {
+        match self {
+            Self::Point => Section6FinalOpeningFunctional::Point,
+            Self::SparseMatrixColumns {
+                padded_rows,
+                logical_cols,
+                padded_cols,
+                selected_columns,
+            } => Section6FinalOpeningFunctional::SparseMatrixColumns {
+                padded_rows: *padded_rows,
+                logical_cols: *logical_cols,
+                padded_cols: *padded_cols,
+                selected_columns,
+            },
+        }
+    }
 }
 
 /// Owned adapter from a relation operand to one global-opening prover claim.
@@ -273,6 +344,7 @@ pub struct ResolvedSection6FieldProverClaim<'a> {
     source: CommittedSection6DorySource,
     data: ResolvedFieldData<'a>,
     point_msb: Vec<ArkFr>,
+    functional: ResolvedFieldFunctional,
 }
 
 impl ResolvedSection6FieldProverClaim<'_> {
@@ -284,8 +356,24 @@ impl ResolvedSection6FieldProverClaim<'_> {
         &'a self,
         evaluation: &'a HiddenScalarWitness,
     ) -> Section6FinalOpeningProverClaim<'a> {
+        self.as_claim_with_evaluation_commitment(
+            evaluation,
+            Section6EvaluationCommitment::Direct(evaluation.commitment),
+        )
+    }
+
+    pub fn as_claim_with_evaluation_commitment<'a>(
+        &'a self,
+        evaluation: &'a HiddenScalarWitness,
+        evaluation_commitment: Section6EvaluationCommitment<'a>,
+    ) -> Section6FinalOpeningProverClaim<'a> {
         let values = match &self.data {
             ResolvedFieldData::Vector(values) => Section6FinalOpeningData::Field(values),
+            ResolvedFieldData::WholeMatrix(matrix) => Section6FinalOpeningData::WholeMatrix {
+                values: matrix.values.as_slice(),
+                padded_rows: matrix.padded_rows,
+                padded_cols: matrix.padded_cols,
+            },
             ResolvedFieldData::Matrix { matrix, column } => {
                 Section6FinalOpeningData::MatrixColumn {
                     values: matrix.values.as_slice(),
@@ -299,7 +387,9 @@ impl ResolvedSection6FieldProverClaim<'_> {
             data: values,
             committed: &self.source,
             point_msb: &self.point_msb,
+            functional: self.functional.as_functional(),
             evaluation,
+            evaluation_commitment,
         }
     }
 }
@@ -309,6 +399,7 @@ pub struct ResolvedSection6FieldVerifierClaim<'a> {
     commitment: &'a DoryCommitment,
     logical_len: usize,
     point_msb: Vec<ArkFr>,
+    functional: ResolvedFieldFunctional,
     evaluation_commitment: Bn254G1,
     grid_num_vars: usize,
 }
@@ -323,11 +414,21 @@ impl ResolvedSection6FieldVerifierClaim<'_> {
     }
 
     pub fn as_claim(&self) -> Section6FinalOpeningVerifierClaim<'_> {
+        self.as_claim_with_evaluation_commitment(Section6EvaluationCommitment::Direct(
+            self.evaluation_commitment,
+        ))
+    }
+
+    pub fn as_claim_with_evaluation_commitment<'a>(
+        &'a self,
+        evaluation_commitment: Section6EvaluationCommitment<'a>,
+    ) -> Section6FinalOpeningVerifierClaim<'a> {
         Section6FinalOpeningVerifierClaim {
             commitment: self.commitment,
             logical_len: self.logical_len,
             point_msb: &self.point_msb,
-            evaluation_commitment: self.evaluation_commitment,
+            functional: self.functional.as_functional(),
+            evaluation_commitment,
         }
     }
 }
@@ -366,6 +467,150 @@ pub fn resolve_section6_hidden_relation_prover_claim<'a>(
         source,
         data,
         point_msb,
+        functional: ResolvedFieldFunctional::Point,
+    })
+}
+
+/// Resolve one complete matrix source at a tensor column challenge followed
+/// by the relation's terminal row point.
+pub fn resolve_section6_hidden_relation_whole_matrix_prover_claim<'a>(
+    table: HiddenRelationTable<'a>,
+    full_point: &[Fr],
+    grid: &Section6DoryGrid,
+) -> Result<ResolvedSection6FieldProverClaim<'a>, Section6FinalOpeningError> {
+    let matrix = table
+        .committed
+        .matrix
+        .as_ref()
+        .ok_or(Section6FinalOpeningError::ProofShape)?;
+    let logical_len = matrix
+        .padded_rows
+        .checked_mul(matrix.padded_cols)
+        .ok_or(Section6FinalOpeningError::InvalidLogicalLength(usize::MAX))?;
+    if full_point.len() != logical_len.trailing_zeros() as usize {
+        return Err(Section6FinalOpeningError::PointLength {
+            expected: logical_len.trailing_zeros() as usize,
+            actual: full_point.len(),
+        });
+    }
+    let source = CommittedSection6DorySource::from_field_view(table.committed, grid)?;
+    if source.logical_len != logical_len {
+        return Err(Section6FinalOpeningError::ProofShape);
+    }
+    Ok(ResolvedSection6FieldProverClaim {
+        source,
+        data: ResolvedFieldData::WholeMatrix(matrix.clone()),
+        point_msb: full_point.iter().copied().map(ArkFr::from).collect(),
+        functional: ResolvedFieldFunctional::Point,
+    })
+}
+
+/// Commitment-only counterpart of the whole-matrix relation claim resolver.
+pub fn resolve_section6_hidden_relation_whole_matrix_verifier_claim<'a>(
+    table: HiddenRelationTableStatement<'a>,
+    full_point: &[Fr],
+    evaluation_commitment: Bn254G1,
+    grid: &Section6DoryGrid,
+) -> Result<ResolvedSection6FieldVerifierClaim<'a>, Section6FinalOpeningError> {
+    let matrix = table.matrix.ok_or(Section6FinalOpeningError::ProofShape)?;
+    let logical_len = table
+        .logical_len
+        .checked_mul(matrix.padded_cols)
+        .ok_or(Section6FinalOpeningError::InvalidLogicalLength(usize::MAX))?;
+    if full_point.len() != logical_len.trailing_zeros() as usize {
+        return Err(Section6FinalOpeningError::PointLength {
+            expected: logical_len.trailing_zeros() as usize,
+            actual: full_point.len(),
+        });
+    }
+    validate_native_len(logical_len, *grid)?;
+    Ok(ResolvedSection6FieldVerifierClaim {
+        commitment: table.commitment,
+        logical_len,
+        point_msb: full_point.iter().copied().map(ArkFr::from).collect(),
+        functional: ResolvedFieldFunctional::Point,
+        evaluation_commitment,
+        grid_num_vars: grid.num_vars,
+    })
+}
+
+/// Resolve a matrix relation opening whose terminal functional includes only
+/// the selected logical columns. The selection is statement data; no missing
+/// column evaluation is added to the relation proof.
+pub fn resolve_section6_hidden_relation_sparse_matrix_prover_claim<'a>(
+    table: HiddenRelationTable<'a>,
+    full_point: &[Fr],
+    selected_columns: &[usize],
+    grid: &Section6DoryGrid,
+) -> Result<ResolvedSection6FieldProverClaim<'a>, Section6FinalOpeningError> {
+    let matrix = table
+        .committed
+        .matrix
+        .as_ref()
+        .ok_or(Section6FinalOpeningError::ProofShape)?;
+    let logical_len = matrix
+        .padded_rows
+        .checked_mul(matrix.padded_cols)
+        .ok_or(Section6FinalOpeningError::InvalidLogicalLength(usize::MAX))?;
+    validate_sparse_matrix_functional(
+        logical_len,
+        full_point,
+        matrix.padded_rows,
+        matrix.logical_cols,
+        matrix.padded_cols,
+        selected_columns,
+    )?;
+    let source = CommittedSection6DorySource::from_field_view(table.committed, grid)?;
+    if source.logical_len != logical_len {
+        return Err(Section6FinalOpeningError::ProofShape);
+    }
+    Ok(ResolvedSection6FieldProverClaim {
+        source,
+        data: ResolvedFieldData::WholeMatrix(matrix.clone()),
+        point_msb: full_point.iter().copied().map(ArkFr::from).collect(),
+        functional: ResolvedFieldFunctional::SparseMatrixColumns {
+            padded_rows: matrix.padded_rows,
+            logical_cols: matrix.logical_cols,
+            padded_cols: matrix.padded_cols,
+            selected_columns: selected_columns.to_vec(),
+        },
+    })
+}
+
+/// Commitment-only counterpart of the sparse matrix relation resolver.
+pub fn resolve_section6_hidden_relation_sparse_matrix_verifier_claim<'a>(
+    table: HiddenRelationTableStatement<'a>,
+    full_point: &[Fr],
+    selected_columns: &[usize],
+    evaluation_commitment: Bn254G1,
+    grid: &Section6DoryGrid,
+) -> Result<ResolvedSection6FieldVerifierClaim<'a>, Section6FinalOpeningError> {
+    let matrix = table.matrix.ok_or(Section6FinalOpeningError::ProofShape)?;
+    let logical_len = table
+        .logical_len
+        .checked_mul(matrix.padded_cols)
+        .ok_or(Section6FinalOpeningError::InvalidLogicalLength(usize::MAX))?;
+    validate_sparse_matrix_functional(
+        logical_len,
+        full_point,
+        table.logical_len,
+        matrix.logical_cols,
+        matrix.padded_cols,
+        selected_columns,
+    )?;
+    validate_native_len(logical_len, *grid)?;
+    Ok(ResolvedSection6FieldVerifierClaim {
+        commitment: table.commitment,
+        logical_len,
+        point_msb: full_point.iter().copied().map(ArkFr::from).collect(),
+        functional: ResolvedFieldFunctional::SparseMatrixColumns {
+            padded_rows: table.logical_len,
+            logical_cols: matrix.logical_cols,
+            padded_cols: matrix.padded_cols,
+            selected_columns: selected_columns.to_vec(),
+        },
+        evaluation_commitment,
+        grid_num_vars: grid.num_vars,
     })
 }
 
@@ -400,6 +645,7 @@ pub fn resolve_section6_hidden_relation_verifier_claim<'a>(
         commitment: table.commitment,
         logical_len,
         point_msb,
+        functional: ResolvedFieldFunctional::Point,
         evaluation_commitment,
         grid_num_vars: grid.num_vars,
     })
@@ -846,12 +1092,14 @@ pub fn prove_section6_final_opening_profiled(
             commitment: &claim.committed.commitment,
             logical_len: claim.committed.logical_len,
             point_msb: claim.point_msb,
-            evaluation_commitment: claim.evaluation.commitment,
+            functional: claim.functional,
+            evaluation_commitment: claim.evaluation_commitment,
         })
         .collect::<Vec<_>>();
     let mut transcript = final_opening_transcript(role, outer_binding, *grid, &statements);
     let claim_coefficients = transcript.challenge_scalar_powers(claims.len());
     let mut states = ReductionStateSet::new(claims, &claim_coefficients, *grid)?;
+    let source_grouping = states.source_grouping();
     let claimed_values = claims
         .iter()
         .map(|claim| Fr::from(claim.evaluation.value))
@@ -907,19 +1155,14 @@ pub fn prove_section6_final_opening_profiled(
     let sumcheck_seconds = sumcheck_started.elapsed().as_secs_f64();
 
     let dory_batch_open_started = Instant::now();
-    let claim_link_coefficients = bind_claim_link_commitments(
-        &mut transcript,
-        &statements
-            .iter()
-            .map(|statement| statement.evaluation_commitment)
-            .collect::<Vec<_>>(),
-    );
+    let claim_link_coefficients = bind_claim_link_commitments(&mut transcript, &statements);
     let dory_outer_binding = transcript.state();
     let embedding_scales = states.embedding_scales(&sumcheck_point);
-    let full_evaluations = terminal_values
+    let full_evaluations = source_grouping
+        .claim_source_indices
         .iter()
         .zip(&embedding_scales)
-        .map(|(&value, &scale)| value * scale)
+        .map(|(&source_index, &scale)| terminal_values[source_index] * scale)
         .collect::<Vec<_>>();
     let grid_polynomials = claims
         .iter()
@@ -950,12 +1193,17 @@ pub fn prove_section6_final_opening_profiled(
     let dory_batch_open_seconds = dory_batch_open_started.elapsed().as_secs_f64();
 
     let blindfold_preparation_started = Instant::now();
-    let terminal_sumcheck_coefficients =
-        terminal_sumcheck_coefficients(*grid, &statements, &sumcheck_point, &claim_coefficients)?;
+    let terminal_sumcheck_coefficients = source_grouping.aggregate(
+        &terminal_sumcheck_coefficients(*grid, &statements, &sumcheck_point, &claim_coefficients)?,
+    )?;
     let claimed_sumcheck_coefficients =
         claimed_sumcheck_coefficients(&sumcheck_point, &claim_coefficients);
-    let terminal_dory_coefficients =
-        terminal_dory_coefficients(*grid, &statements, &sumcheck_point, &dory_coefficients)?;
+    let terminal_dory_coefficients = source_grouping.aggregate(&terminal_dory_coefficients(
+        *grid,
+        &statements,
+        &sumcheck_point,
+        &dory_coefficients,
+    )?)?;
     bind_blindfold_coefficients(
         &mut transcript,
         &claim_coefficients,
@@ -965,10 +1213,6 @@ pub fn prove_section6_final_opening_profiled(
         &terminal_dory_coefficients,
     );
     let final_opening_mix = transcript.challenge_scalar();
-    let external_commitments = statements
-        .iter()
-        .map(|statement| statement.evaluation_commitment)
-        .collect::<Vec<_>>();
     let consistency = replay_consistency(
         role,
         outer_binding,
@@ -981,6 +1225,7 @@ pub fn prove_section6_final_opening_profiled(
     let protocol = build_blindfold_protocol(
         parameters.blindfold.message_generators.len(),
         grid.num_vars,
+        source_grouping.source_count,
         claims.len(),
         consistency,
         &sumcheck,
@@ -988,7 +1233,7 @@ pub fn prove_section6_final_opening_profiled(
         &terminal_sumcheck_coefficients,
         &claimed_sumcheck_coefficients,
         &claim_link_coefficients,
-        combine_commitments(&external_commitments, &claim_link_coefficients),
+        combine_evaluation_commitments(&statements, &claim_link_coefficients)?,
         &terminal_dory_coefficients,
         dory_hiding_commitment,
         final_opening_mix,
@@ -1001,7 +1246,7 @@ pub fn prove_section6_final_opening_profiled(
             .collect::<Vec<_>>(),
         &claim_link_coefficients,
     );
-    let dory_evaluation = combine_scalars(&full_evaluations, &dory_coefficients);
+    let dory_evaluation = combine_scalars(&terminal_values, &terminal_dory_coefficients);
     let final_evaluation = external_evaluation + final_opening_mix * dory_evaluation;
     let final_blind = external_blind + final_opening_mix * dory_blind;
     let assigned = protocol
@@ -1081,6 +1326,7 @@ pub fn verify_section6_final_opening_profiled(
     validate_verifier_claims(parameters, *grid, claims)?;
     let mut transcript = final_opening_transcript(role, outer_binding, *grid, claims);
     let claim_coefficients = transcript.challenge_scalar_powers(claims.len());
+    let source_grouping = SourceGrouping::from_verifier_claims(claims, *grid);
     let preparation_state_setup_seconds = preparation_state_setup_started.elapsed().as_secs_f64();
 
     let sumcheck_verify_started = Instant::now();
@@ -1094,12 +1340,7 @@ pub fn verify_section6_final_opening_profiled(
     let sumcheck_verify_seconds = sumcheck_verify_started.elapsed().as_secs_f64();
 
     let dory_batch_verify_started = Instant::now();
-    let external_commitments = claims
-        .iter()
-        .map(|claim| claim.evaluation_commitment)
-        .collect::<Vec<_>>();
-    let claim_link_coefficients =
-        bind_claim_link_commitments(&mut transcript, &external_commitments);
+    let claim_link_coefficients = bind_claim_link_commitments(&mut transcript, claims);
     let dory_outer_binding = transcript.state();
     let (dory_hiding_commitment, dory_coefficients) = verify_grid_batch_zk(
         role,
@@ -1115,12 +1356,17 @@ pub fn verify_section6_final_opening_profiled(
     let dory_batch_verify_seconds = dory_batch_verify_started.elapsed().as_secs_f64();
 
     let blindfold_preparation_started = Instant::now();
-    let terminal_sumcheck_coefficients =
-        terminal_sumcheck_coefficients(*grid, claims, &sumcheck_point, &claim_coefficients)?;
+    let terminal_sumcheck_coefficients = source_grouping.aggregate(
+        &terminal_sumcheck_coefficients(*grid, claims, &sumcheck_point, &claim_coefficients)?,
+    )?;
     let claimed_sumcheck_coefficients =
         claimed_sumcheck_coefficients(&sumcheck_point, &claim_coefficients);
-    let terminal_dory_coefficients =
-        terminal_dory_coefficients(*grid, claims, &sumcheck_point, &dory_coefficients)?;
+    let terminal_dory_coefficients = source_grouping.aggregate(&terminal_dory_coefficients(
+        *grid,
+        claims,
+        &sumcheck_point,
+        &dory_coefficients,
+    )?)?;
     bind_blindfold_coefficients(
         &mut transcript,
         &claim_coefficients,
@@ -1133,6 +1379,7 @@ pub fn verify_section6_final_opening_profiled(
     let protocol = build_blindfold_protocol(
         parameters.blindfold.message_generators.len(),
         grid.num_vars,
+        source_grouping.source_count,
         claims.len(),
         consistency,
         &proof.sumcheck,
@@ -1140,7 +1387,7 @@ pub fn verify_section6_final_opening_profiled(
         &terminal_sumcheck_coefficients,
         &claimed_sumcheck_coefficients,
         &claim_link_coefficients,
-        combine_commitments(&external_commitments, &claim_link_coefficients),
+        combine_evaluation_commitments(claims, &claim_link_coefficients)?,
         &terminal_dory_coefficients,
         dory_hiding_commitment,
         final_opening_mix,
@@ -1178,6 +1425,105 @@ fn validate_native_len(
 ) -> Result<(), Section6FinalOpeningError> {
     if logical_len == 0 || !logical_len.is_power_of_two() || logical_len > grid.logical_len {
         return Err(Section6FinalOpeningError::InvalidLogicalLength(logical_len));
+    }
+    Ok(())
+}
+
+fn validate_sparse_matrix_functional(
+    logical_len: usize,
+    point_msb: &[Fr],
+    padded_rows: usize,
+    logical_cols: usize,
+    padded_cols: usize,
+    selected_columns: &[usize],
+) -> Result<(), Section6FinalOpeningError> {
+    if padded_rows == 0
+        || padded_cols == 0
+        || !padded_rows.is_power_of_two()
+        || !padded_cols.is_power_of_two()
+        || padded_rows.checked_mul(padded_cols) != Some(logical_len)
+        || logical_cols == 0
+        || logical_cols > padded_cols
+        || selected_columns.is_empty()
+        || selected_columns.len() >= logical_cols
+        || selected_columns
+            .iter()
+            .any(|&column| column >= logical_cols)
+        || selected_columns
+            .windows(2)
+            .any(|columns| columns[0] >= columns[1])
+    {
+        return Err(Section6FinalOpeningError::ProofShape);
+    }
+    let expected_point_len =
+        padded_cols.trailing_zeros() as usize + padded_rows.trailing_zeros() as usize;
+    if point_msb.len() != expected_point_len {
+        return Err(Section6FinalOpeningError::PointLength {
+            expected: expected_point_len,
+            actual: point_msb.len(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_evaluation_commitment(
+    logical_len: usize,
+    point_msb: &[ArkFr],
+    functional: Section6FinalOpeningFunctional<'_>,
+    commitment: Section6EvaluationCommitment<'_>,
+) -> Result<(), Section6FinalOpeningError> {
+    let Section6EvaluationCommitment::MatrixColumns {
+        logical_cols,
+        padded_cols,
+        selected_columns,
+        commitments,
+    } = commitment
+    else {
+        return Ok(());
+    };
+    if logical_cols == 0
+        || padded_cols == 0
+        || logical_cols > padded_cols
+        || !padded_cols.is_power_of_two()
+        || logical_len % padded_cols != 0
+        || !(logical_len / padded_cols).is_power_of_two()
+        || selected_columns.is_empty()
+        || selected_columns.len() != commitments.len()
+        || selected_columns
+            .iter()
+            .any(|&column| column >= logical_cols)
+        || selected_columns
+            .windows(2)
+            .any(|columns| columns[0] >= columns[1])
+        || padded_cols.trailing_zeros() as usize > point_msb.len()
+    {
+        return Err(Section6FinalOpeningError::ProofShape);
+    }
+    match functional {
+        Section6FinalOpeningFunctional::Point => {
+            if selected_columns.len() != logical_cols
+                || selected_columns
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .any(|(column, selected)| column != selected)
+            {
+                return Err(Section6FinalOpeningError::ProofShape);
+            }
+        }
+        Section6FinalOpeningFunctional::SparseMatrixColumns {
+            logical_cols: functional_logical_cols,
+            padded_cols: functional_padded_cols,
+            selected_columns: functional_selected_columns,
+            ..
+        } => {
+            if logical_cols != functional_logical_cols
+                || padded_cols != functional_padded_cols
+                || selected_columns != functional_selected_columns
+            {
+                return Err(Section6FinalOpeningError::ProofShape);
+            }
+        }
     }
     Ok(())
 }
@@ -1220,6 +1566,22 @@ fn validate_prover_claims(
                     physical: values.len(),
                 });
             }
+            Section6FinalOpeningData::WholeMatrix {
+                values,
+                padded_rows,
+                padded_cols,
+            } if values.len() != claim.committed.logical_len
+                || padded_rows == 0
+                || padded_cols == 0
+                || !padded_rows.is_power_of_two()
+                || !padded_cols.is_power_of_two()
+                || padded_rows.checked_mul(padded_cols) != Some(values.len()) =>
+            {
+                return Err(Section6FinalOpeningError::SourceLength {
+                    logical: claim.committed.logical_len,
+                    physical: values.len(),
+                });
+            }
             Section6FinalOpeningData::MatrixColumn {
                 values,
                 padded_rows,
@@ -1249,6 +1611,51 @@ fn validate_prover_claims(
             let expected_prefix = column_point_msb(column, padded_cols)?;
             if !claim.point_msb.starts_with(&expected_prefix) {
                 return Err(Section6FinalOpeningError::ProofShape);
+            }
+        }
+        match (claim.data, claim.functional) {
+            (
+                Section6FinalOpeningData::WholeMatrix {
+                    padded_rows,
+                    padded_cols,
+                    ..
+                },
+                Section6FinalOpeningFunctional::SparseMatrixColumns {
+                    padded_rows: functional_rows,
+                    logical_cols,
+                    padded_cols: functional_cols,
+                    selected_columns,
+                },
+            ) if padded_rows == functional_rows && padded_cols == functional_cols => {
+                let point = claim
+                    .point_msb
+                    .iter()
+                    .copied()
+                    .map(Fr::from)
+                    .collect::<Vec<_>>();
+                validate_sparse_matrix_functional(
+                    claim.committed.logical_len,
+                    &point,
+                    padded_rows,
+                    logical_cols,
+                    padded_cols,
+                    selected_columns,
+                )?;
+            }
+            (_, Section6FinalOpeningFunctional::Point) => {}
+            _ => return Err(Section6FinalOpeningError::ProofShape),
+        }
+        validate_evaluation_commitment(
+            claim.committed.logical_len,
+            claim.point_msb,
+            claim.functional,
+            claim.evaluation_commitment,
+        )?;
+        if let Section6EvaluationCommitment::Direct(commitment) = claim.evaluation_commitment {
+            if commitment != claim.evaluation.commitment {
+                return Err(Section6FinalOpeningError::EvaluationCommitmentMismatch(
+                    index,
+                ));
             }
         }
         if !Pedersen::<Bn254G1>::verify(
@@ -1288,6 +1695,34 @@ fn validate_verifier_claims(
                 actual: claim.point_msb.len(),
             });
         }
+        if let Section6FinalOpeningFunctional::SparseMatrixColumns {
+            padded_rows,
+            logical_cols,
+            padded_cols,
+            selected_columns,
+        } = claim.functional
+        {
+            let point = claim
+                .point_msb
+                .iter()
+                .copied()
+                .map(Fr::from)
+                .collect::<Vec<_>>();
+            validate_sparse_matrix_functional(
+                claim.logical_len,
+                &point,
+                padded_rows,
+                logical_cols,
+                padded_cols,
+                selected_columns,
+            )?;
+        }
+        validate_evaluation_commitment(
+            claim.logical_len,
+            claim.point_msb,
+            claim.functional,
+            claim.evaluation_commitment,
+        )?;
     }
     Ok(())
 }
@@ -1355,9 +1790,60 @@ struct ReductionClaimState {
     source_index: usize,
 }
 
+struct SourceGrouping {
+    source_count: usize,
+    claim_source_indices: Vec<usize>,
+}
+
+impl SourceGrouping {
+    fn from_verifier_claims(
+        claims: &[Section6FinalOpeningVerifierClaim<'_>],
+        grid: Section6DoryGrid,
+    ) -> Self {
+        let mut source_indices = HashMap::<Section6DorySourceKey, usize>::new();
+        let mut claim_source_indices = Vec::with_capacity(claims.len());
+        for claim in claims {
+            let key = Section6DorySourceKey {
+                commitment: commitment_binding_bytes(claim.commitment),
+                logical_len: claim.logical_len,
+                grid_num_vars: grid.num_vars,
+            };
+            let next_index = source_indices.len();
+            let source_index = *source_indices.entry(key).or_insert(next_index);
+            claim_source_indices.push(source_index);
+        }
+        Self {
+            source_count: source_indices.len(),
+            claim_source_indices,
+        }
+    }
+
+    fn aggregate(&self, values: &[Fr]) -> Result<Vec<Fr>, Section6FinalOpeningError> {
+        if values.len() != self.claim_source_indices.len() {
+            return Err(Section6FinalOpeningError::ProofShape);
+        }
+        let mut aggregated = vec![Fr::zero(); self.source_count];
+        for (&value, &source_index) in values.iter().zip(&self.claim_source_indices) {
+            aggregated[source_index] += value;
+        }
+        Ok(aggregated)
+    }
+}
+
 enum ClaimEquality {
     Dense(Vec<Fr>),
-    MatrixColumn { start: usize, values: Vec<Fr> },
+    WholeMatrixTensor {
+        row: Vec<Fr>,
+        column: Vec<Fr>,
+    },
+    SparseMatrixTensor {
+        row: Vec<Fr>,
+        columns: Vec<(usize, Fr)>,
+    },
+    MatrixColumn {
+        start: usize,
+        values: Vec<Fr>,
+    },
 }
 
 struct ReductionStateSet {
@@ -1414,6 +1900,82 @@ impl ReductionStateSet {
                         .map(|(&value, &weight)| value * weight)
                         .sum::<Fr>();
                     (evaluation, ClaimEquality::Dense(claim_eq))
+                }
+                Section6FinalOpeningData::WholeMatrix {
+                    padded_rows,
+                    padded_cols,
+                    ..
+                } => {
+                    let column_vars = padded_cols.trailing_zeros() as usize;
+                    let (column_point, row_point) = point.split_at(column_vars);
+                    if row_point.len() != padded_rows.trailing_zeros() as usize {
+                        return Err(Section6FinalOpeningError::ProofShape);
+                    }
+                    let column_eq = EqPolynomial::<Fr>::evals(column_point, None);
+                    let row_eq = EqPolynomial::<Fr>::evals(row_point, None);
+                    match claim.functional {
+                        Section6FinalOpeningFunctional::Point => {
+                            #[cfg(test)]
+                            {
+                                claim_equality_entries += column_eq.len() + row_eq.len();
+                            }
+                            let evaluation = source
+                                .values
+                                .par_chunks(padded_rows)
+                                .zip(column_eq.par_iter())
+                                .map(|(column, &column_weight)| {
+                                    column_weight
+                                        * column
+                                            .iter()
+                                            .zip(&row_eq)
+                                            .map(|(&value, &row_weight)| value * row_weight)
+                                            .sum::<Fr>()
+                                })
+                                .sum::<Fr>();
+                            (
+                                evaluation,
+                                ClaimEquality::WholeMatrixTensor {
+                                    row: row_eq,
+                                    column: column_eq,
+                                },
+                            )
+                        }
+                        Section6FinalOpeningFunctional::SparseMatrixColumns {
+                            padded_rows: functional_rows,
+                            padded_cols: functional_cols,
+                            selected_columns,
+                            ..
+                        } if functional_rows == padded_rows && functional_cols == padded_cols => {
+                            let columns = selected_columns
+                                .iter()
+                                .map(|&column| (column, column_eq[column]))
+                                .collect::<Vec<_>>();
+                            #[cfg(test)]
+                            {
+                                claim_equality_entries += columns.len() + row_eq.len();
+                            }
+                            let evaluation = columns
+                                .par_iter()
+                                .map(|&(column, column_weight)| {
+                                    let start = column * padded_rows;
+                                    column_weight
+                                        * source.values[start..start + padded_rows]
+                                            .iter()
+                                            .zip(&row_eq)
+                                            .map(|(&value, &row_weight)| value * row_weight)
+                                            .sum::<Fr>()
+                                })
+                                .sum::<Fr>();
+                            (
+                                evaluation,
+                                ClaimEquality::SparseMatrixTensor {
+                                    row: row_eq,
+                                    columns,
+                                },
+                            )
+                        }
+                        _ => return Err(Section6FinalOpeningError::ProofShape),
+                    }
                 }
                 Section6FinalOpeningData::MatrixColumn {
                     padded_rows,
@@ -1474,6 +2036,51 @@ impl ReductionStateSet {
                             .for_each(|(combined, &weight)| *combined += coefficient * weight);
                     }
                 }
+                ClaimEquality::WholeMatrixTensor { row, column } => {
+                    if source.eq.is_empty() {
+                        source.eq = vec![Fr::zero(); source.values.len()];
+                    }
+                    if source.eq.len() != row.len() * column.len() {
+                        return Err(Section6FinalOpeningError::ProofShape);
+                    }
+                    source
+                        .eq
+                        .par_chunks_mut(row.len())
+                        .zip(column.par_iter())
+                        .for_each(|(combined, &column_weight)| {
+                            combined
+                                .iter_mut()
+                                .zip(&row)
+                                .for_each(|(combined, &row_weight)| {
+                                    *combined += coefficient * column_weight * row_weight;
+                                });
+                        });
+                }
+                ClaimEquality::SparseMatrixTensor { row, columns } => {
+                    if source.eq.is_empty() {
+                        source.eq = vec![Fr::zero(); source.values.len()];
+                    }
+                    if source.eq.len() % row.len() != 0 {
+                        return Err(Section6FinalOpeningError::ProofShape);
+                    }
+                    for (column, column_weight) in columns {
+                        let start = column
+                            .checked_mul(row.len())
+                            .ok_or(Section6FinalOpeningError::InvalidLogicalLength(usize::MAX))?;
+                        let end = start
+                            .checked_add(row.len())
+                            .ok_or(Section6FinalOpeningError::InvalidLogicalLength(usize::MAX))?;
+                        let combined = source
+                            .eq
+                            .get_mut(start..end)
+                            .ok_or(Section6FinalOpeningError::ProofShape)?;
+                        combined.par_iter_mut().zip(row.par_iter()).for_each(
+                            |(combined, &row_weight)| {
+                                *combined += coefficient * column_weight * row_weight;
+                            },
+                        );
+                    }
+                }
                 ClaimEquality::MatrixColumn { start, values } => {
                     if source.eq.is_empty() {
                         source.eq = vec![Fr::zero(); source.values.len()];
@@ -1500,10 +2107,17 @@ impl ReductionStateSet {
             .try_for_each(|source| source.bind(round_index, challenge))
     }
 
+    fn source_grouping(&self) -> SourceGrouping {
+        SourceGrouping {
+            source_count: self.sources.len(),
+            claim_source_indices: self.claims.iter().map(|claim| claim.source_index).collect(),
+        }
+    }
+
     fn terminal_values(&self) -> Result<Vec<Fr>, Section6FinalOpeningError> {
-        self.claims
+        self.sources
             .iter()
-            .map(|claim| self.sources[claim.source_index].terminal_value())
+            .map(ReductionSourceState::terminal_value)
             .collect()
     }
 
@@ -1607,9 +2221,68 @@ fn terminal_sumcheck_coefficients(
                 .copied()
                 .map(Fr::from)
                 .collect::<Vec<_>>();
-            Ok(coefficient * scale * scale * EqPolynomial::<Fr>::mle(&point, &native_point))
+            let functional_evaluation = match claim.functional {
+                Section6FinalOpeningFunctional::Point => {
+                    EqPolynomial::<Fr>::mle(&point, &native_point)
+                }
+                Section6FinalOpeningFunctional::SparseMatrixColumns {
+                    padded_rows,
+                    padded_cols,
+                    selected_columns,
+                    ..
+                } => {
+                    let column_vars = padded_cols.trailing_zeros() as usize;
+                    let row_vars = padded_rows.trailing_zeros() as usize;
+                    if point.len() != column_vars + row_vars
+                        || native_point.len() != column_vars + row_vars
+                    {
+                        return Err(Section6FinalOpeningError::ProofShape);
+                    }
+                    let (column_point, row_point) = point.split_at(column_vars);
+                    let (native_column_point, native_row_point) =
+                        native_point.split_at(column_vars);
+                    let column_selector = selected_columns
+                        .iter()
+                        .map(|&column| {
+                            Ok(
+                                equality_at_boolean_index(column_point, column, padded_cols)?
+                                    * equality_at_boolean_index(
+                                        native_column_point,
+                                        column,
+                                        padded_cols,
+                                    )?,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, Section6FinalOpeningError>>()?
+                        .into_iter()
+                        .sum::<Fr>();
+                    EqPolynomial::<Fr>::mle(row_point, native_row_point) * column_selector
+                }
+            };
+            Ok(coefficient * scale * scale * functional_evaluation)
         })
         .collect()
+}
+
+fn equality_at_boolean_index(
+    point: &[Fr],
+    index: usize,
+    domain_len: usize,
+) -> Result<Fr, Section6FinalOpeningError> {
+    if domain_len == 0
+        || !domain_len.is_power_of_two()
+        || point.len() != domain_len.trailing_zeros() as usize
+        || index >= domain_len
+    {
+        return Err(Section6FinalOpeningError::ProofShape);
+    }
+    Ok(point
+        .iter()
+        .enumerate()
+        .fold(Fr::one(), |evaluation, (coordinate, &value)| {
+            let bit = (index >> (point.len() - coordinate - 1)) & 1;
+            evaluation * if bit == 0 { Fr::one() - value } else { value }
+        }))
 }
 
 fn claimed_sumcheck_coefficients(sumcheck_point: &[Fr], claim_coefficients: &[Fr]) -> Vec<Fr> {
@@ -1862,16 +2535,6 @@ fn verify_grid_batch_zk(
         .iter()
         .map(|claim| claim.logical_len)
         .collect::<Vec<_>>();
-    let mut coefficient_transcript = grid_dory_transcript(
-        role,
-        outer_binding,
-        grid,
-        point,
-        &commitments,
-        &logical_lengths,
-        terminal_rows,
-    );
-    let coefficients = coefficient_transcript.challenge_scalar_powers(claims.len());
     let mut transcript = grid_dory_transcript(
         role,
         outer_binding,
@@ -1881,14 +2544,40 @@ fn verify_grid_batch_zk(
         &logical_lengths,
         terminal_rows,
     );
-    let hiding_commitment = HomomorphicBatch::<DoryScheme>::verify_batch_zk(
-        &parameters.pcs,
-        Point::high_to_low(point.to_vec()),
-        commitments,
+    let coefficients = transcript.challenge_scalar_powers(claims.len());
+    let mut group_indices = HashMap::<Section6DorySourceKey, usize>::new();
+    let mut unique_commitments = Vec::new();
+    let mut grouped_coefficients = Vec::new();
+    for ((commitment, &logical_len), &coefficient) in
+        commitments.iter().zip(&logical_lengths).zip(&coefficients)
+    {
+        let key = Section6DorySourceKey {
+            commitment: commitment_binding_bytes(commitment),
+            logical_len,
+            grid_num_vars: grid.num_vars,
+        };
+        if let Some(&group_index) = group_indices.get(&key) {
+            grouped_coefficients[group_index] += coefficient;
+        } else {
+            let group_index = unique_commitments.len();
+            group_indices.insert(key, group_index);
+            unique_commitments.push(commitment.clone());
+            grouped_coefficients.push(coefficient);
+        }
+    }
+    let joint_commitment =
+        <DoryScheme as AdditivelyHomomorphic>::combine(&unique_commitments, &grouped_coefficients);
+    let opening_point = Point::high_to_low(point.to_vec());
+    let hiding_commitment = <DoryScheme as ZkOpeningScheme>::verify_zk(
+        &joint_commitment,
+        opening_point.as_slice(),
         &proof.opening,
+        &parameters.pcs,
         &mut transcript,
     )
     .map_err(|error| Section6FinalOpeningError::Dory(error.to_string()))?;
+    ZkEvaluationClaim::new(opening_point.as_slice(), &hiding_commitment)
+        .append_to_transcript(&mut transcript);
     Ok((hiding_commitment, coefficients))
 }
 
@@ -1898,7 +2587,7 @@ fn final_opening_transcript(
     grid: Section6DoryGrid,
     claims: &[Section6FinalOpeningVerifierClaim<'_>],
 ) -> Blake2bTranscript<Fr> {
-    let mut transcript = Blake2bTranscript::<Fr>::new(b"pc-section6-final-opening-v1");
+    let mut transcript = Blake2bTranscript::<Fr>::new(b"pc-section6-final-opening-v2");
     transcript.append(&Label(b"section6_final_opening"));
     transcript.append(&LabelWithCount(b"role", role.len() as u64));
     transcript.append_bytes(role);
@@ -1919,10 +2608,34 @@ fn final_opening_transcript(
             .map(Fr::from)
             .collect::<Vec<_>>();
         transcript.append_values(b"source_point", &point);
-        transcript.append_labeled(
-            b"source_evaluation_commitment",
-            &claim.evaluation_commitment,
-        );
+        match claim.functional {
+            Section6FinalOpeningFunctional::Point => {
+                transcript.append_labeled(b"functional_kind", &U64Word(0));
+            }
+            Section6FinalOpeningFunctional::SparseMatrixColumns {
+                padded_rows,
+                logical_cols,
+                padded_cols,
+                selected_columns,
+            } => {
+                transcript.append_labeled(b"functional_kind", &U64Word(1));
+                transcript.append_labeled(b"functional_rows", &U64Word(padded_rows as u64));
+                transcript.append_labeled(b"functional_lcols", &U64Word(logical_cols as u64));
+                transcript.append_labeled(b"functional_pcols", &U64Word(padded_cols as u64));
+                let column_vars = padded_cols.trailing_zeros() as usize;
+                let split = column_vars.min(point.len());
+                transcript.append_values(b"functional_col_point", &point[..split]);
+                transcript.append_values(b"functional_row_point", &point[split..]);
+                transcript.append(&LabelWithCount(
+                    b"functional_columns",
+                    selected_columns.len() as u64,
+                ));
+                for &column in selected_columns {
+                    transcript.append_labeled(b"functional_column", &U64Word(column as u64));
+                }
+            }
+        }
+        append_evaluation_commitment(&mut transcript, claim.evaluation_commitment);
     }
     transcript
 }
@@ -1964,16 +2677,46 @@ fn grid_dory_transcript(
 
 fn bind_claim_link_commitments(
     transcript: &mut Blake2bTranscript<Fr>,
-    commitments: &[Bn254G1],
+    claims: &[Section6FinalOpeningVerifierClaim<'_>],
 ) -> Vec<Fr> {
     transcript.append(&LabelWithCount(
         b"claim_link_commitments",
-        commitments.len() as u64,
+        claims.len() as u64,
     ));
-    for commitment in commitments {
-        transcript.append_labeled(b"claim_link_commitment", commitment);
+    for claim in claims {
+        append_evaluation_commitment(transcript, claim.evaluation_commitment);
     }
-    transcript.challenge_scalar_powers(commitments.len())
+    transcript.challenge_scalar_powers(claims.len())
+}
+
+fn append_evaluation_commitment(
+    transcript: &mut Blake2bTranscript<Fr>,
+    commitment: Section6EvaluationCommitment<'_>,
+) {
+    match commitment {
+        Section6EvaluationCommitment::Direct(commitment) => {
+            transcript.append_labeled(b"eval_com_kind", &U64Word(0));
+            transcript.append_labeled(b"eval_com", &commitment);
+        }
+        Section6EvaluationCommitment::MatrixColumns {
+            logical_cols,
+            padded_cols,
+            selected_columns,
+            commitments,
+        } => {
+            transcript.append_labeled(b"eval_com_kind", &U64Word(1));
+            transcript.append_labeled(b"eval_com_logical_cols", &U64Word(logical_cols as u64));
+            transcript.append_labeled(b"eval_com_padded_cols", &U64Word(padded_cols as u64));
+            transcript.append(&LabelWithCount(
+                b"eval_com_columns",
+                selected_columns.len() as u64,
+            ));
+            for (&column, commitment) in selected_columns.iter().zip(commitments) {
+                transcript.append_labeled(b"eval_com_column", &U64Word(column as u64));
+                transcript.append_labeled(b"eval_com", commitment);
+            }
+        }
+    }
 }
 
 fn bind_dory_completion(
@@ -2024,11 +2767,7 @@ fn replay_consistency(
             &mut transcript,
         )
         .map_err(|error| Section6FinalOpeningError::Sumcheck(error.to_string()))?;
-    let external_commitments = claims
-        .iter()
-        .map(|claim| claim.evaluation_commitment)
-        .collect::<Vec<_>>();
-    let link_coefficients = bind_claim_link_commitments(&mut transcript, &external_commitments);
+    let link_coefficients = bind_claim_link_commitments(&mut transcript, claims);
     if link_coefficients != expected_link_coefficients {
         return Err(Section6FinalOpeningError::ProofShape);
     }
@@ -2039,6 +2778,7 @@ fn replay_consistency(
 fn build_blindfold_protocol(
     row_len: usize,
     num_vars: usize,
+    source_count: usize,
     claim_count: usize,
     consistency: jolt_sumcheck::CommittedSumcheckConsistency<Fr, Bn254G1>,
     sumcheck: &CommittedSumcheckProof<Bn254G1>,
@@ -2051,20 +2791,16 @@ fn build_blindfold_protocol(
     dory_hiding_commitment: Bn254G1,
     final_opening_mix: Fr,
 ) -> Result<BlindFoldProtocol<Fr, Bn254G1>, Section6FinalOpeningError> {
-    if [
-        claim_coefficients.len(),
-        terminal_sumcheck_coefficients.len(),
-        claimed_sumcheck_coefficients.len(),
-        claim_link_coefficients.len(),
-        terminal_dory_coefficients.len(),
-    ]
-    .iter()
-    .any(|&length| length != claim_count)
+    if claim_coefficients.len() != claim_count
+        || terminal_sumcheck_coefficients.len() != source_count
+        || claimed_sumcheck_coefficients.len() != claim_count
+        || claim_link_coefficients.len() != claim_count
+        || terminal_dory_coefficients.len() != source_count
     {
         return Err(Section6FinalOpeningError::ProofShape);
     }
-    let terminal_ids = (0..claim_count).collect::<Vec<_>>();
-    let claimed_ids = (claim_count..2 * claim_count).collect::<Vec<_>>();
+    let terminal_ids = (0..source_count).collect::<Vec<_>>();
+    let claimed_ids = (source_count..source_count + claim_count).collect::<Vec<_>>();
     let opening_ids = terminal_ids
         .iter()
         .chain(&claimed_ids)
@@ -2118,13 +2854,47 @@ fn combine_scalars(values: &[Fr], coefficients: &[Fr]) -> Fr {
         .sum()
 }
 
-fn combine_commitments(commitments: &[Bn254G1], coefficients: &[Fr]) -> Bn254G1 {
-    commitments.iter().zip(coefficients).fold(
-        Bn254G1::default(),
-        |accumulator, (commitment, coefficient)| {
-            Bn254G1::linear_combine(&accumulator, commitment, coefficient)
-        },
-    )
+fn combine_evaluation_commitments(
+    claims: &[Section6FinalOpeningVerifierClaim<'_>],
+    coefficients: &[Fr],
+) -> Result<Bn254G1, Section6FinalOpeningError> {
+    if claims.len() != coefficients.len() {
+        return Err(Section6FinalOpeningError::ProofShape);
+    }
+    let mut commitments = Vec::new();
+    let mut scalars = Vec::new();
+    for (claim, &coefficient) in claims.iter().zip(coefficients) {
+        match claim.evaluation_commitment {
+            Section6EvaluationCommitment::Direct(commitment) => {
+                commitments.push(commitment);
+                scalars.push(coefficient);
+            }
+            Section6EvaluationCommitment::MatrixColumns {
+                padded_cols,
+                selected_columns,
+                commitments: column_commitments,
+                ..
+            } => {
+                if selected_columns.len() != column_commitments.len() {
+                    return Err(Section6FinalOpeningError::ProofShape);
+                }
+                let column_vars = padded_cols.trailing_zeros() as usize;
+                if column_vars > claim.point_msb.len() {
+                    return Err(Section6FinalOpeningError::ProofShape);
+                }
+                let column_point = claim.point_msb[..column_vars]
+                    .iter()
+                    .copied()
+                    .map(Fr::from)
+                    .collect::<Vec<_>>();
+                for (&column, &commitment) in selected_columns.iter().zip(column_commitments) {
+                    commitments.push(commitment);
+                    scalars.push(coefficient * eq_index_msb(&column_point, column as u128));
+                }
+            }
+        }
+    }
+    Ok(Bn254G1::msm(&commitments, &scalars))
 }
 
 #[cfg(test)]
@@ -2132,12 +2902,13 @@ mod tests {
     use ark_bn254::Fr as ArkFr;
     use ark_ff::Zero;
     use ark_std::rand::{rngs::StdRng, SeedableRng};
-    use jolt_crypto::{Bn254G1, DeriveSetup, PedersenSetup};
+    use jolt_crypto::{Bn254G1, DeriveSetup, JoltGroup, PedersenSetup};
     use jolt_field::Fr as JoltFr;
+    use jolt_poly::EqPolynomial;
     use jolt_transcript::{Blake2bTranscript, Transcript};
 
     use crate::{
-        hidden_relation::{HiddenRelationTable, HiddenScalarWitness},
+        hidden_relation::{HiddenRelationTable, HiddenRelationTableStatement, HiddenScalarWitness},
         jolt_dory::{evaluate_field_vector_standard, setup_dory_parameters},
         jolt_dory_adapter::{open_dense_i8_zk, verify_dense_i8_zk, DenseI8Prefix},
     };
@@ -2145,8 +2916,12 @@ mod tests {
     use super::{
         commit_section6_dense_i8_on_grid_zk, commit_section6_field_matrix_columns_on_grid_zk,
         commit_section6_field_on_grid_zk, prove_section6_final_opening,
-        resolve_section6_hidden_relation_prover_claim, verify_section6_final_opening,
-        ReductionStateSet, Section6DoryGrid, Section6FinalOpeningData,
+        resolve_section6_hidden_relation_prover_claim,
+        resolve_section6_hidden_relation_sparse_matrix_prover_claim,
+        resolve_section6_hidden_relation_sparse_matrix_verifier_claim,
+        resolve_section6_hidden_relation_whole_matrix_prover_claim, verify_section6_final_opening,
+        ReductionStateSet, Section6DoryGrid, Section6EvaluationCommitment,
+        Section6FinalOpeningData, Section6FinalOpeningError, Section6FinalOpeningFunctional,
         Section6FinalOpeningProverClaim, Section6FinalOpeningVerifierClaim,
     };
 
@@ -2257,7 +3032,9 @@ mod tests {
                 data: Section6FinalOpeningData::Field(&values),
                 committed: &committed,
                 point_msb: point,
+                functional: Section6FinalOpeningFunctional::Point,
                 evaluation: witness,
+                evaluation_commitment: Section6EvaluationCommitment::Direct(witness.commitment),
             })
             .collect::<Vec<_>>();
 
@@ -2292,7 +3069,8 @@ mod tests {
                 commitment: &committed.commitment,
                 logical_len: committed.logical_len,
                 point_msb: point,
-                evaluation_commitment: witness.commitment,
+                functional: Section6FinalOpeningFunctional::Point,
+                evaluation_commitment: Section6EvaluationCommitment::Direct(witness.commitment),
             })
             .collect::<Vec<_>>();
         verify_section6_final_opening(
@@ -2367,6 +3145,405 @@ mod tests {
     }
 
     #[test]
+    fn whole_matrix_claims_expand_only_tensor_equality_factors() {
+        let grid = Section6DoryGrid::new(6).unwrap();
+        let (prover_parameters, _) = setup_dory_parameters(grid.num_vars());
+        let columns = (0..3)
+            .map(|column| {
+                (0..8)
+                    .map(|row| ark((16 * column + row + 1) as u64))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let column_refs = columns.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let committed = commit_section6_field_matrix_columns_on_grid_zk(
+            &prover_parameters,
+            &grid,
+            &column_refs,
+            4,
+        )
+        .unwrap();
+        let matrix = committed[0].matrix.as_ref().unwrap();
+        assert!(matrix.values[3 * 8..].iter().all(ArkFr::is_zero));
+        let point = vec![ark(2), ark(3), ark(5), ark(7), ark(11)];
+        let evaluation = evaluate_field_vector_standard(&matrix.values, &point).unwrap();
+        let mut rng = StdRng::seed_from_u64(0x5748_4f4c_455f_4551);
+        let witness = HiddenScalarWitness::commit(&prover_parameters, evaluation, &mut rng);
+        let point_jolt = point.iter().copied().map(JoltFr::from).collect::<Vec<_>>();
+        let resolved = resolve_section6_hidden_relation_whole_matrix_prover_claim(
+            HiddenRelationTable {
+                values: &columns[0],
+                committed: &committed[0],
+            },
+            &point_jolt,
+            &grid,
+        )
+        .unwrap();
+        let claim = resolved.as_claim(&witness);
+        let states = ReductionStateSet::new(&[claim], &[JoltFr::from(ark(19))], grid).unwrap();
+
+        assert_eq!(states.sources.len(), 1);
+        assert_eq!(states.claims.len(), 1);
+        assert_eq!(states.claim_equality_entries, 8 + 4);
+        assert!(states.claim_equality_entries < matrix.values.len());
+        assert_eq!(
+            states.sources[0].remaining_inner_product(),
+            JoltFr::from(ark(19)) * JoltFr::from(evaluation)
+        );
+    }
+
+    #[test]
+    fn sparse_matrix_functional_round_trips_and_rejects_descriptor_tampering() {
+        let grid = Section6DoryGrid::new(6).unwrap();
+        let (prover_parameters, verifier_parameters) = setup_dory_parameters(grid.num_vars());
+        let columns = (0..3)
+            .map(|column| {
+                (0..8)
+                    .map(|row| ark((100 * column + 7 * row + 3) as u64))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let column_refs = columns.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let committed = commit_section6_field_matrix_columns_on_grid_zk(
+            &prover_parameters,
+            &grid,
+            &column_refs,
+            4,
+        )
+        .unwrap();
+        let column_point = vec![ark(2), ark(5)];
+        let row_point = vec![ark(7), ark(11), ark(13)];
+        let column_point_jolt = column_point
+            .iter()
+            .copied()
+            .map(JoltFr::from)
+            .collect::<Vec<_>>();
+        let row_point_jolt = row_point
+            .iter()
+            .copied()
+            .map(JoltFr::from)
+            .collect::<Vec<_>>();
+        let full_point = column_point_jolt
+            .iter()
+            .chain(&row_point_jolt)
+            .copied()
+            .collect::<Vec<_>>();
+        let selected_columns = vec![0, 2];
+        let column_weights = EqPolynomial::<JoltFr>::evals(&column_point_jolt, None);
+        let column_evaluations = selected_columns
+            .iter()
+            .map(|&column| {
+                JoltFr::from(evaluate_field_vector_standard(&columns[column], &row_point).unwrap())
+            })
+            .collect::<Vec<_>>();
+        let evaluation = selected_columns
+            .iter()
+            .zip(&column_evaluations)
+            .map(|(&column, &evaluation)| column_weights[column] * evaluation)
+            .sum::<JoltFr>();
+        let evaluation = ArkFr::from(evaluation);
+        let mut rng = StdRng::seed_from_u64(0x5350_4152_5345_4d58);
+        let column_witnesses = column_evaluations
+            .iter()
+            .map(|&evaluation| {
+                HiddenScalarWitness::commit(&prover_parameters, ArkFr::from(evaluation), &mut rng)
+            })
+            .collect::<Vec<_>>();
+        let column_commitments = column_witnesses
+            .iter()
+            .map(|witness| witness.commitment)
+            .collect::<Vec<_>>();
+        let selected_weights = selected_columns
+            .iter()
+            .map(|&column| column_weights[column])
+            .collect::<Vec<_>>();
+        let witness = HiddenScalarWitness {
+            value: evaluation,
+            commitment: Bn254G1::msm(&column_commitments, &selected_weights),
+            blind: column_witnesses
+                .iter()
+                .zip(&selected_weights)
+                .map(|(witness, &weight)| witness.blind * weight)
+                .sum(),
+        };
+        let resolved = resolve_section6_hidden_relation_sparse_matrix_prover_claim(
+            HiddenRelationTable {
+                values: &columns[0],
+                committed: &committed[0],
+            },
+            &full_point,
+            &selected_columns,
+            &grid,
+        )
+        .unwrap();
+        let matrix_commitment = Section6EvaluationCommitment::MatrixColumns {
+            logical_cols: 3,
+            padded_cols: 4,
+            selected_columns: &selected_columns,
+            commitments: &column_commitments,
+        };
+        let prover_claim =
+            resolved.as_claim_with_evaluation_commitment(&witness, matrix_commitment);
+        let states =
+            ReductionStateSet::new(&[prover_claim], &[JoltFr::from(ark(19))], grid).unwrap();
+        assert_eq!(states.claim_equality_entries, 8 + selected_columns.len());
+        assert_eq!(
+            states.sources[0].remaining_inner_product(),
+            JoltFr::from(ark(19)) * JoltFr::from(evaluation)
+        );
+        drop(states);
+
+        let proof = prove_section6_final_opening(
+            b"section6-sparse-matrix",
+            b"outer-binding",
+            &prover_parameters,
+            &grid,
+            &[prover_claim],
+            &mut rng,
+        )
+        .unwrap();
+        let encoded = bincode::serialize(&proof).unwrap();
+        let decoded = bincode::deserialize(&encoded).unwrap();
+        let statement = HiddenRelationTableStatement::from(&committed[0]);
+        let verifier_resolved = resolve_section6_hidden_relation_sparse_matrix_verifier_claim(
+            statement,
+            &full_point,
+            &selected_columns,
+            witness.commitment,
+            &grid,
+        )
+        .unwrap();
+        let verifier_claim =
+            verifier_resolved.as_claim_with_evaluation_commitment(matrix_commitment);
+        verify_section6_final_opening(
+            b"section6-sparse-matrix",
+            b"outer-binding",
+            &verifier_parameters,
+            &grid,
+            &[verifier_claim],
+            &decoded,
+        )
+        .unwrap();
+
+        let mut tampered_commitments = column_commitments.clone();
+        tampered_commitments[0] = Bn254G1::identity();
+        let tampered_commitment = Section6FinalOpeningVerifierClaim {
+            evaluation_commitment: Section6EvaluationCommitment::MatrixColumns {
+                logical_cols: 3,
+                padded_cols: 4,
+                selected_columns: &selected_columns,
+                commitments: &tampered_commitments,
+            },
+            ..verifier_claim
+        };
+        assert!(verify_section6_final_opening(
+            b"section6-sparse-matrix",
+            b"outer-binding",
+            &verifier_parameters,
+            &grid,
+            &[tampered_commitment],
+            &decoded,
+        )
+        .is_err());
+
+        let other_columns = [1, 2];
+        let tampered_selection = Section6FinalOpeningVerifierClaim {
+            functional: Section6FinalOpeningFunctional::SparseMatrixColumns {
+                padded_rows: 8,
+                logical_cols: 3,
+                padded_cols: 4,
+                selected_columns: &other_columns,
+            },
+            ..verifier_claim
+        };
+        assert!(verify_section6_final_opening(
+            b"section6-sparse-matrix",
+            b"outer-binding",
+            &verifier_parameters,
+            &grid,
+            &[tampered_selection],
+            &decoded,
+        )
+        .is_err());
+
+        let mut other_point = verifier_claim.point_msb.to_vec();
+        other_point[0] += ark(1);
+        let tampered_point = Section6FinalOpeningVerifierClaim {
+            point_msb: &other_point,
+            ..verifier_claim
+        };
+        assert!(verify_section6_final_opening(
+            b"section6-sparse-matrix",
+            b"outer-binding",
+            &verifier_parameters,
+            &grid,
+            &[tampered_point],
+            &decoded,
+        )
+        .is_err());
+
+        let unsorted_columns = [2, 0];
+        let unsorted = Section6FinalOpeningVerifierClaim {
+            functional: Section6FinalOpeningFunctional::SparseMatrixColumns {
+                padded_rows: 8,
+                logical_cols: 3,
+                padded_cols: 4,
+                selected_columns: &unsorted_columns,
+            },
+            ..verifier_claim
+        };
+        assert!(matches!(
+            verify_section6_final_opening(
+                b"section6-sparse-matrix",
+                b"outer-binding",
+                &verifier_parameters,
+                &grid,
+                &[unsorted],
+                &decoded,
+            ),
+            Err(Section6FinalOpeningError::ProofShape)
+        ));
+    }
+
+    #[test]
+    fn sparse_matrix_claims_share_one_source_across_distinct_row_points() {
+        let grid = Section6DoryGrid::new(6).unwrap();
+        let (prover_parameters, verifier_parameters) = setup_dory_parameters(grid.num_vars());
+        let columns = (0..4)
+            .map(|column| {
+                (0..8)
+                    .map(|row| ark((80 * column + 9 * row + 5) as u64))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let column_refs = columns.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let committed = commit_section6_field_matrix_columns_on_grid_zk(
+            &prover_parameters,
+            &grid,
+            &column_refs,
+            4,
+        )
+        .unwrap();
+        let column_points = [vec![ark(2), ark(5)], vec![ark(17), ark(19)]];
+        let row_points = [
+            vec![ark(7), ark(11), ark(13)],
+            vec![ark(23), ark(29), ark(31)],
+        ];
+        let selections = [vec![0, 2], vec![1, 2]];
+        let evaluate = |column_point: &[ArkFr], row_point: &[ArkFr], selected: &[usize]| {
+            let column_point = column_point
+                .iter()
+                .copied()
+                .map(JoltFr::from)
+                .collect::<Vec<_>>();
+            let weights = EqPolynomial::<JoltFr>::evals(&column_point, None);
+            ArkFr::from(
+                selected
+                    .iter()
+                    .map(|&column| {
+                        weights[column]
+                            * JoltFr::from(
+                                evaluate_field_vector_standard(&columns[column], row_point)
+                                    .unwrap(),
+                            )
+                    })
+                    .sum::<JoltFr>(),
+            )
+        };
+        let evaluations = (0..2)
+            .map(|index| {
+                evaluate(
+                    &column_points[index],
+                    &row_points[index],
+                    &selections[index],
+                )
+            })
+            .collect::<Vec<_>>();
+        let full_points = (0..2)
+            .map(|index| {
+                column_points[index]
+                    .iter()
+                    .chain(&row_points[index])
+                    .copied()
+                    .map(JoltFr::from)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut rng = StdRng::seed_from_u64(0x5350_4152_5345_3252);
+        let witnesses = evaluations
+            .iter()
+            .map(|&evaluation| {
+                HiddenScalarWitness::commit(&prover_parameters, evaluation, &mut rng)
+            })
+            .collect::<Vec<_>>();
+        let resolved = (0..2)
+            .map(|index| {
+                resolve_section6_hidden_relation_sparse_matrix_prover_claim(
+                    HiddenRelationTable {
+                        values: &columns[0],
+                        committed: &committed[0],
+                    },
+                    &full_points[index],
+                    &selections[index],
+                    &grid,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let prover_claims = resolved
+            .iter()
+            .zip(&witnesses)
+            .map(|(resolved, witness)| resolved.as_claim(witness))
+            .collect::<Vec<_>>();
+        let coefficients = [JoltFr::from(ark(37)), JoltFr::from(ark(41))];
+        let states = ReductionStateSet::new(&prover_claims, &coefficients, grid).unwrap();
+        assert_eq!(states.sources.len(), 1);
+        assert_eq!(states.claims.len(), 2);
+        assert_eq!(
+            states.sources[0].remaining_inner_product(),
+            coefficients[0] * JoltFr::from(evaluations[0])
+                + coefficients[1] * JoltFr::from(evaluations[1])
+        );
+        drop(states);
+
+        let proof = prove_section6_final_opening(
+            b"section6-sparse-shared",
+            b"outer-binding",
+            &prover_parameters,
+            &grid,
+            &prover_claims,
+            &mut rng,
+        )
+        .unwrap();
+        let statement = HiddenRelationTableStatement::from(&committed[0]);
+        let verifier_resolved = (0..2)
+            .map(|index| {
+                resolve_section6_hidden_relation_sparse_matrix_verifier_claim(
+                    statement,
+                    &full_points[index],
+                    &selections[index],
+                    witnesses[index].commitment,
+                    &grid,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let verifier_claims = verifier_resolved
+            .iter()
+            .map(|resolved| resolved.as_claim())
+            .collect::<Vec<_>>();
+        verify_section6_final_opening(
+            b"section6-sparse-shared",
+            b"outer-binding",
+            &verifier_parameters,
+            &grid,
+            &verifier_claims,
+            &proof,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn heterogeneous_points_and_lengths_use_one_physical_dory_proof() {
         let grid = Section6DoryGrid::new(4).unwrap();
         let (prover_parameters, verifier_parameters) = setup_dory_parameters(grid.num_vars());
@@ -2399,13 +3576,21 @@ mod tests {
                 data: Section6FinalOpeningData::Field(&field_values),
                 committed: &field_commitment,
                 point_msb: &field_point,
+                functional: Section6FinalOpeningFunctional::Point,
                 evaluation: &field_eval_witness,
+                evaluation_commitment: Section6EvaluationCommitment::Direct(
+                    field_eval_witness.commitment,
+                ),
             },
             Section6FinalOpeningProverClaim {
                 data: Section6FinalOpeningData::Field(&short_values),
                 committed: &short_commitment,
                 point_msb: &short_point,
+                functional: Section6FinalOpeningFunctional::Point,
                 evaluation: &short_eval_witness,
+                evaluation_commitment: Section6EvaluationCommitment::Direct(
+                    short_eval_witness.commitment,
+                ),
             },
         ];
         let proof = prove_section6_final_opening(
@@ -2424,13 +3609,19 @@ mod tests {
                 commitment: &field_commitment.commitment,
                 logical_len: field_commitment.logical_len,
                 point_msb: &field_point,
-                evaluation_commitment: field_eval_witness.commitment,
+                functional: Section6FinalOpeningFunctional::Point,
+                evaluation_commitment: Section6EvaluationCommitment::Direct(
+                    field_eval_witness.commitment,
+                ),
             },
             Section6FinalOpeningVerifierClaim {
                 commitment: &short_commitment.commitment,
                 logical_len: short_commitment.logical_len,
                 point_msb: &short_point,
-                evaluation_commitment: short_eval_witness.commitment,
+                functional: Section6FinalOpeningFunctional::Point,
+                evaluation_commitment: Section6EvaluationCommitment::Direct(
+                    short_eval_witness.commitment,
+                ),
             },
         ];
         verify_section6_final_opening(
@@ -2478,7 +3669,11 @@ mod tests {
                 data: Section6FinalOpeningData::Field(&values),
                 committed: &committed,
                 point_msb: &point,
+                functional: Section6FinalOpeningFunctional::Point,
                 evaluation: &evaluation_witness,
+                evaluation_commitment: Section6EvaluationCommitment::Direct(
+                    evaluation_witness.commitment,
+                ),
             }],
             &mut rng,
         )
@@ -2488,7 +3683,10 @@ mod tests {
             commitment: &committed.commitment,
             logical_len: committed.logical_len,
             point_msb: &point,
-            evaluation_commitment: evaluation_witness.commitment,
+            functional: Section6FinalOpeningFunctional::Point,
+            evaluation_commitment: Section6EvaluationCommitment::Direct(
+                evaluation_witness.commitment,
+            ),
         };
         verify_section6_final_opening(
             b"section6-test",
@@ -2505,7 +3703,10 @@ mod tests {
             commitment: &committed.commitment,
             logical_len: committed.logical_len,
             point_msb: &tampered_point,
-            evaluation_commitment: evaluation_witness.commitment,
+            functional: Section6FinalOpeningFunctional::Point,
+            evaluation_commitment: Section6EvaluationCommitment::Direct(
+                evaluation_witness.commitment,
+            ),
         };
         assert!(verify_section6_final_opening(
             b"section6-test",
@@ -2524,7 +3725,8 @@ mod tests {
             commitment: &committed.commitment,
             logical_len: committed.logical_len,
             point_msb: &point,
-            evaluation_commitment: bad_commitment,
+            functional: Section6FinalOpeningFunctional::Point,
+            evaluation_commitment: Section6EvaluationCommitment::Direct(bad_commitment),
         };
         assert!(verify_section6_final_opening(
             b"section6-test",
@@ -2544,7 +3746,10 @@ mod tests {
             commitment: &other_committed.commitment,
             logical_len: committed.logical_len,
             point_msb: &point,
-            evaluation_commitment: evaluation_witness.commitment,
+            functional: Section6FinalOpeningFunctional::Point,
+            evaluation_commitment: Section6EvaluationCommitment::Direct(
+                evaluation_witness.commitment,
+            ),
         };
         assert!(verify_section6_final_opening(
             b"section6-test",

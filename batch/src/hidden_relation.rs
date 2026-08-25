@@ -19,7 +19,7 @@ use jolt_blindfold::{
     prove as prove_blindfold, BlindFoldProof, BlindFoldProtocol, BlindFoldWitness,
 };
 use jolt_claims::{constant, opening, Expr};
-use jolt_crypto::{Bn254G1, HomomorphicCommitment, Pedersen, VectorCommitment};
+use jolt_crypto::{Bn254G1, HomomorphicCommitment, JoltGroup, Pedersen, VectorCommitment};
 use jolt_field::{Fr, FromPrimitiveInt, RandomSampling};
 use jolt_poly::{EqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{
@@ -111,6 +111,24 @@ impl RelationExpression {
             Self::Sub(left, right) => left.evaluate(table_values) - right.evaluate(table_values),
             Self::Mul(left, right) => left.evaluate(table_values) * right.evaluate(table_values),
         }
+    }
+
+    fn affine_form(&self, table_count: usize) -> Result<(Fr, Vec<Fr>), HiddenRelationError> {
+        self.validate(table_count)?;
+        if self.degree() > 1 {
+            return Err(HiddenRelationError::NonAffineRelation);
+        }
+        let mut basis = vec![Fr::zero(); table_count];
+        let constant = self.evaluate(&basis);
+        let coefficients = (0..table_count)
+            .map(|index| {
+                basis[index] = Fr::one();
+                let coefficient = self.evaluate(&basis) - constant;
+                basis[index] = Fr::zero();
+                coefficient
+            })
+            .collect();
+        Ok((constant, coefficients))
     }
 
     fn claim_expression(&self) -> Expr<Fr, usize> {
@@ -225,6 +243,7 @@ pub struct HiddenRelationTableStatement<'a> {
 /// Position of one logical column in a single column-major matrix commitment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HiddenMatrixColumn {
+    pub logical_cols: usize,
     pub padded_cols: usize,
     pub column: usize,
 }
@@ -241,6 +260,7 @@ impl<'a> HiddenRelationTableStatement<'a> {
     pub fn matrix_column(
         commitment: &'a jolt_dory::DoryCommitment,
         logical_len: usize,
+        logical_cols: usize,
         padded_cols: usize,
         column: usize,
     ) -> Self {
@@ -248,6 +268,7 @@ impl<'a> HiddenRelationTableStatement<'a> {
             commitment,
             logical_len,
             matrix: Some(HiddenMatrixColumn {
+                logical_cols,
                 padded_cols,
                 column,
             }),
@@ -261,6 +282,7 @@ impl<'a> From<&'a CommittedDoryFieldVector> for HiddenRelationTableStatement<'a>
             commitment: &committed.commitment,
             logical_len: committed.logical_len,
             matrix: committed.matrix.as_ref().map(|matrix| HiddenMatrixColumn {
+                logical_cols: matrix.logical_cols,
                 padded_cols: matrix.padded_cols,
                 column: committed.matrix_column,
             }),
@@ -494,6 +516,25 @@ impl<'a> HiddenRelationVerifierOpening<'a> {
         &self.outer_binding
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_test_parts(
+        hidden_tables: Vec<HiddenRelationTableStatement<'a>>,
+        logical_len: usize,
+        row_point: Vec<Fr>,
+        evaluation_commitments: Vec<Bn254G1>,
+        outer_binding: Vec<u8>,
+    ) -> Result<Self, HiddenRelationError> {
+        let opening = Self {
+            hidden_tables,
+            logical_len,
+            row_point,
+            evaluation_commitments,
+            outer_binding,
+        };
+        validate_verifier_opening(&opening)?;
+        Ok(opening)
+    }
+
     /// Detach terminal claims so a caller can own the table descriptors itself.
     pub fn into_claims(self) -> HiddenRelationVerifierOpeningClaims {
         HiddenRelationVerifierOpeningClaims {
@@ -572,6 +613,12 @@ pub struct HiddenScalarRelationProof {
     pub blindfold: BlindFoldProof<Fr, Bn254G1>,
 }
 
+/// Opening of the aggregate blinding in one affine Pedersen relation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HiddenLinearRelationProof {
+    pub blind_delta: Fr,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HiddenRelationError {
     EmptyTables,
@@ -590,6 +637,7 @@ pub enum HiddenRelationError {
         available: usize,
     },
     NonZeroRelation,
+    NonAffineRelation,
     ProofShape,
     Dory(DenseI8DoryError),
     Sumcheck(String),
@@ -679,6 +727,38 @@ pub fn prove_hidden_sum_relation_with_public(
     )
 }
 
+/// Reduce a sum relation whose Boolean-hypercube sum is a hidden committed
+/// scalar instead of the public constant zero.
+///
+/// The claimed sum is appended to the committed sumcheck output row, so
+/// BlindFold binds the input claim to its existing Pedersen commitment. The
+/// returned Dory opening still contains only the actual table evaluations.
+pub fn prove_hidden_claimed_sum_relation_deferred<'a>(
+    label: &[u8],
+    parameters: &DoryProverParameters,
+    tables: &[HiddenRelationTable<'a>],
+    expression: &RelationExpression,
+    claimed_sum: &HiddenScalarWitness,
+    rng: &mut impl RngCore,
+) -> Result<
+    (
+        HiddenRelationReductionProof,
+        HiddenRelationProverOpening<'a>,
+    ),
+    HiddenRelationError,
+> {
+    prove_hidden_relation_deferred_with_check(
+        label,
+        parameters,
+        tables,
+        &[],
+        expression,
+        RelationCheck::Sum,
+        Some(claimed_sum),
+        rng,
+    )
+}
+
 /// Reduce an identity relation without opening any Dory commitment.
 pub fn prove_hidden_relation_deferred<'a>(
     label: &[u8],
@@ -700,6 +780,7 @@ pub fn prove_hidden_relation_deferred<'a>(
         &[],
         expression,
         RelationCheck::Identity,
+        None,
         rng,
     )
 }
@@ -726,6 +807,7 @@ pub fn prove_hidden_relation_deferred_with_public<'a>(
         public_tables,
         expression,
         RelationCheck::Identity,
+        None,
         rng,
     )
 }
@@ -751,6 +833,7 @@ pub fn prove_hidden_sum_relation_deferred<'a>(
         &[],
         expression,
         RelationCheck::Sum,
+        None,
         rng,
     )
 }
@@ -777,6 +860,7 @@ pub fn prove_hidden_sum_relation_deferred_with_public<'a>(
         public_tables,
         expression,
         RelationCheck::Sum,
+        None,
         rng,
     )
 }
@@ -797,6 +881,7 @@ fn prove_hidden_relation_complete_with_check(
         public_tables,
         expression,
         check,
+        None,
         rng,
     )?;
     let opening = prove_hidden_relation_opening(parameters, pending, rng)?;
@@ -817,6 +902,7 @@ fn prove_hidden_relation_deferred_with_check<'a>(
     public_tables: &[PublicRelationTable<'_>],
     expression: &RelationExpression,
     check: RelationCheck,
+    claimed_sum: Option<&HiddenScalarWitness>,
     rng: &mut impl RngCore,
 ) -> Result<
     (
@@ -832,10 +918,22 @@ fn prove_hidden_relation_deferred_with_check<'a>(
     if degree == 0 {
         return Err(HiddenRelationError::ProofShape);
     }
+    if let Some(claimed_sum) = claimed_sum {
+        if check != RelationCheck::Sum
+            || !Pedersen::<Bn254G1>::verify(
+                &parameters.blindfold,
+                &claimed_sum.commitment,
+                &[Fr::from(claimed_sum.value)],
+                &claimed_sum.blind,
+            )
+        {
+            return Err(HiddenRelationError::ProofShape);
+        }
+    }
     validate_capacity(
         parameters.blindfold.message_generators.len(),
         degree,
-        table_count,
+        table_count + usize::from(claimed_sum.is_some()),
     )?;
 
     let statements = hidden_tables
@@ -850,6 +948,7 @@ fn prove_hidden_relation_deferred_with_check<'a>(
         expression,
         logical_len,
         check,
+        claimed_sum.map(|claim| &claim.commitment),
     )?;
     let zero_test_point = if check == RelationCheck::Identity {
         transcript.challenge_vector(num_vars)
@@ -882,7 +981,9 @@ fn prove_hidden_relation_deferred_with_check<'a>(
     } else {
         vec![Fr::one(); logical_len]
     };
-    let mut running_claim = Fr::zero();
+    let mut running_claim = claimed_sum
+        .map(|claim| Fr::from(claim.value))
+        .unwrap_or_else(Fr::zero);
     let mut sumcheck_builder =
         CommittedSumcheckBuilder::<Fr, Pedersen<Bn254G1>, _>::new(&parameters.blindfold, &mut *rng)
             .map_err(|error| HiddenRelationError::Sumcheck(error.to_string()))?;
@@ -911,8 +1012,12 @@ fn prove_hidden_relation_deferred_with_check<'a>(
                 .ok_or(HiddenRelationError::ProofShape)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut output_values = evaluations.clone();
+    if let Some(claimed_sum) = claimed_sum {
+        output_values.push(Fr::from(claimed_sum.value));
+    }
     let (sumcheck, sumcheck_witness) = sumcheck_builder
-        .finish(&evaluations, &mut transcript)
+        .finish(&output_values, &mut transcript)
         .map_err(|error| HiddenRelationError::Sumcheck(error.to_string()))?;
     let SumcheckProof::Committed(sumcheck) = sumcheck else {
         return Err(HiddenRelationError::ProofShape);
@@ -927,6 +1032,7 @@ fn prove_hidden_relation_deferred_with_check<'a>(
         &zero_test_point,
         &sumcheck,
         check,
+        claimed_sum.map(|claim| &claim.commitment),
     )?;
     let mut evaluation_commitments = Vec::with_capacity(table_count);
     let mut evaluation_blinds = Vec::with_capacity(table_count);
@@ -960,10 +1066,16 @@ fn prove_hidden_relation_deferred_with_check<'a>(
         ));
         evaluation_blinds.push(Fr::zero());
     }
+    let mut all_evaluation_commitments = evaluation_commitments.clone();
+    let mut all_evaluation_blinds = evaluation_blinds.clone();
+    if let Some(claimed_sum) = claimed_sum {
+        all_evaluation_commitments.push(claimed_sum.commitment);
+        all_evaluation_blinds.push(claimed_sum.blind);
+    }
     let opening_coefficients =
-        bind_evaluation_commitments(&mut transcript, &evaluation_commitments);
-    let final_evaluation = combine_scalars(&evaluations, &opening_coefficients);
-    let final_evaluation_blind = combine_scalars(&evaluation_blinds, &opening_coefficients);
+        bind_evaluation_commitments(&mut transcript, &all_evaluation_commitments);
+    let final_evaluation = combine_scalars(&output_values, &opening_coefficients);
+    let final_evaluation_blind = combine_scalars(&all_evaluation_blinds, &opening_coefficients);
 
     let protocol = build_protocol(
         expression,
@@ -973,9 +1085,10 @@ fn prove_hidden_relation_deferred_with_check<'a>(
         &zero_test_point,
         &sumcheck_point,
         &sumcheck,
-        &evaluation_commitments,
+        &all_evaluation_commitments,
         &opening_coefficients,
         check,
+        claimed_sum.is_some(),
         &mut relation_transcript(
             label,
             &statements,
@@ -983,6 +1096,7 @@ fn prove_hidden_relation_deferred_with_check<'a>(
             expression,
             logical_len,
             check,
+            claimed_sum.map(|claim| &claim.commitment),
         )?,
     )?;
     let assigned = protocol
@@ -1015,7 +1129,7 @@ fn prove_hidden_relation_deferred_with_check<'a>(
     Ok((
         HiddenRelationReductionProof {
             sumcheck,
-            evaluation_commitments,
+            evaluation_commitments: hidden_evaluation_commitments.clone(),
             blindfold_transcript_state,
             blindfold,
         },
@@ -1192,6 +1306,7 @@ pub fn verify_hidden_relation_deferred<'a>(
         expression,
         proof,
         RelationCheck::Identity,
+        None,
     )
 }
 
@@ -1212,6 +1327,7 @@ pub fn verify_hidden_relation_deferred_with_public<'a>(
         expression,
         proof,
         RelationCheck::Identity,
+        None,
     )
 }
 
@@ -1231,6 +1347,7 @@ pub fn verify_hidden_sum_relation_deferred<'a>(
         expression,
         proof,
         RelationCheck::Sum,
+        None,
     )
 }
 
@@ -1251,6 +1368,28 @@ pub fn verify_hidden_sum_relation_deferred_with_public<'a>(
         expression,
         proof,
         RelationCheck::Sum,
+        None,
+    )
+}
+
+/// Verify a deferred sum relation against a hidden committed input claim.
+pub fn verify_hidden_claimed_sum_relation_deferred<'a>(
+    label: &[u8],
+    parameters: &DoryVerifierParameters,
+    tables: &[HiddenRelationTableStatement<'a>],
+    expression: &RelationExpression,
+    claimed_sum_commitment: &Bn254G1,
+    proof: &HiddenRelationReductionProof,
+) -> Result<HiddenRelationVerifierOpening<'a>, HiddenRelationError> {
+    verify_hidden_relation_deferred_with_check(
+        label,
+        parameters,
+        tables,
+        &[],
+        expression,
+        proof,
+        RelationCheck::Sum,
+        Some(claimed_sum_commitment),
     )
 }
 
@@ -1277,6 +1416,7 @@ fn verify_hidden_relation_complete_with_check(
         expression,
         &reduction,
         check,
+        None,
     )?;
     verify_hidden_relation_opening(
         parameters,
@@ -1296,6 +1436,7 @@ fn verify_hidden_relation_deferred_with_check<'a>(
     expression: &RelationExpression,
     proof: &HiddenRelationReductionProof,
     check: RelationCheck,
+    claimed_sum_commitment: Option<&Bn254G1>,
 ) -> Result<HiddenRelationVerifierOpening<'a>, HiddenRelationError> {
     let logical_len = validate_verifier_tables(hidden_tables, public_tables, expression)?;
     let table_count = hidden_tables.len() + public_tables.len();
@@ -1304,12 +1445,15 @@ fn verify_hidden_relation_deferred_with_check<'a>(
     if degree == 0 {
         return Err(HiddenRelationError::ProofShape);
     }
+    if claimed_sum_commitment.is_some() && check != RelationCheck::Sum {
+        return Err(HiddenRelationError::ProofShape);
+    }
     validate_capacity(
         parameters.blindfold.message_generators.len(),
         degree,
-        table_count,
+        table_count + usize::from(claimed_sum_commitment.is_some()),
     )?;
-    if proof.evaluation_commitments.len() != table_count {
+    if proof.evaluation_commitments.len() != hidden_tables.len() {
         return Err(HiddenRelationError::ProofShape);
     }
 
@@ -1321,6 +1465,7 @@ fn verify_hidden_relation_deferred_with_check<'a>(
         expression,
         logical_len,
         check,
+        claimed_sum_commitment,
     )?;
     let zero_test_point = if check == RelationCheck::Identity {
         transcript.challenge_vector(num_vars)
@@ -1340,9 +1485,10 @@ fn verify_hidden_relation_deferred_with_check<'a>(
         &zero_test_point,
         &proof.sumcheck,
         check,
+        claimed_sum_commitment,
     )?;
-    let hidden_evaluation_commitments = &proof.evaluation_commitments[..hidden_tables.len()];
-    let mut evaluation_commitments = hidden_evaluation_commitments.to_vec();
+    let hidden_evaluation_commitments = &proof.evaluation_commitments;
+    let mut evaluation_commitments = hidden_evaluation_commitments.clone();
     for table in public_tables {
         let evaluation = table.evaluate(&sumcheck_point)?;
         evaluation_commitments.push(Pedersen::<Bn254G1>::commit(
@@ -1351,13 +1497,12 @@ fn verify_hidden_relation_deferred_with_check<'a>(
             &Fr::zero(),
         ));
     }
-    if evaluation_commitments != proof.evaluation_commitments {
-        return Err(HiddenRelationError::Dory(
-            DenseI8DoryError::EvaluationCommitmentMismatch,
-        ));
+    let mut all_evaluation_commitments = evaluation_commitments.clone();
+    if let Some(commitment) = claimed_sum_commitment {
+        all_evaluation_commitments.push(*commitment);
     }
     let opening_coefficients =
-        bind_evaluation_commitments(&mut transcript, &evaluation_commitments);
+        bind_evaluation_commitments(&mut transcript, &all_evaluation_commitments);
 
     let protocol = build_protocol_from_consistency(
         expression,
@@ -1368,9 +1513,10 @@ fn verify_hidden_relation_deferred_with_check<'a>(
         &sumcheck_point,
         consistency,
         &proof.sumcheck,
-        &evaluation_commitments,
+        &all_evaluation_commitments,
         &opening_coefficients,
         check,
+        claimed_sum_commitment.is_some(),
     )?;
     if transcript.state() != proof.blindfold_transcript_state {
         return Err(HiddenRelationError::Encoding(
@@ -1457,6 +1603,88 @@ pub fn verify_hidden_relation_openings_batch(
             &group_proof.opening.matrix_dory_batches,
             &opening_binding,
         )?;
+    }
+    Ok(())
+}
+
+/// Collapse an affine expression into one hidden Pedersen witness.
+pub fn combine_hidden_linear_witness(
+    parameters: &DoryProverParameters,
+    witnesses: &[HiddenScalarWitness],
+    expression: &RelationExpression,
+) -> Result<HiddenScalarWitness, HiddenRelationError> {
+    if witnesses.is_empty() {
+        return Err(HiddenRelationError::EmptyTables);
+    }
+    let (constant, coefficients) = expression.affine_form(witnesses.len())?;
+    let values = witnesses
+        .iter()
+        .map(|witness| Fr::from(witness.value))
+        .collect::<Vec<_>>();
+    if witnesses.iter().any(|witness| {
+        !Pedersen::<Bn254G1>::verify(
+            &parameters.blindfold,
+            &witness.commitment,
+            &[Fr::from(witness.value)],
+            &witness.blind,
+        )
+    }) {
+        return Err(HiddenRelationError::NonZeroRelation);
+    }
+    let value = constant + combine_scalars(&values, &coefficients);
+    let blind = witnesses
+        .iter()
+        .zip(&coefficients)
+        .map(|(witness, &coefficient)| witness.blind * coefficient)
+        .sum::<Fr>();
+    Ok(HiddenScalarWitness {
+        value: ArkFr::from(value),
+        commitment: Pedersen::<Bn254G1>::commit(&parameters.blindfold, &[value], &blind),
+        blind,
+    })
+}
+
+/// Collapse an affine expression into one verifier-side Pedersen commitment.
+pub fn combine_hidden_linear_commitments(
+    parameters: &DoryVerifierParameters,
+    commitments: &[Bn254G1],
+    expression: &RelationExpression,
+) -> Result<Bn254G1, HiddenRelationError> {
+    if commitments.is_empty() {
+        return Err(HiddenRelationError::EmptyTables);
+    }
+    let (constant, coefficients) = expression.affine_form(commitments.len())?;
+    Ok(Bn254G1::msm(commitments, &coefficients)
+        + Pedersen::<Bn254G1>::commit(&parameters.blindfold, &[constant], &Fr::zero()))
+}
+
+/// Prove an affine relation by opening only its aggregate zero commitment.
+pub fn prove_hidden_linear_relation(
+    parameters: &DoryProverParameters,
+    witnesses: &[HiddenScalarWitness],
+    expression: &RelationExpression,
+) -> Result<HiddenLinearRelationProof, HiddenRelationError> {
+    let combined = combine_hidden_linear_witness(parameters, witnesses, expression)?;
+    if !combined.value.is_zero() {
+        return Err(HiddenRelationError::NonZeroRelation);
+    }
+    Ok(HiddenLinearRelationProof {
+        blind_delta: combined.blind,
+    })
+}
+
+/// Verify an affine relation by opening only its aggregate zero commitment.
+pub fn verify_hidden_linear_relation(
+    parameters: &DoryVerifierParameters,
+    commitments: &[Bn254G1],
+    expression: &RelationExpression,
+    proof: &HiddenLinearRelationProof,
+) -> Result<(), HiddenRelationError> {
+    let aggregate = combine_hidden_linear_commitments(parameters, commitments, expression)?;
+    let expected =
+        Pedersen::<Bn254G1>::commit(&parameters.blindfold, &[Fr::zero()], &proof.blind_delta);
+    if aggregate != expected {
+        return Err(HiddenRelationError::NonZeroRelation);
     }
     Ok(())
 }
@@ -1553,6 +1781,7 @@ pub fn prove_hidden_scalar_relation(
         &commitments,
         &opening_coefficients,
         RelationCheck::Identity,
+        false,
         &mut scalar_relation_transcript(label, &commitments, expression)?,
     )?;
     let assigned = protocol
@@ -1622,6 +1851,7 @@ pub fn verify_hidden_scalar_relation(
         commitments,
         &opening_coefficients,
         RelationCheck::Identity,
+        false,
     )?;
     if transcript.state() != proof.blindfold_transcript_state {
         return Err(HiddenRelationError::Encoding(
@@ -1670,6 +1900,7 @@ fn build_protocol(
     evaluation_commitments: &[Bn254G1],
     opening_coefficients: &[Fr],
     check: RelationCheck,
+    hidden_input_claim: bool,
     consistency_transcript: &mut Blake2bTranscript<Fr>,
 ) -> Result<BlindFoldProtocol<Fr, Bn254G1>, HiddenRelationError> {
     if check == RelationCheck::Identity {
@@ -1700,6 +1931,7 @@ fn build_protocol(
         evaluation_commitments,
         opening_coefficients,
         check,
+        hidden_input_claim,
     )
 }
 
@@ -1716,6 +1948,7 @@ fn build_protocol_from_consistency(
     evaluation_commitments: &[Bn254G1],
     opening_coefficients: &[Fr],
     check: RelationCheck,
+    hidden_input_claim: bool,
 ) -> Result<BlindFoldProtocol<Fr, Bn254G1>, HiddenRelationError> {
     if opening_coefficients.len() != evaluation_commitments.len() {
         return Err(HiddenRelationError::ProofShape);
@@ -1725,15 +1958,22 @@ fn build_protocol_from_consistency(
     } else {
         Fr::one()
     };
+    let table_count = evaluation_commitments.len() - usize::from(hidden_input_claim);
+    expression.validate(table_count)?;
     let output_expression = constant(eq_evaluation) * expression.claim_expression();
     let opening_ids = (0..evaluation_commitments.len()).collect::<Vec<_>>();
+    let input_expression = if hidden_input_claim {
+        opening(table_count)
+    } else {
+        constant(Fr::zero())
+    };
     let mut builder = BlindFoldProtocol::<Fr, Bn254G1>::builder::<usize, (), usize>()
         .stage("hidden-relation-zero-test")
         .sumcheck(SumcheckStatement::new(num_vars, degree))
         .domain(SumcheckDomainSpec::BooleanHypercube)
         .consistency(consistency)
         .output_claim_rows(opening_ids.clone(), row_len, sumcheck.output_claims.clone())
-        .input_claim(constant(Fr::zero()))
+        .input_claim(input_expression)
         .output_claim(output_expression)
         .finish_stage()
         .map_err(|error| HiddenRelationError::BlindFold(error.to_string()))?;
@@ -2324,7 +2564,7 @@ fn verifier_matrix_groups<'a>(
         .collect())
 }
 
-fn matrix_column_point(
+pub(crate) fn matrix_column_point(
     outer_binding: &[u8],
     logical_rows: usize,
     padded_cols: usize,
@@ -2392,7 +2632,9 @@ fn validate_prover_tables(
         }
         if let Some(matrix) = &table.committed.matrix {
             if matrix.padded_rows != logical_len
-                || table.committed.matrix_column >= matrix.padded_cols
+                || matrix.logical_cols == 0
+                || matrix.logical_cols > matrix.padded_cols
+                || table.committed.matrix_column >= matrix.logical_cols
                 || matrix.values[table.committed.matrix_column * logical_len
                     ..(table.committed.matrix_column + 1) * logical_len]
                     != *table.values
@@ -2435,9 +2677,11 @@ fn validate_verifier_tables(
             });
         }
         if let Some(matrix) = table.matrix {
-            if matrix.padded_cols == 0
+            if matrix.logical_cols == 0
+                || matrix.padded_cols == 0
+                || matrix.logical_cols > matrix.padded_cols
                 || !matrix.padded_cols.is_power_of_two()
-                || matrix.column >= matrix.padded_cols
+                || matrix.column >= matrix.logical_cols
             {
                 return Err(HiddenRelationError::ProofShape);
             }
@@ -2600,6 +2844,7 @@ fn relation_transcript(
     expression: &RelationExpression,
     logical_len: usize,
     check: RelationCheck,
+    claimed_sum_commitment: Option<&Bn254G1>,
 ) -> Result<Blake2bTranscript<Fr>, HiddenRelationError> {
     let mut transcript = Blake2bTranscript::<Fr>::new(b"parcomm-hidden-relation-v2");
     transcript.append(&Label(b"hidden_relation_statement"));
@@ -2610,6 +2855,10 @@ fn relation_transcript(
         b"relation_check",
         &U64Word(u64::from(check == RelationCheck::Sum)),
     );
+    if let Some(commitment) = claimed_sum_commitment {
+        transcript.append(&Label(b"hidden_sum_claim"));
+        transcript.append_labeled(b"hidden_sum_claim_commitment", commitment);
+    }
     transcript.append(&LabelWithCount(
         b"relation_tables",
         hidden_tables.len() as u64,
@@ -2620,10 +2869,14 @@ fn relation_transcript(
             b"relation_table_logical_len",
             &U64Word(table.logical_len as u64),
         );
-        let (padded_cols, column) = table
+        let (logical_cols, padded_cols, column) = table
             .matrix
-            .map(|matrix| (matrix.padded_cols, matrix.column))
-            .unwrap_or((0, 0));
+            .map(|matrix| (matrix.logical_cols, matrix.padded_cols, matrix.column))
+            .unwrap_or((0, 0, 0));
+        transcript.append_labeled(
+            b"relation_matrix_logical_cols",
+            &U64Word(logical_cols as u64),
+        );
         transcript.append_labeled(b"relation_matrix_cols", &U64Word(padded_cols as u64));
         transcript.append_labeled(b"relation_matrix_col", &U64Word(column as u64));
     }
@@ -2656,13 +2909,14 @@ fn relation_outer_binding(
     zero_test_point: &[Fr],
     sumcheck: &CommittedSumcheckProof<Bn254G1>,
     check: RelationCheck,
+    claimed_sum_commitment: Option<&Bn254G1>,
 ) -> Result<Vec<u8>, HiddenRelationError> {
     let commitments = hidden_tables
         .iter()
         .map(|table| {
             let matrix = table
                 .matrix
-                .map(|matrix| (matrix.padded_cols, matrix.column));
+                .map(|matrix| (matrix.logical_cols, matrix.padded_cols, matrix.column));
             (
                 commitment_binding_bytes(table.commitment),
                 table.logical_len,
@@ -2670,7 +2924,20 @@ fn relation_outer_binding(
             )
         })
         .collect::<Vec<_>>();
-    let encoded = if public_digests.is_empty() {
+    let encoded = if let Some(commitment) = claimed_sum_commitment {
+        bincode::serialize(&(
+            b"parcomm-hidden-relation-claimed-sum-binding-v1".as_slice(),
+            label,
+            logical_len,
+            commitments,
+            public_digests,
+            expression,
+            check,
+            commitment,
+            zero_test_point,
+            sumcheck,
+        ))
+    } else if public_digests.is_empty() {
         bincode::serialize(&(
             label,
             logical_len,
@@ -2728,12 +2995,7 @@ fn combine_scalars(values: &[Fr], coefficients: &[Fr]) -> Fr {
 }
 
 fn combine_commitments(commitments: &[Bn254G1], coefficients: &[Fr]) -> Bn254G1 {
-    commitments.iter().zip(coefficients).fold(
-        Bn254G1::default(),
-        |accumulator, (commitment, coefficient)| {
-            Bn254G1::linear_combine(&accumulator, commitment, coefficient)
-        },
-    )
+    Bn254G1::msm(commitments, coefficients)
 }
 
 #[cfg(test)]
@@ -3456,6 +3718,197 @@ mod tests {
     }
 
     #[test]
+    fn deferred_claimed_sum_binds_hidden_input_without_terminal_dory_claim() {
+        let (prover_parameters, verifier_parameters) = setup_dory_parameters(8);
+        let values = (1..=8).map(ArkFr::from).collect::<Vec<_>>();
+        let committed = commit_field_vector_zk(&prover_parameters, &values).unwrap();
+        let table = HiddenRelationTable {
+            values: &values,
+            committed: &committed,
+        };
+        let statement = HiddenRelationTableStatement::from(&committed);
+        let expression = RelationExpression::table(0);
+        let mut rng = StdRng::seed_from_u64(0xC1A1_5EED);
+        let claimed_sum =
+            HiddenScalarWitness::commit(&prover_parameters, values.iter().copied().sum(), &mut rng);
+
+        let (proof, prover_opening) = prove_hidden_claimed_sum_relation_deferred(
+            b"claimed-sum",
+            &prover_parameters,
+            &[table],
+            &expression,
+            &claimed_sum,
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(prover_opening.hidden_tables().len(), 1);
+        assert_eq!(prover_opening.evaluation_commitments().len(), 1);
+        let verifier_opening = verify_hidden_claimed_sum_relation_deferred(
+            b"claimed-sum",
+            &verifier_parameters,
+            &[statement],
+            &expression,
+            &claimed_sum.commitment,
+            &proof,
+        )
+        .unwrap();
+        assert_eq!(verifier_opening.hidden_tables().len(), 1);
+        assert_eq!(verifier_opening.evaluation_commitments().len(), 1);
+
+        let opening =
+            prove_hidden_relation_opening(&prover_parameters, prover_opening, &mut rng).unwrap();
+        verify_hidden_relation_opening(&verifier_parameters, verifier_opening, &opening).unwrap();
+
+        let wrong_sum =
+            HiddenScalarWitness::commit(&prover_parameters, ArkFr::from(37_u64), &mut rng);
+        assert!(verify_hidden_claimed_sum_relation_deferred(
+            b"claimed-sum",
+            &verifier_parameters,
+            &[statement],
+            &expression,
+            &wrong_sum.commitment,
+            &proof,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn native_domain_claimed_sums_balance_without_public_subtotals() {
+        let (prover_parameters, verifier_parameters) = setup_dory_parameters(8);
+        let positive = (1..=4).map(ArkFr::from).collect::<Vec<_>>();
+        let negative = [1_u64, 2, 3, 4, 0, 0, 0, 0]
+            .into_iter()
+            .map(|value| -ArkFr::from(value))
+            .collect::<Vec<_>>();
+        let committed_positive = commit_field_vector_zk(&prover_parameters, &positive).unwrap();
+        let committed_negative = commit_field_vector_zk(&prover_parameters, &negative).unwrap();
+        let expression = RelationExpression::table(0);
+        let mut rng = StdRng::seed_from_u64(0xD0A1_5EED);
+        let positive_sum = HiddenScalarWitness::commit(
+            &prover_parameters,
+            positive.iter().copied().sum(),
+            &mut rng,
+        );
+        let negative_sum = HiddenScalarWitness::commit(
+            &prover_parameters,
+            negative.iter().copied().sum(),
+            &mut rng,
+        );
+        let (positive_proof, positive_opening) = prove_hidden_claimed_sum_relation_deferred(
+            b"native-positive-sum",
+            &prover_parameters,
+            &[HiddenRelationTable {
+                values: &positive,
+                committed: &committed_positive,
+            }],
+            &expression,
+            &positive_sum,
+            &mut rng,
+        )
+        .unwrap();
+        let (negative_proof, negative_opening) = prove_hidden_claimed_sum_relation_deferred(
+            b"native-negative-sum",
+            &prover_parameters,
+            &[HiddenRelationTable {
+                values: &negative,
+                committed: &committed_negative,
+            }],
+            &expression,
+            &negative_sum,
+            &mut rng,
+        )
+        .unwrap();
+        let positive_statement = HiddenRelationTableStatement::from(&committed_positive);
+        let negative_statement = HiddenRelationTableStatement::from(&committed_negative);
+        let positive_verifier = verify_hidden_claimed_sum_relation_deferred(
+            b"native-positive-sum",
+            &verifier_parameters,
+            &[positive_statement],
+            &expression,
+            &positive_sum.commitment,
+            &positive_proof,
+        )
+        .unwrap();
+        let negative_verifier = verify_hidden_claimed_sum_relation_deferred(
+            b"native-negative-sum",
+            &verifier_parameters,
+            &[negative_statement],
+            &expression,
+            &negative_sum.commitment,
+            &negative_proof,
+        )
+        .unwrap();
+
+        let balance = RelationExpression::table(0).add(RelationExpression::table(1));
+        let balance_proof = prove_hidden_scalar_relation(
+            b"native-domain-balance",
+            &prover_parameters,
+            &[positive_sum.clone(), negative_sum.clone()],
+            &balance,
+            &mut rng,
+        )
+        .unwrap();
+        verify_hidden_scalar_relation(
+            b"native-domain-balance",
+            &verifier_parameters,
+            &[positive_sum.commitment, negative_sum.commitment],
+            &balance,
+            &balance_proof,
+        )
+        .unwrap();
+
+        let opening = prove_hidden_relation_openings_batch(
+            &prover_parameters,
+            &[positive_opening, negative_opening],
+            &mut rng,
+        )
+        .unwrap();
+        verify_hidden_relation_openings_batch(
+            &verifier_parameters,
+            &[positive_verifier, negative_verifier],
+            &opening,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn affine_scalar_relation_uses_one_zero_commitment_opening() {
+        let (prover_parameters, verifier_parameters) = setup_dory_parameters(4);
+        let mut rng = StdRng::seed_from_u64(0xAFFF_1E00);
+        let left = HiddenScalarWitness::commit(&prover_parameters, ArkFr::from(7_u64), &mut rng);
+        let right = HiddenScalarWitness::commit(&prover_parameters, ArkFr::from(11_u64), &mut rng);
+        let total = HiddenScalarWitness::commit(&prover_parameters, ArkFr::from(18_u64), &mut rng);
+        let expression = RelationExpression::table(0)
+            .add(RelationExpression::table(1))
+            .sub(RelationExpression::table(2));
+        let proof = prove_hidden_linear_relation(
+            &prover_parameters,
+            &[left.clone(), right.clone(), total.clone()],
+            &expression,
+        )
+        .unwrap();
+        let commitments = [left.commitment, right.commitment, total.commitment];
+        verify_hidden_linear_relation(&verifier_parameters, &commitments, &expression, &proof)
+            .unwrap();
+
+        let mut tampered = proof;
+        tampered.blind_delta += Fr::one();
+        assert!(verify_hidden_linear_relation(
+            &verifier_parameters,
+            &commitments,
+            &expression,
+            &tampered,
+        )
+        .is_err());
+
+        let nonlinear = RelationExpression::table(0).mul(RelationExpression::table(1));
+        assert_eq!(
+            prove_hidden_linear_relation(&prover_parameters, &[left, right], &nonlinear),
+            Err(HiddenRelationError::NonAffineRelation)
+        );
+    }
+
+    #[test]
     fn public_row_varying_operand_verifies_without_dory_opening_and_rejects_tampering() {
         let (prover_parameters, verifier_parameters) = setup_dory_parameters(8);
         let left = (0..16)
@@ -3495,7 +3948,7 @@ mod tests {
             &mut rng,
         )
         .unwrap();
-        assert_eq!(proof.evaluation_commitments.len(), 3);
+        assert_eq!(proof.evaluation_commitments.len(), 2);
 
         let hidden_statements = [
             HiddenRelationTableStatement::from(&committed_left),
@@ -3547,7 +4000,7 @@ mod tests {
             &mut rng,
         )
         .unwrap();
-        assert_eq!(proof.evaluation_commitments.len(), 2);
+        assert_eq!(proof.evaluation_commitments.len(), 1);
 
         let hidden_statements = [HiddenRelationTableStatement::from(&committed_hidden)];
         verify_hidden_sum_relation_with_public(

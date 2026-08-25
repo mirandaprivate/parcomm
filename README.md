@@ -116,7 +116,8 @@ RAYON_NUM_THREADS=64 cargo bench --quiet -p batch --bench experiment -- \
 This workload contains 1,024 matrices of shape `4095 x 4095` and stores a
 `2^34`-entry native-i8 BVA, including its padded coordinates. It is a
 large-memory experiment; reserve at least 40 GiB of available memory.
-Shape-validity proving is optional and disabled by default.
+Shape-validity proving is enabled by default and is included in the reported
+prover time, proof size, and verifier time.
 
 ### Converted model matrices
 
@@ -195,7 +196,9 @@ little-endian i16 field value.
 --bva PATH               Override the BVA file
 --skip-input-hash        Skip the model BVA SHA-256 pass
 --allow-non-64-threads   Permit a local smoke run
---shape-validity-proof   Include the optional shape-validity proof
+--shape-validity-proof   Explicitly enable shape-validity proving (default)
+--skip-shape-validity-proof
+                         Disable shape validity for a performance-only run
 --summary-only           Print benchmark stages and the final table only
 ```
 
@@ -214,12 +217,17 @@ The end-to-end benchmark finishes with one result table:
 | Commit time | Total with BVA commitment, shape commitment, and other overhead |
 | Commit size | Serialized persistent commitment statement |
 | Open time | Total with BVA open, EO-LiteBullet, TBV compilation and evaluation proof, terminal open, and other overhead |
-| Proof size | Opening proof plus the optional shape-validity proof |
+| Proof size | One integrated opening proof, including shape validity by default |
 | Verifier time | Complete verifier time |
 | Peak RSS | Maximum resident memory observed during the experiment |
 
 The final `VERIFIED` result is printed only after proof serialization,
 independent decoding, and verification have all succeeded.
+
+With shape validity enabled, the source, point-power, and two shape-power
+lookups use one tagged LogUp reduction. Shape, lookup, and point/final claims
+share one auxiliary terminal Dory opening; the dense BVA opening remains the
+only separate Dory opening.
 
 Omit `--summary-only` when collecting the complete machine-readable
 `key=value` metric stream in addition to the stage messages and final table.

@@ -7,8 +7,9 @@ use batch::{
     },
     section6_final_opening::{
         commit_section6_field_on_grid_zk, prove_section6_final_opening_profiled,
-        verify_section6_final_opening_profiled, Section6DoryGrid, Section6FinalOpeningData,
-        Section6FinalOpeningProverClaim, Section6FinalOpeningVerifierClaim,
+        verify_section6_final_opening_profiled, Section6DoryGrid, Section6EvaluationCommitment,
+        Section6FinalOpeningData, Section6FinalOpeningFunctional, Section6FinalOpeningProverClaim,
+        Section6FinalOpeningVerifierClaim,
     },
 };
 
@@ -33,7 +34,9 @@ fn terminal_opening_profiles_are_exhaustive_and_the_proof_verifies() {
         data: Section6FinalOpeningData::Field(&values),
         committed: &committed,
         point_msb: &point,
+        functional: Section6FinalOpeningFunctional::Point,
         evaluation: &witness,
+        evaluation_commitment: Section6EvaluationCommitment::Direct(witness.commitment),
     };
 
     let (proof, prover_profile) = prove_section6_final_opening_profiled(
@@ -52,7 +55,8 @@ fn terminal_opening_profiles_are_exhaustive_and_the_proof_verifies() {
         commitment: &committed.commitment,
         logical_len: committed.logical_len,
         point_msb: &point,
-        evaluation_commitment: witness.commitment,
+        functional: Section6FinalOpeningFunctional::Point,
+        evaluation_commitment: Section6EvaluationCommitment::Direct(witness.commitment),
     };
     let verifier_profile = verify_section6_final_opening_profiled(
         b"section6-timing-profile-test",

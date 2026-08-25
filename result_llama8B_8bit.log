@@ -1,17 +1,3 @@
-run_id=llama8b_i8_stream_20260824T140209Z
-host=swiftlab
-rayon_threads=64
-conversion_transport=python_stdout_active_prefix
-bva_disk_materialized=false
-command=cargo bench --offline --config /home/mscong1/git/jolt-local.toml -p batch --bench experiment_llama8B_8bit
-2026-08-24T22:03:09+08:00
-   Compiling jolt-openings v0.1.0 (/home/mscong1/git/jolt/crates/jolt-openings)
-   Compiling jolt-claims v0.1.0 (/home/mscong1/git/jolt/crates/jolt-claims)
-   Compiling jolt-dory v0.1.0 (/home/mscong1/git/jolt/crates/jolt-dory)
-   Compiling jolt-r1cs v0.1.0 (/home/mscong1/git/jolt/crates/jolt-r1cs)
-   Compiling jolt-sumcheck v0.1.0 (/home/mscong1/git/jolt/crates/jolt-sumcheck)
-   Compiling jolt-blindfold v0.1.0 (/home/mscong1/git/jolt/crates/jolt-blindfold)
-   Compiling batch v0.1.0 (/home/mscong1/git/parcomm/batch)
 warning: function `public_table_digest` is never used
    --> batch/src/hidden_relation_batch.rs:638:4
     |
@@ -82,7 +68,6 @@ warning: function `section6_claim_value_logical_len` is never used
 384 | pub(crate) fn section6_claim_value_logical_len(
     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-warning: `batch` (lib) generated 9 warnings
 warning: variants `Llama8bI16`, `Llama70bI8`, and `Llama70bI16` are never constructed
   --> batch/benches/experiment_llama70B_8bit.rs:29:5
    |
@@ -117,9 +102,6 @@ warning: function `run_8b_i16_from_args` is never used
 192 | pub(crate) fn run_8b_i16_from_args(arguments: impl IntoIterator<Item = ...
     |               ^^^^^^^^^^^^^^^^^^^^
 
-warning: `batch` (bench "experiment_llama8B_8bit") generated 4 warnings
-    Finished `bench` profile [optimized + debuginfo] target(s) in 22.56s
-     Running benches/experiment_llama8B_8bit.rs (target/release/deps/experiment_llama8B_8bit-ecd9e13f3759259f)
 llama_pipeline_output_mode=detailed
 pipeline=llama8b-i8-safetensors-to-memory
 model_source=/home/mscong1/git/model-data/Llama-3.1-8B-W8A8
@@ -129,10 +111,10 @@ conversion_transport=python_stdout_active_prefix
 bva_storage=contiguous_in_memory_i8
 bva_disk_materialized=false
 bva_disk_bytes_written=0
-preflight_available_memory_kib=383337136
+preflight_available_memory_kib=386630576
 preflight_required_memory_kib=41943040
 [pipeline stage 1/2] Describe checkpoint and canonical BVA layout
-description_seconds=0.229055
+description_seconds=0.223950
 selected_tensors=291
 native_i8_tensors=224
 converted_float_tensors=67
@@ -145,11 +127,11 @@ logical_bva_bytes=8589934592
 [pipeline stage 2/2] Stream safetensors into memory and run the ParComm experiment
 [stage 1/8] Workload preparation
 descriptor_seconds=0.000106
-peak_rss_after_descriptor_kib=6464
+peak_rss_after_descriptor_kib=6524
 output_mode=detailed
 experiment=parcomm-cargo-bench
 protocol=section6-capped16-packed-eo-active-prefix-dory
-shape_validity_proof_enabled=false
+shape_validity_proof_enabled=true
 backend=jolt-dory-bn254-cpu
 rayon_threads=64
 formal_thread_requirement=64
@@ -191,7 +173,7 @@ estimated_witness_plus_eo_flat_bytes=16106659840
 manifest_seconds=0.000000
 descriptor_seconds=0.000106
 [stage 2/8] Input loading or generation
-in_memory_bva_allocation_seconds=3.094396
+in_memory_bva_allocation_seconds=3.234661
 in_memory_bva_allocated_bytes=8053329920
 stage=parse_layout
 model_family=llama-w8a8
@@ -205,52 +187,52 @@ active_entries=8053329920
 logical_entries=8589934592
 stream_bytes=8053329920
 stage=quantization_scales
-scale_progress=50.0% processed=525336576 rate_melements_per_second=186.9
-scale_progress=100.0% processed=1050673152 rate_melements_per_second=188.2
-scale_progress=100.0% processed=1050677248 rate_melements_per_second=188.2
-scale_progress=100.0% processed=1050681344 rate_melements_per_second=188.2
-scale_progress=100.0% processed=1050685440 rate_melements_per_second=188.2
-scale_progress=100.0% processed=1050689536 rate_melements_per_second=188.2
-scale_progress=100.0% processed=1050693632 rate_melements_per_second=188.2
-scale_progress=100.0% processed=1050697728 rate_melements_per_second=188.2
-scale_progress=100.0% processed=1050701824 rate_melements_per_second=188.2
-scale_progress=100.0% processed=1050705920 rate_melements_per_second=188.2
-scale_progress=100.0% processed=1050710016 rate_melements_per_second=188.2
-scale_progress=100.0% processed=1050714112 rate_melements_per_second=188.1
-scale_progress=100.0% processed=1050718208 rate_melements_per_second=188.1
-scale_progress=100.0% processed=1050722304 rate_melements_per_second=188.1
-scale_progress=100.0% processed=1050726400 rate_melements_per_second=188.1
-scale_progress=100.0% processed=1050730496 rate_melements_per_second=188.1
-scale_progress=100.0% processed=1050734592 rate_melements_per_second=188.1
-scale_progress=100.0% processed=1050738688 rate_melements_per_second=188.1
-scale_progress=100.0% processed=1050742784 rate_melements_per_second=188.1
-scale_progress=100.0% processed=1050939392 rate_melements_per_second=188.0
+scale_progress=50.0% processed=525336576 rate_melements_per_second=261.5
+scale_progress=100.0% processed=1050673152 rate_melements_per_second=262.2
+scale_progress=100.0% processed=1050677248 rate_melements_per_second=262.2
+scale_progress=100.0% processed=1050681344 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050685440 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050689536 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050693632 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050697728 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050701824 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050705920 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050710016 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050714112 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050718208 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050722304 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050726400 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050730496 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050734592 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050738688 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050742784 rate_melements_per_second=262.1
+scale_progress=100.0% processed=1050939392 rate_melements_per_second=262.1
 stage=stream_bva
-stream_progress=6.7% processed=536870912 rate_melements_per_second=124.5
-stream_progress=10.0% processed=805306368 rate_melements_per_second=120.7
-stream_progress=15.2% processed=1218445312 rate_melements_per_second=121.6
-stream_progress=20.2% processed=1621098496 rate_melements_per_second=129.5
-stream_progress=25.2% processed=2023751680 rate_melements_per_second=130.5
-stream_progress=30.2% processed=2426404864 rate_melements_per_second=135.1
-stream_progress=35.2% processed=2829058048 rate_melements_per_second=134.9
-stream_progress=40.2% processed=3231711232 rate_melements_per_second=137.9
-stream_progress=45.3% processed=3634364416 rate_melements_per_second=138.3
-stream_progress=50.3% processed=4037017600 rate_melements_per_second=140.5
-stream_progress=55.1% processed=4422893568 rate_melements_per_second=143.7
-stream_progress=60.1% processed=4825546752 rate_melements_per_second=148.1
-stream_progress=65.1% processed=5228199936 rate_melements_per_second=152.1
-stream_progress=70.1% processed=5630853120 rate_melements_per_second=155.7
-stream_progress=75.1% processed=6033506304 rate_melements_per_second=159.4
-stream_progress=80.1% processed=6436159488 rate_melements_per_second=162.3
-stream_progress=85.2% processed=6838812672 rate_melements_per_second=165.1
-stream_progress=90.1% processed=7233077248 rate_melements_per_second=166.0
-stream_progress=95.1% processed=7635730432 rate_melements_per_second=164.9
-stream_progress=100.0% processed=8030261248 rate_melements_per_second=166.8
-elapsed_seconds=51.479159
+stream_progress=6.7% processed=536870912 rate_melements_per_second=136.5
+stream_progress=10.0% processed=805306368 rate_melements_per_second=131.2
+stream_progress=15.2% processed=1218445312 rate_melements_per_second=137.8
+stream_progress=20.2% processed=1621098496 rate_melements_per_second=159.8
+stream_progress=25.2% processed=2023751680 rate_melements_per_second=177.6
+stream_progress=30.2% processed=2426404864 rate_melements_per_second=191.0
+stream_progress=35.2% processed=2829058048 rate_melements_per_second=200.2
+stream_progress=40.2% processed=3231711232 rate_melements_per_second=207.1
+stream_progress=45.3% processed=3634364416 rate_melements_per_second=215.0
+stream_progress=50.3% processed=4037017600 rate_melements_per_second=223.1
+stream_progress=55.1% processed=4422893568 rate_melements_per_second=231.2
+stream_progress=60.1% processed=4825546752 rate_melements_per_second=238.5
+stream_progress=65.1% processed=5228199936 rate_melements_per_second=245.1
+stream_progress=70.1% processed=5630853120 rate_melements_per_second=250.2
+stream_progress=75.1% processed=6033506304 rate_melements_per_second=256.3
+stream_progress=80.1% processed=6436159488 rate_melements_per_second=260.3
+stream_progress=85.2% processed=6838812672 rate_melements_per_second=264.0
+stream_progress=90.1% processed=7233077248 rate_melements_per_second=262.2
+stream_progress=95.1% processed=7635730432 rate_melements_per_second=255.4
+stream_progress=100.0% processed=8030261248 rate_melements_per_second=258.1
+elapsed_seconds=33.728666
 stream_complete=true
-in_memory_bva_stream_seconds=51.613435
-in_memory_bva_adopt_seconds=0.015236
-in_memory_bva_loader_seconds=54.723739
+in_memory_bva_stream_seconds=33.861400
+in_memory_bva_adopt_seconds=0.009652
+in_memory_bva_loader_seconds=37.106433
 in_memory_bva_stream_sha256=5b3bccda178bea933b34100f2112fad6819d281be85cc9a9131728e4d883db5d
 in_memory_bva_stream_complete=true
 bva_disk_materialized=false
@@ -258,122 +240,124 @@ input_bytes_streamed=8053329920
 input_stream_sha256=5b3bccda178bea933b34100f2112fad6819d281be85cc9a9131728e4d883db5d
 input_stream_complete=true
 bva_disk_materialized=false
-generation_seconds=54.723789
-peak_rss_after_generation_kib=7871340
+generation_seconds=37.106485
+peak_rss_after_generation_kib=7871392
 [stage 3/8] Claim construction
-claims_seconds=17.730828
-peak_rss_after_claims_kib=7878764
+claims_seconds=17.940985
+peak_rss_after_claims_kib=7878664
 [stage 4/8] Dory setup
-setup_seconds=56.198528
-peak_rss_after_setup_kib=8275656
+setup_seconds=55.656626
+peak_rss_after_setup_kib=8276552
 [stage 5/8] Shape and dense BVA commitments
-commit_phase_seconds=54.241308
-peak_rss_after_commit_phase_kib=8310952
+commit_phase_seconds=54.805397
+peak_rss_after_commit_phase_kib=8315152
 [stage 6/8] Opening prover
-opening_prove_seconds=35.947877
-peak_rss_after_opening_prove_kib=16634296
+opening_prove_seconds=39.201643
+peak_rss_after_opening_prove_kib=16894584
 [stage 7/8] Proof serialization and decoding
-serialization_seconds=0.244916
-peak_rss_after_serialization_kib=16634296
+serialization_seconds=0.260110
+peak_rss_after_serialization_kib=16894584
 [stage 8/8] Verification and final validation
-validity_verify_seconds=0.000000
-opening_verify_seconds=0.447047
-peak_rss_after_opening_verify_kib=16634296
-input_allocation_seconds=3.094396
-input_read_seconds=51.613435
+opening_verify_seconds=0.432121
+peak_rss_after_opening_verify_kib=16894584
+input_allocation_seconds=3.234661
+input_read_seconds=33.861400
 input_hash_seconds=0.000000
-input_adopt_seconds=0.015236
-input_validation_seconds=0.015236
-input_loader_classified_seconds=54.723067
-input_loader_other_seconds=0.000672
-input_loader_total_seconds=54.723739
-input_generation_other_seconds=0.000050
-claims_seconds=17.730828
-generation_seconds=54.723789
-dory_pcs_setup_seconds=56.198506
-blindfold_setup_seconds=0.000003
-setup_profile_total_seconds=56.198511
-setup_classified_seconds=56.198509
-setup_orchestration_seconds=0.000019
-setup_seconds=56.198528
-shape_commit_seconds=0.064446
-bva_commit_seconds=54.176795
-validity_prove_seconds=0.000000
-commit_phase_seconds=54.241308
-commit_orchestration_seconds=0.000068
-opening_validation_seconds=0.000036
-batch_point_seconds=0.000112
-x_commit_seconds=0.043939
-point_witness_seconds=0.002054
-tbv_commit_seconds=0.046979
-point_aux_commit_seconds=0.120560
-keys_commit_seconds=0.026438
-point_prove_seconds=0.225538
-packed_binding_seconds=0.002122
-tbv_reconstruct_seconds=0.001185
-packed_eo_seconds=17.617493
-packed_eo_packed_cross_terms_seconds=4.674446
-packed_eo_first_fold_seconds=10.754797
-packed_eo_reduced_check_seconds=0.187617
-packed_eo_binary_cross_terms_seconds=0.415790
-packed_eo_binary_challenge_seconds=0.022747
-packed_eo_binary_fold_seconds=0.893029
-packed_eo_binary_rounds_seconds=1.331566
-eo_ip_accounted_seconds=16.948426
-eo_ip_other_seconds=0.669067
-virtual_tbv_drop_seconds=0.000124
-bva_open_seconds=15.152659
-bva_open_point_preparation_seconds=0.000014
-bva_open_dense_preparation_seconds=0.000000
+input_adopt_seconds=0.009652
+input_validation_seconds=0.009652
+input_loader_classified_seconds=37.105712
+input_loader_other_seconds=0.000721
+input_loader_total_seconds=37.106433
+input_generation_other_seconds=0.000052
+claims_seconds=17.940985
+generation_seconds=37.106485
+dory_pcs_setup_seconds=55.656618
+blindfold_setup_seconds=0.000001
+setup_profile_total_seconds=55.656621
+setup_classified_seconds=55.656619
+setup_orchestration_seconds=0.000007
+setup_seconds=55.656626
+shape_commit_seconds=0.065960
+bva_commit_seconds=54.739348
+commit_validity_prove_seconds=0.000000
+commit_phase_seconds=54.805397
+commit_orchestration_seconds=0.000088
+opening_validation_seconds=0.000077
+shape_validity_prepare_seconds=0.218483
+shape_validity_reduction_seconds=0.339393
+validity_prove_seconds=0.557876
+batch_point_seconds=0.000255
+x_commit_seconds=0.101825
+point_witness_seconds=0.003609
+tbv_commit_seconds=0.097031
+point_aux_commit_seconds=0.178840
+keys_commit_seconds=0.034309
+point_prove_seconds=3.314575
+packed_binding_seconds=0.020055
+tbv_reconstruct_seconds=0.002052
+packed_eo_seconds=16.350568
+packed_eo_packed_cross_terms_seconds=4.452212
+packed_eo_first_fold_seconds=10.503487
+packed_eo_reduced_check_seconds=0.086100
+packed_eo_binary_cross_terms_seconds=0.188032
+packed_eo_binary_challenge_seconds=0.023570
+packed_eo_binary_fold_seconds=0.339799
+packed_eo_binary_rounds_seconds=0.551401
+eo_ip_accounted_seconds=15.593199
+eo_ip_other_seconds=0.757369
+virtual_tbv_drop_seconds=0.000130
+bva_open_seconds=15.093493
+bva_open_point_preparation_seconds=0.000010
+bva_open_dense_preparation_seconds=0.000002
 bva_open_transcript_preparation_seconds=0.000003
-bva_open_dory_seconds=15.131845
-bva_open_scalar_binding_seconds=0.020765
+bva_open_dory_seconds=15.091391
+bva_open_scalar_binding_seconds=0.002025
 bva_open_profile_other_seconds=0.000001
-bva_open_profile_total_seconds=15.152629
+bva_open_profile_total_seconds=15.093433
 point_witness_drop_seconds=0.000002
-final_witness_seconds=0.002714
-final_aux_commit_seconds=0.334239
+final_witness_seconds=0.003217
+final_aux_commit_seconds=0.340595
 final_witness_drop_seconds=0.000001
-final_prove_seconds=0.660429
-terminal_claim_collection_seconds=0.023571
-terminal_open_seconds=1.687160
-terminal_preparation_state_setup_seconds=0.593740
-terminal_sumcheck_prove_seconds=0.040555
-terminal_dory_batch_open_seconds=0.943837
-terminal_blindfold_preparation_seconds=0.047279
-terminal_blindfold_prove_seconds=0.061706
+final_prove_seconds=0.608730
+terminal_claim_collection_seconds=0.111764
+terminal_open_seconds=2.376379
+terminal_preparation_state_setup_seconds=0.476204
+terminal_sumcheck_prove_seconds=0.122377
+terminal_dory_batch_open_seconds=1.698543
+terminal_blindfold_preparation_seconds=0.020585
+terminal_blindfold_prove_seconds=0.058601
 terminal_result_assembly_seconds=0.000001
 terminal_profile_other_seconds=0.000001
-terminal_profile_total_seconds=1.687119
-opening_result_assembly_seconds=0.000018
-point_conversion_seconds=0.465507
-tbv_evaluation_seconds=0.998568
-opening_classified_seconds=35.947374
-opening_orchestration_seconds=0.000504
-opening_prove_seconds=35.947877
-statement_clone_seconds=0.000002
-prover_interphase_seconds=0.000057
-prover_interphase_other_seconds=0.000055
-prover_breakdown_sum_seconds=90.189186
-prover_wall_seconds=90.189243
-prover_wall_breakdown_sum_seconds=90.189243
-terminal_claim_count=315
+terminal_profile_total_seconds=2.376312
+opening_result_assembly_seconds=0.000019
+point_conversion_seconds=3.730189
+tbv_evaluation_seconds=0.954594
+opening_classified_seconds=39.195402
+opening_orchestration_seconds=0.006241
+opening_prove_seconds=39.201643
+statement_clone_seconds=0.000001
+prover_interphase_seconds=0.000137
+prover_interphase_other_seconds=0.000136
+prover_breakdown_sum_seconds=94.007040
+prover_wall_seconds=94.007177
+prover_wall_breakdown_sum_seconds=94.007177
+terminal_claim_count=25
 commit_statement_size_bytes=1008
-validity_proof_size_bytes=0
-opening_proof_size_bytes=198052
+shape_validity_reduction_size_bytes=26001
+opening_proof_size_bytes=191367
 cached_registration_size_bytes=1008
-per_opening_proof_size_bytes=198052
+per_opening_proof_size_bytes=191367
 x_statement_size_bytes=416
 tbv_statement_size_bytes=408
-point_reduction_size_bytes=36712
+point_reduction_size_bytes=41698
 point_aux_size_bytes=416
 point_keys_size_bytes=400
 point_identity_size_bytes=0
-point_lookup_size_bytes=35896
-point_lookup_aux_size_bytes=1960
-point_lookup_identity_size_bytes=17248
-point_lookup_sum_size_bytes=16688
-packed_eo_size_bytes=22080
+joint_lookup_size_bytes=40882
+joint_lookup_aux_size_bytes=3154
+joint_lookup_identity_size_bytes=19064
+joint_lookup_sum_size_bytes=18664
+packed_eo_size_bytes=13608
 packed_eo_scalar_commitment_count=182
 packed_eo_stride_size_bytes=8
 packed_eo_positive_commitments_size_bytes=2528
@@ -381,73 +365,76 @@ packed_eo_negative_commitments_size_bytes=2528
 packed_eo_binary_round_commitments_size_bytes=2168
 packed_eo_a_reduced_commitment_size_bytes=40
 packed_eo_b_reduced_commitment_size_bytes=40
-packed_eo_scalar_identity_size_bytes=14768
-final_evaluation_size_bytes=33952
+packed_eo_scalar_identity_size_bytes=6296
+final_evaluation_size_bytes=22592
 final_aux_size_bytes=408
-final_identity_size_bytes=33544
-joint_point_final_identity_size_bytes=33544
+final_identity_size_bytes=22184
+joint_point_final_identity_size_bytes=22184
 final_average_commitment_size_bytes=0
 final_scalar_binding_size_bytes=0
-bva_opening_size_bytes=61962
+bva_opening_size_bytes=47386
 bva_dory_proof_size_bytes=47354
-bva_evaluation_binding_size_bytes=14608
-terminal_opening_size_bytes=42522
-terminal_sumcheck_size_bytes=984
-terminal_dory_size_bytes=24026
+bva_evaluation_binding_size_bytes=32
+terminal_opening_size_bytes=39258
+terminal_sumcheck_size_bytes=968
+terminal_dory_size_bytes=29210
 terminal_transcript_state_size_bytes=32
-terminal_blindfold_size_bytes=17480
-artifact_framing_size_bytes=32
-proof_size_bytes=199092
-proof_sha256=ab1e79a8ff547603e7752c4670f8e12d70919279baddf08d5bbce95b4ef02136
+terminal_blindfold_size_bytes=9048
+artifact_framing_size_bytes=24
+proof_size_bytes=192399
+proof_sha256=408c4c80123a7d5ce97d94aaad341c53052209f361d4984b010f569ac5d89d8e
 trailing_bytes_rejected=true
 physical_dory_proof_count=2
-proof_component_sizing_seconds=0.029615
-proof_encode_seconds=0.019375
-proof_hash_seconds=0.000249
-proof_decode_seconds=0.195645
-trailing_decode_check_seconds=0.000031
+physical_logup_reduction_count=1
+proof_component_sizing_seconds=0.032604
+proof_encode_seconds=0.019450
+proof_hash_seconds=0.000190
+proof_decode_seconds=0.207835
+trailing_decode_check_seconds=0.000030
 serialization_orchestration_seconds=0.000001
-serialization_seconds=0.244916
-validity_verify_seconds=0.000000
-verifier_statement_validation_seconds=0.000017
-verifier_batch_point_seconds=0.000100
-verifier_point_prepare_seconds=0.000084
-verifier_point_verify_seconds=0.022546
-verifier_packed_eo_verify_seconds=0.024567
-verifier_bva_open_verify_seconds=0.179101
-verifier_bva_open_point_preparation_seconds=0.000009
-verifier_bva_open_transcript_preparation_seconds=0.000001
-verifier_bva_open_dory_seconds=0.171564
-verifier_bva_open_scalar_binding_seconds=0.007526
+serialization_seconds=0.260110
+validity_verify_seconds=0.027827
+verifier_statement_validation_seconds=0.000019
+verifier_shape_validity_prepare_seconds=0.000024
+verifier_shape_validity_reduction_seconds=0.027804
+verifier_batch_point_seconds=0.000098
+verifier_point_prepare_seconds=0.000099
+verifier_point_verify_seconds=0.046681
+verifier_packed_eo_verify_seconds=0.014314
+verifier_bva_open_verify_seconds=0.178726
+verifier_bva_open_point_preparation_seconds=0.000011
+verifier_bva_open_transcript_preparation_seconds=0.000002
+verifier_bva_open_dory_seconds=0.177725
+verifier_bva_open_scalar_binding_seconds=0.000987
 verifier_bva_open_profile_other_seconds=0.000000
-verifier_bva_open_profile_total_seconds=0.179101
-verifier_final_prepare_seconds=0.000062
-verifier_final_verify_seconds=0.057098
-verifier_terminal_claim_collection_seconds=0.000570
-verifier_terminal_open_verify_seconds=0.162845
-verifier_terminal_preparation_state_setup_seconds=0.001081
-verifier_terminal_sumcheck_seconds=0.000027
-verifier_terminal_dory_batch_seconds=0.115956
-verifier_terminal_blindfold_preparation_seconds=0.033304
-verifier_terminal_blindfold_seconds=0.012472
+verifier_bva_open_profile_total_seconds=0.178725
+verifier_final_prepare_seconds=0.000063
+verifier_final_verify_seconds=0.031614
+verifier_terminal_claim_collection_seconds=0.002653
+verifier_terminal_open_verify_seconds=0.129952
+verifier_terminal_preparation_state_setup_seconds=0.000368
+verifier_terminal_sumcheck_seconds=0.000034
+verifier_terminal_dory_batch_seconds=0.113005
+verifier_terminal_blindfold_preparation_seconds=0.005379
+verifier_terminal_blindfold_seconds=0.011161
 verifier_terminal_result_finalization_seconds=0.000000
 verifier_terminal_profile_other_seconds=0.000000
-verifier_terminal_profile_total_seconds=0.162841
+verifier_terminal_profile_total_seconds=0.129948
 verifier_result_assembly_seconds=0.000000
-verifier_profile_total_seconds=0.446990
-verifier_classified_seconds=0.446990
-verifier_orchestration_seconds=0.000057
-verifier_breakdown_sum_seconds=0.447047
-opening_verify_seconds=0.447047
-total_prover_seconds=90.189186
-total_verifier_seconds=0.447047
-preprocessing_seconds=72.454723
-end_to_end_classified_seconds=219.534457
-experiment_orchestration_seconds=0.000197
-end_to_end_breakdown_sum_seconds=219.534653
-total_seconds=219.534653
-peak_rss_kib=16634296
-shape_validity_proof_status=not_requested
+verifier_profile_total_seconds=0.432047
+verifier_classified_seconds=0.432046
+verifier_orchestration_seconds=0.000075
+verifier_breakdown_sum_seconds=0.432121
+opening_verify_seconds=0.432121
+total_prover_seconds=94.007040
+total_verifier_seconds=0.432121
+preprocessing_seconds=55.047576
+end_to_end_classified_seconds=205.403611
+experiment_orchestration_seconds=0.000502
+end_to_end_breakdown_sum_seconds=205.404113
+total_seconds=205.404113
+peak_rss_kib=16894584
+shape_validity_proof_status=verified
 aggregated_claim_nonzero=true
 decoded_proof_verified=true
 accepted=true
@@ -458,39 +445,39 @@ verified_marker=SECTION6_E2E_VERIFIED
 Final results
 | Metric | Value | Breakdown |
 | --- | ---: | --- |
-| Commit time | 54.241 s | BVA commitment 54.177 s; Shape commitment 0.064 s; Other 0.000 s |
+| Commit time | 54.805 s | BVA commitment 54.739 s; Shape commitment 0.066 s; Other 0.000 s |
 | Commit size | 1008 B (0.98 KiB) | Persistent commit statement |
-| Open time | 35.948 s | BVA open 15.153 s; EO-LiteBullet 17.617 s; TBV compilation + evaluation proof 1.464 s; Terminal open 1.687 s; Other 0.026 s |
-| Proof size | 198052 B (193.41 KiB) | BVA open 61962 B (60.51 KiB); EO-LiteBullet 22080 B (21.56 KiB); TBV compilation + evaluation proof 71488 B (69.81 KiB); Terminal open 42522 B (41.53 KiB); Other 0 B (0.00 KiB) |
-| Verifier time | 0.447 s | BVA open verify 0.179 s; EO-LiteBullet verify 0.025 s; TBV compilation + evaluation proof verify 0.080 s; Terminal open verify 0.163 s; Other 0.001 s |
-| Peak RSS | 15.86 GiB | 16634296 KiB |
+| Open time | 39.202 s | Shape validity reduction 0.558 s; BVA open 15.093 s; EO-LiteBullet 16.351 s; Joint lookup + TBV compilation + evaluation proof 4.685 s; Joint terminal open 2.376 s; Other 0.139 s |
+| Proof size | 191367 B (186.88 KiB) | Shape validity reduction 26001 B (25.39 KiB); Joint LogUp 40882 B (39.92 KiB); BVA open 47386 B (46.28 KiB); EO-LiteBullet 13608 B (13.29 KiB); TBV compilation + evaluation proof 24232 B (23.66 KiB); Joint terminal open 39258 B (38.34 KiB) |
+| Verifier time | 0.432 s | Shape validity reduction 0.028 s; BVA open verify 0.179 s; EO-LiteBullet verify 0.014 s; Joint lookup + TBV compilation + evaluation proof verify 0.078 s; Joint terminal open verify 0.130 s; Other 0.003 s |
+| Peak RSS | 16.11 GiB | 16894584 KiB |
 bva_disk_artifacts_before=1
 bva_disk_artifacts_after=1
 bva_disk_bytes_written=0
 in_memory_pipeline_verified=true
-llama8b_pipeline_total_seconds=220.263744
-	Command being timed: "cargo bench --offline --config /home/mscong1/git/jolt-local.toml -p batch --bench experiment_llama8B_8bit"
-	User time (seconds): 6319.69
-	System time (seconds): 80.73
-	Percent of CPU this job got: 2634%
-	Elapsed (wall clock) time (h:mm:ss or m:ss): 4:02.93
+llama8b_pipeline_total_seconds=206.260883
+	Command being timed: "/home/mscong1/.cargo/bin/rustup run nightly-2026-03-21 cargo bench --offline --locked --config /home/mscong1/git/jolt-local.toml --quiet -p batch --bench experiment_llama8B_8bit"
+	User time (seconds): 6242.45
+	System time (seconds): 78.06
+	Percent of CPU this job got: 3060%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 3:26.50
 	Average shared text size (kbytes): 0
 	Average unshared data size (kbytes): 0
 	Average stack size (kbytes): 0
 	Average total size (kbytes): 0
-	Maximum resident set size (kbytes): 16600056
+	Maximum resident set size (kbytes): 16861352
 	Average resident set size (kbytes): 0
-	Major (requiring I/O) page faults: 2735
-	Minor (reclaiming a frame) page faults: 17625416
-	Voluntary context switches: 1010210
-	Involuntary context switches: 16197
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 10624718
+	Voluntary context switches: 1183059
+	Involuntary context switches: 12407
 	Swaps: 0
-	File system inputs: 19044576
-	File system outputs: 2282200
+	File system inputs: 0
+	File system outputs: 440
 	Socket messages sent: 0
 	Socket messages received: 0
 	Signals delivered: 0
 	Page size (bytes): 4096
 	Exit status: 0
-__EXIT_STATUS__=0
-2026-08-24T22:07:12+08:00
+
+experiment_exit_code=0

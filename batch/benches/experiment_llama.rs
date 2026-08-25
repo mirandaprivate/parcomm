@@ -533,6 +533,7 @@ fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Option
             | "--allow-non-64-threads"
             | "--shape-validity-proof"
             | "--shape-validity"
+            | "--skip-shape-validity-proof"
             | "--summary-only" => experiment_arguments.push(argument),
             "--bench" => {
                 // Cargo may append this marker for a harness-free benchmark.
@@ -619,7 +620,9 @@ fn print_help() {
            --verify-input-hash      Verify the converted BVA SHA-256 (default)\n\
            --skip-input-hash        Skip only the converted BVA SHA-256 pass\n\
            --allow-non-64-threads   Permit a local smoke run\n\
-           --shape-validity-proof   Include the optional shape validity proof\n\
+           --shape-validity-proof   Explicitly enable shape validity proving (default)\n\
+           --skip-shape-validity-proof\n\
+                                   Disable shape validity proving for a performance-only run\n\
            --summary-only           Hide detailed metrics and retain Final results\n\
            -h, --help               Print this help"
     );

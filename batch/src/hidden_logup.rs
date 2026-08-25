@@ -9,12 +9,14 @@
 //! reductions, without revealing source values, multiplicities, inverses, or
 //! leaf evaluations.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 
 use ark_bn254::Fr as ArkFr;
 use ark_ff::{batch_inversion, One, Zero};
+use ark_serialize::CanonicalSerialize;
 use ark_std::rand::RngCore;
+use jolt_crypto::{Bn254G1, Pedersen, VectorCommitment};
 use jolt_dory::DoryCommitment;
 use jolt_field::Fr as JoltFr;
 use jolt_transcript::domain::{Label, LabelWithCount, U64Word};
@@ -23,10 +25,12 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::hidden_relation::{
-    prove_hidden_relation_openings_batch, verify_hidden_relation_openings_batch,
+    prove_hidden_claimed_sum_relation_deferred, prove_hidden_relation_openings_batch,
+    verify_hidden_claimed_sum_relation_deferred, verify_hidden_relation_openings_batch,
     HiddenRelationError, HiddenRelationOpeningBatchProof, HiddenRelationProverOpening,
-    HiddenRelationProverOpeningClaims, HiddenRelationTable, HiddenRelationTableStatement,
-    HiddenRelationVerifierOpening, HiddenRelationVerifierOpeningClaims, PublicRelationTable,
+    HiddenRelationProverOpeningClaims, HiddenRelationReductionProof, HiddenRelationTable,
+    HiddenRelationTableStatement, HiddenRelationVerifierOpening,
+    HiddenRelationVerifierOpeningClaims, HiddenScalarWitness, PublicRelationTable,
     RelationExpression,
 };
 use crate::hidden_relation_batch::{
@@ -104,6 +108,33 @@ pub struct HiddenLogUpPartsReductionProof {
     pub sum_reduction: HiddenRelationBatchReductionProof,
 }
 
+/// Auxiliary commitments for one native-length domain of a heterogeneous
+/// LogUp. An absent side has no commitment and no relation operands.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HiddenLogUpDomainAuxCommitments {
+    pub query_keys: Option<DoryCommitment>,
+    pub table_keys: Option<DoryCommitment>,
+    pub multiplicities: Option<DoryCommitment>,
+    pub query_inverses: Option<DoryCommitment>,
+    pub table_inverses: Option<DoryCommitment>,
+}
+
+/// Reduction for one native-length domain. Its sum remains hidden and is
+/// linked globally after every native domain has been reduced.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HiddenLogUpDomainReductionProof {
+    pub auxiliary_commitments: HiddenLogUpDomainAuxCommitments,
+    pub identity_reduction: HiddenRelationBatchReductionProof,
+    pub sum_reduction: HiddenRelationReductionProof,
+    pub claimed_sum_commitment: Bn254G1,
+}
+
+/// One logical LogUp over parts with different native power-of-two lengths.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HiddenLogUpHeterogeneousReductionProof {
+    pub domains: Vec<HiddenLogUpDomainReductionProof>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HiddenLogUpSide {
     Query,
@@ -124,6 +155,21 @@ pub enum MixedLogUpColumn<'a> {
 pub enum MixedLogUpColumnStatement<'a> {
     Hidden(HiddenRelationTableStatement<'a>),
     Public(PublicRelationTable<'a>),
+}
+
+/// One tagged prover part. Columns within a part share a native length, while
+/// different parts may use different lengths.
+#[derive(Clone, Copy)]
+pub struct TaggedMixedLogUpProverPart<'columns, 'source> {
+    pub tag: ArkFr,
+    pub columns: &'columns [MixedLogUpColumn<'source>],
+}
+
+/// Commitment-only counterpart of [`TaggedMixedLogUpProverPart`].
+#[derive(Clone, Copy)]
+pub struct TaggedMixedLogUpVerifierPart<'columns, 'source> {
+    pub tag: ArkFr,
+    pub columns: &'columns [MixedLogUpColumnStatement<'source>],
 }
 
 /// Prover-owned LogUp state retained until all phase openings are collected.
@@ -171,6 +217,43 @@ struct HiddenLogUpPartsProverTables<'a> {
 pub struct HiddenLogUpVerifierOpeningState<'a> {
     relation_claims: [HiddenRelationVerifierOpeningClaims; 2],
     tables: HiddenLogUpVerifierTables<'a>,
+}
+
+/// Prover-retained heterogeneous LogUp state. Auxiliary vectors are owned by
+/// their native-length domain and rebound only when terminal claims are read.
+pub struct HiddenLogUpHeterogeneousProverOpeningState<'a> {
+    relation_claims: Vec<[HiddenRelationProverOpeningClaims; 2]>,
+    domains: Vec<HiddenLogUpHeterogeneousProverDomain<'a>>,
+}
+
+struct HiddenLogUpHeterogeneousProverDomain<'a> {
+    query_hidden_parts: Vec<Vec<HiddenRelationTable<'a>>>,
+    table_hidden_parts: Vec<Vec<HiddenRelationTable<'a>>>,
+    query_keys: Vec<Vec<ArkFr>>,
+    table_keys: Vec<Vec<ArkFr>>,
+    multiplicities: Vec<Vec<ArkFr>>,
+    query_inverses: Vec<Vec<ArkFr>>,
+    table_inverses: Vec<Vec<ArkFr>>,
+    committed_query_keys: Vec<CommittedDoryFieldVector>,
+    committed_table_keys: Vec<CommittedDoryFieldVector>,
+    committed_multiplicities: Vec<CommittedDoryFieldVector>,
+    committed_query_inverses: Vec<CommittedDoryFieldVector>,
+    committed_table_inverses: Vec<CommittedDoryFieldVector>,
+}
+
+/// Commitment-only heterogeneous LogUp terminal state.
+pub struct HiddenLogUpHeterogeneousVerifierOpeningState<'a> {
+    relation_openings: Vec<HiddenRelationVerifierOpening<'a>>,
+}
+
+struct HiddenLogUpHeterogeneousVerifierDomain<'columns, 'source> {
+    query_sources: Vec<TaggedMixedLogUpVerifierPart<'columns, 'source>>,
+    table_sources: Vec<TaggedMixedLogUpVerifierPart<'columns, 'source>>,
+    query_keys: Vec<HiddenRelationTableStatement<'source>>,
+    table_keys: Vec<HiddenRelationTableStatement<'source>>,
+    multiplicities: Vec<HiddenRelationTableStatement<'source>>,
+    query_inverses: Vec<HiddenRelationTableStatement<'source>>,
+    table_inverses: Vec<HiddenRelationTableStatement<'source>>,
 }
 
 enum HiddenLogUpVerifierTables<'a> {
@@ -633,6 +716,85 @@ fn same_verifier_tables(
                 && left.logical_len == right.logical_len
                 && left.matrix == right.matrix
         })
+}
+
+impl HiddenLogUpHeterogeneousProverOpeningState<'_> {
+    /// Reconstruct the constant number of native-domain terminal relations.
+    pub fn relation_openings(
+        &self,
+    ) -> Result<Vec<HiddenRelationProverOpening<'_>>, HiddenLogUpError> {
+        if self.relation_claims.len() != self.domains.len() {
+            return Err(HiddenLogUpError::ProofShape);
+        }
+        let mut openings = Vec::with_capacity(2 * self.domains.len());
+        for (claims, domain) in self.relation_claims.iter().zip(&self.domains) {
+            let mut identity_tables = Vec::new();
+            for (part, hidden) in domain.query_hidden_parts.iter().enumerate() {
+                identity_tables.extend(hidden.iter().copied());
+                identity_tables.push(HiddenRelationTable {
+                    values: &domain.query_keys[part],
+                    committed: &domain.committed_query_keys[part],
+                });
+            }
+            for (part, hidden) in domain.table_hidden_parts.iter().enumerate() {
+                identity_tables.extend(hidden.iter().copied());
+                identity_tables.push(HiddenRelationTable {
+                    values: &domain.table_keys[part],
+                    committed: &domain.committed_table_keys[part],
+                });
+            }
+            for part in 0..domain.query_keys.len() {
+                identity_tables.push(HiddenRelationTable {
+                    values: &domain.query_keys[part],
+                    committed: &domain.committed_query_keys[part],
+                });
+                identity_tables.push(HiddenRelationTable {
+                    values: &domain.query_inverses[part],
+                    committed: &domain.committed_query_inverses[part],
+                });
+            }
+            for part in 0..domain.table_keys.len() {
+                identity_tables.push(HiddenRelationTable {
+                    values: &domain.table_keys[part],
+                    committed: &domain.committed_table_keys[part],
+                });
+                identity_tables.push(HiddenRelationTable {
+                    values: &domain.table_inverses[part],
+                    committed: &domain.committed_table_inverses[part],
+                });
+            }
+
+            let mut sum_tables = Vec::new();
+            for part in 0..domain.query_inverses.len() {
+                sum_tables.push(HiddenRelationTable {
+                    values: &domain.query_inverses[part],
+                    committed: &domain.committed_query_inverses[part],
+                });
+            }
+            for part in 0..domain.table_inverses.len() {
+                sum_tables.push(HiddenRelationTable {
+                    values: &domain.multiplicities[part],
+                    committed: &domain.committed_multiplicities[part],
+                });
+                sum_tables.push(HiddenRelationTable {
+                    values: &domain.table_inverses[part],
+                    committed: &domain.committed_table_inverses[part],
+                });
+            }
+            openings
+                .push(claims[0].bind_tables(deduplicate_prover_hidden_tables(identity_tables))?);
+            openings.push(claims[1].bind_tables(deduplicate_prover_hidden_tables(sum_tables))?);
+        }
+        Ok(openings)
+    }
+}
+
+impl<'a> HiddenLogUpHeterogeneousVerifierOpeningState<'a> {
+    pub fn relation_openings(
+        &self,
+    ) -> Result<Vec<HiddenRelationVerifierOpening<'a>>, HiddenLogUpError> {
+        Ok(self.relation_openings.clone())
+    }
 }
 
 /// Produce the native relation-opening batch proof for deferred LogUp states.
@@ -1182,6 +1344,437 @@ fn prove_hidden_logup_parts_deferred_with_grid<'a>(
     Ok((reduction, pending))
 }
 
+/// Reduce one tagged LogUp whose parts keep their native logical lengths.
+/// Tuple compression, multiplicity construction, and beta are global; only
+/// the algebraic reductions are grouped by native domain.
+pub fn prove_hidden_logup_heterogeneous_parts_deferred_on_grid<'a>(
+    label: &[u8],
+    parameters: &DoryProverParameters,
+    grid: &Section6DoryGrid,
+    query_parts: &[TaggedMixedLogUpProverPart<'_, 'a>],
+    table_parts: &[TaggedMixedLogUpProverPart<'_, 'a>],
+    rng: &mut impl RngCore,
+) -> Result<
+    (
+        HiddenLogUpHeterogeneousReductionProof,
+        HiddenLogUpHeterogeneousProverOpeningState<'a>,
+    ),
+    HiddenLogUpError,
+> {
+    validate_tagged_prover_parts(query_parts, table_parts)?;
+    let plans = heterogeneous_domain_plans(
+        query_parts.iter().map(|part| tagged_prover_part_len(*part)),
+        table_parts.iter().map(|part| tagged_prover_part_len(*part)),
+    )?;
+    let (mut transcript, compression_challenge) =
+        tagged_prover_transcript_and_challenge(label, query_parts, table_parts)?;
+
+    let mut query_keys = query_parts
+        .iter()
+        .copied()
+        .map(|part| compress_tagged_prover_part(part, compression_challenge))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut table_keys = table_parts
+        .iter()
+        .copied()
+        .map(|part| compress_tagged_prover_part(part, compression_challenge))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut multiplicities = compute_heterogeneous_multiplicities(&query_keys, &table_keys)?;
+
+    let mut source_domains = Vec::with_capacity(plans.len());
+    let mut domains = Vec::with_capacity(plans.len());
+    for plan in &plans {
+        let domain_query_parts = plan
+            .query_indices
+            .iter()
+            .map(|&index| query_parts[index])
+            .collect::<Vec<_>>();
+        let domain_table_parts = plan
+            .table_indices
+            .iter()
+            .map(|&index| table_parts[index])
+            .collect::<Vec<_>>();
+        let domain_query_keys = plan
+            .query_indices
+            .iter()
+            .map(|&index| std::mem::take(&mut query_keys[index]))
+            .collect::<Vec<_>>();
+        let domain_table_keys = plan
+            .table_indices
+            .iter()
+            .map(|&index| std::mem::take(&mut table_keys[index]))
+            .collect::<Vec<_>>();
+        let domain_multiplicities = plan
+            .table_indices
+            .iter()
+            .map(|&index| std::mem::take(&mut multiplicities[index]))
+            .collect::<Vec<_>>();
+        let committed_query_keys =
+            commit_optional_auxiliary_matrix(parameters, grid, &domain_query_keys)?;
+        let committed_table_keys =
+            commit_optional_auxiliary_matrix(parameters, grid, &domain_table_keys)?;
+        let committed_multiplicities =
+            commit_optional_auxiliary_matrix(parameters, grid, &domain_multiplicities)?;
+        source_domains.push((domain_query_parts, domain_table_parts));
+        domains.push(HiddenLogUpHeterogeneousProverDomain {
+            query_hidden_parts: Vec::new(),
+            table_hidden_parts: Vec::new(),
+            query_keys: domain_query_keys,
+            table_keys: domain_table_keys,
+            multiplicities: domain_multiplicities,
+            query_inverses: Vec::new(),
+            table_inverses: Vec::new(),
+            committed_query_keys,
+            committed_table_keys,
+            committed_multiplicities,
+            committed_query_inverses: Vec::new(),
+            committed_table_inverses: Vec::new(),
+        });
+    }
+
+    let denominator_challenge =
+        append_heterogeneous_pre_beta_and_challenge(&mut transcript, &plans, &domains);
+    for (domain_index, domain) in domains.iter_mut().enumerate() {
+        let (query_inverses, table_inverses) = invert_heterogeneous_domain(
+            &domain.query_keys,
+            &domain.table_keys,
+            denominator_challenge,
+            domain_index,
+        )?;
+        domain.committed_query_inverses =
+            commit_optional_auxiliary_matrix(parameters, grid, &query_inverses)?;
+        domain.committed_table_inverses =
+            commit_optional_auxiliary_matrix(parameters, grid, &table_inverses)?;
+        domain.query_inverses = query_inverses;
+        domain.table_inverses = table_inverses;
+    }
+    let part_batch_challenge =
+        append_heterogeneous_post_inverse_and_challenge(&mut transcript, &plans, &domains);
+
+    let domain_sum_values = domains
+        .iter()
+        .map(heterogeneous_domain_sum)
+        .collect::<Vec<_>>();
+    let mut claimed_sums = Vec::with_capacity(domain_sum_values.len());
+    for &value in domain_sum_values
+        .iter()
+        .take(domain_sum_values.len().saturating_sub(1))
+    {
+        claimed_sums.push(HiddenScalarWitness::commit(parameters, value, rng));
+    }
+    let final_value = *domain_sum_values
+        .last()
+        .ok_or(HiddenLogUpError::ProofShape)?;
+    let preceding_values = domain_sum_values
+        .iter()
+        .take(domain_sum_values.len() - 1)
+        .copied()
+        .sum::<ArkFr>();
+    if final_value != -preceding_values {
+        return Err(HiddenRelationError::NonZeroRelation.into());
+    }
+    let preceding_blinds = claimed_sums
+        .iter()
+        .fold(JoltFr::from(ArkFr::zero()), |sum, witness| {
+            sum + witness.blind
+        });
+    let final_blind = -preceding_blinds;
+    let final_commitment = Pedersen::<Bn254G1>::commit(
+        &parameters.blindfold,
+        &[JoltFr::from(final_value)],
+        &final_blind,
+    );
+    claimed_sums.push(HiddenScalarWitness {
+        value: final_value,
+        commitment: final_commitment,
+        blind: final_blind,
+    });
+
+    let mut domain_proofs = Vec::with_capacity(domains.len());
+    let mut relation_claims = Vec::with_capacity(domains.len());
+    for (domain_index, ((query_sources, table_sources), domain)) in
+        source_domains.iter().zip(domains.iter_mut()).enumerate()
+    {
+        let mut identity_storage = Vec::new();
+        if !query_sources.is_empty() {
+            identity_storage.push(prover_tagged_key_relation_inputs(
+                query_sources,
+                &domain.query_keys,
+                &domain.committed_query_keys,
+                compression_challenge,
+                part_batch_challenge,
+            ));
+        }
+        if !table_sources.is_empty() {
+            identity_storage.push(prover_tagged_key_relation_inputs(
+                table_sources,
+                &domain.table_keys,
+                &domain.committed_table_keys,
+                compression_challenge,
+                part_batch_challenge,
+            ));
+        }
+        if !query_sources.is_empty() {
+            identity_storage.push(prover_domain_inverse_inputs(
+                &domain.query_keys,
+                &domain.committed_query_keys,
+                &domain.query_inverses,
+                &domain.committed_query_inverses,
+                denominator_challenge,
+                part_batch_challenge,
+            ));
+        }
+        if !table_sources.is_empty() {
+            identity_storage.push(prover_domain_inverse_inputs(
+                &domain.table_keys,
+                &domain.committed_table_keys,
+                &domain.table_inverses,
+                &domain.committed_table_inverses,
+                denominator_challenge,
+                part_batch_challenge,
+            ));
+        }
+        let identity_items = identity_storage
+            .iter()
+            .map(
+                |(tables, publics, expression)| HiddenRelationBatchProverItem {
+                    tables,
+                    public_tables: publics,
+                    expression,
+                },
+            )
+            .collect::<Vec<_>>();
+        let domain_label =
+            heterogeneous_domain_label(label, domain_index, plans[domain_index].logical_len);
+        let (identity_reduction, identity_pending) = prove_hidden_relations_batch_deferred(
+            &relation_label(&domain_label, b"identity"),
+            parameters,
+            &identity_items,
+            rng,
+        )?;
+
+        let sum_tables = prover_heterogeneous_sum_tables(domain);
+        let sum_expression =
+            parts_sum_balance_expression(domain.query_inverses.len(), domain.table_inverses.len());
+        let claimed_sum = &claimed_sums[domain_index];
+        let (sum_reduction, sum_pending) = prove_hidden_claimed_sum_relation_deferred(
+            &relation_label(&domain_label, b"sum"),
+            parameters,
+            &sum_tables,
+            &sum_expression,
+            claimed_sum,
+            rng,
+        )?;
+
+        relation_claims.push([identity_pending.into_claims(), sum_pending.into_claims()]);
+
+        domain.query_hidden_parts = query_sources
+            .iter()
+            .map(|part| hidden_prover_tables(part.columns))
+            .collect();
+        domain.table_hidden_parts = table_sources
+            .iter()
+            .map(|part| hidden_prover_tables(part.columns))
+            .collect();
+        domain_proofs.push(HiddenLogUpDomainReductionProof {
+            auxiliary_commitments: heterogeneous_domain_aux_commitments(domain),
+            identity_reduction,
+            sum_reduction,
+            claimed_sum_commitment: claimed_sum.commitment,
+        });
+    }
+    Ok((
+        HiddenLogUpHeterogeneousReductionProof {
+            domains: domain_proofs,
+        },
+        HiddenLogUpHeterogeneousProverOpeningState {
+            relation_claims,
+            domains,
+        },
+    ))
+}
+
+/// Verify a tagged heterogeneous LogUp without reading any source or
+/// auxiliary witness. Domain lengths and membership are derived from the
+/// statement, never from proof-controlled metadata.
+pub fn verify_hidden_logup_heterogeneous_parts_deferred_on_grid<'a>(
+    label: &[u8],
+    parameters: &DoryVerifierParameters,
+    grid: &Section6DoryGrid,
+    query_parts: &[TaggedMixedLogUpVerifierPart<'_, 'a>],
+    table_parts: &[TaggedMixedLogUpVerifierPart<'_, 'a>],
+    proof: &'a HiddenLogUpHeterogeneousReductionProof,
+) -> Result<HiddenLogUpHeterogeneousVerifierOpeningState<'a>, HiddenLogUpError> {
+    validate_tagged_statement_parts(query_parts, table_parts)?;
+    let plans = heterogeneous_domain_plans(
+        query_parts
+            .iter()
+            .map(|part| tagged_verifier_part_len(*part)),
+        table_parts
+            .iter()
+            .map(|part| tagged_verifier_part_len(*part)),
+    )?;
+    if proof.domains.len() != plans.len() {
+        return Err(HiddenLogUpError::ProofShape);
+    }
+    let (mut transcript, compression_challenge) =
+        tagged_verifier_transcript_and_challenge(label, query_parts, table_parts)?;
+
+    let mut domains = Vec::with_capacity(plans.len());
+    for (plan, domain_proof) in plans.iter().zip(&proof.domains) {
+        validate_heterogeneous_domain_auxiliary_shape(
+            plan,
+            &domain_proof.auxiliary_commitments,
+            grid,
+        )?;
+        domains.push(HiddenLogUpHeterogeneousVerifierDomain {
+            query_sources: plan
+                .query_indices
+                .iter()
+                .map(|&index| query_parts[index])
+                .collect(),
+            table_sources: plan
+                .table_indices
+                .iter()
+                .map(|&index| table_parts[index])
+                .collect(),
+            query_keys: optional_auxiliary_matrix_statements(
+                domain_proof.auxiliary_commitments.query_keys.as_ref(),
+                plan.logical_len,
+                plan.query_indices.len(),
+            )?,
+            table_keys: optional_auxiliary_matrix_statements(
+                domain_proof.auxiliary_commitments.table_keys.as_ref(),
+                plan.logical_len,
+                plan.table_indices.len(),
+            )?,
+            multiplicities: optional_auxiliary_matrix_statements(
+                domain_proof.auxiliary_commitments.multiplicities.as_ref(),
+                plan.logical_len,
+                plan.table_indices.len(),
+            )?,
+            query_inverses: optional_auxiliary_matrix_statements(
+                domain_proof.auxiliary_commitments.query_inverses.as_ref(),
+                plan.logical_len,
+                plan.query_indices.len(),
+            )?,
+            table_inverses: optional_auxiliary_matrix_statements(
+                domain_proof.auxiliary_commitments.table_inverses.as_ref(),
+                plan.logical_len,
+                plan.table_indices.len(),
+            )?,
+        });
+    }
+
+    let denominator_challenge = append_heterogeneous_pre_beta_commitments_and_challenge(
+        &mut transcript,
+        &plans,
+        proof
+            .domains
+            .iter()
+            .map(|domain| &domain.auxiliary_commitments),
+    );
+    let part_batch_challenge = append_heterogeneous_post_inverse_commitments_and_challenge(
+        &mut transcript,
+        &plans,
+        proof
+            .domains
+            .iter()
+            .map(|domain| &domain.auxiliary_commitments),
+    );
+
+    let mut relation_openings = Vec::with_capacity(2 * domains.len());
+    for (domain_index, (domain, domain_proof)) in domains.iter().zip(&proof.domains).enumerate() {
+        let mut identity_storage = Vec::new();
+        if !domain.query_sources.is_empty() {
+            identity_storage.push(verifier_tagged_key_relation_inputs(
+                &domain.query_sources,
+                &domain.query_keys,
+                compression_challenge,
+                part_batch_challenge,
+            ));
+        }
+        if !domain.table_sources.is_empty() {
+            identity_storage.push(verifier_tagged_key_relation_inputs(
+                &domain.table_sources,
+                &domain.table_keys,
+                compression_challenge,
+                part_batch_challenge,
+            ));
+        }
+        if !domain.query_sources.is_empty() {
+            identity_storage.push(verifier_domain_inverse_inputs(
+                &domain.query_keys,
+                &domain.query_inverses,
+                denominator_challenge,
+                part_batch_challenge,
+            ));
+        }
+        if !domain.table_sources.is_empty() {
+            identity_storage.push(verifier_domain_inverse_inputs(
+                &domain.table_keys,
+                &domain.table_inverses,
+                denominator_challenge,
+                part_batch_challenge,
+            ));
+        }
+        let identity_items = identity_storage
+            .iter()
+            .map(
+                |(tables, public_tables, expression)| HiddenRelationBatchVerifierItem {
+                    tables,
+                    public_tables,
+                    expression,
+                },
+            )
+            .collect::<Vec<_>>();
+        let domain_label =
+            heterogeneous_domain_label(label, domain_index, plans[domain_index].logical_len);
+        let identity_claims = verify_hidden_relations_batch_deferred(
+            &relation_label(&domain_label, b"identity"),
+            parameters,
+            &identity_items,
+            &domain_proof.identity_reduction,
+        )?
+        .into_claims();
+        let identity_tables = identity_storage
+            .iter()
+            .flat_map(|(tables, _, _)| tables.iter().copied())
+            .collect::<Vec<_>>();
+        let identity_opening =
+            identity_claims.bind_tables(deduplicate_verifier_hidden_tables(identity_tables))?;
+
+        let sum_tables = verifier_heterogeneous_sum_tables(domain);
+        let sum_expression =
+            parts_sum_balance_expression(domain.query_inverses.len(), domain.table_inverses.len());
+        let sum_opening = verify_hidden_claimed_sum_relation_deferred(
+            &relation_label(&domain_label, b"sum"),
+            parameters,
+            &sum_tables,
+            &sum_expression,
+            &domain_proof.claimed_sum_commitment,
+            &domain_proof.sum_reduction,
+        )?;
+        relation_openings.push(identity_opening);
+        relation_openings.push(sum_opening);
+    }
+
+    let claimed_sum_commitments = proof
+        .domains
+        .iter()
+        .map(|domain| domain.claimed_sum_commitment)
+        .collect::<Vec<_>>();
+    if claimed_sum_commitments
+        .iter()
+        .copied()
+        .fold(Bn254G1::default(), |sum, commitment| sum + commitment)
+        != Bn254G1::default()
+    {
+        return Err(HiddenLogUpError::ProofShape);
+    }
+    Ok(HiddenLogUpHeterogeneousVerifierOpeningState { relation_openings })
+}
+
 /// Verify a hidden tuple lookup from source commitment metadata and the proof's
 /// auxiliary commitments. No source tuple or auxiliary witness is provided.
 pub fn verify_hidden_logup(
@@ -1528,6 +2121,848 @@ pub fn verify_hidden_logup_parts_deferred_on_grid<'a>(
     let (logical_len, _) = validate_mixed_statement_parts(query_parts, table_parts)?;
     validate_part_matrices_fit_grid(logical_len, query_parts.len(), table_parts.len(), grid)?;
     verify_hidden_logup_parts_deferred(label, parameters, query_parts, table_parts, proof)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HeterogeneousDomainPlan {
+    logical_len: usize,
+    query_indices: Vec<usize>,
+    table_indices: Vec<usize>,
+}
+
+fn validate_tagged_prover_parts(
+    query_parts: &[TaggedMixedLogUpProverPart<'_, '_>],
+    table_parts: &[TaggedMixedLogUpProverPart<'_, '_>],
+) -> Result<(), HiddenLogUpError> {
+    let query_statements = query_parts
+        .iter()
+        .map(|part| {
+            (
+                part.tag,
+                part.columns
+                    .iter()
+                    .map(|column| match column {
+                        MixedLogUpColumn::Hidden(table) => MixedLogUpColumnStatement::Hidden(
+                            HiddenRelationTableStatement::from(table.committed),
+                        ),
+                        MixedLogUpColumn::Public(table) => {
+                            MixedLogUpColumnStatement::Public(*table)
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let table_statements = table_parts
+        .iter()
+        .map(|part| {
+            (
+                part.tag,
+                part.columns
+                    .iter()
+                    .map(|column| match column {
+                        MixedLogUpColumn::Hidden(table) => MixedLogUpColumnStatement::Hidden(
+                            HiddenRelationTableStatement::from(table.committed),
+                        ),
+                        MixedLogUpColumn::Public(table) => {
+                            MixedLogUpColumnStatement::Public(*table)
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    validate_tagged_statement_part_columns(&query_statements, &table_statements)?;
+    for (side, parts) in [
+        (HiddenLogUpSide::Query, query_parts),
+        (HiddenLogUpSide::Table, table_parts),
+    ] {
+        for (part_index, part) in parts.iter().enumerate() {
+            let logical_len = tagged_prover_part_len(*part);
+            for (column_index, column) in part.columns.iter().enumerate() {
+                if let MixedLogUpColumn::Hidden(table) = column {
+                    if table.values.len() != logical_len {
+                        return Err(HiddenLogUpError::PartSourceValueLength {
+                            side,
+                            part: part_index,
+                            column: column_index,
+                            expected: logical_len,
+                            actual: table.values.len(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_tagged_statement_parts(
+    query_parts: &[TaggedMixedLogUpVerifierPart<'_, '_>],
+    table_parts: &[TaggedMixedLogUpVerifierPart<'_, '_>],
+) -> Result<(), HiddenLogUpError> {
+    let query = query_parts
+        .iter()
+        .map(|part| (part.tag, part.columns.to_vec()))
+        .collect::<Vec<_>>();
+    let table = table_parts
+        .iter()
+        .map(|part| (part.tag, part.columns.to_vec()))
+        .collect::<Vec<_>>();
+    validate_tagged_statement_part_columns(&query, &table)
+}
+
+fn validate_tagged_statement_part_columns(
+    query_parts: &[(ArkFr, Vec<MixedLogUpColumnStatement<'_>>)],
+    table_parts: &[(ArkFr, Vec<MixedLogUpColumnStatement<'_>>)],
+) -> Result<(), HiddenLogUpError> {
+    if query_parts.is_empty() {
+        return Err(HiddenLogUpError::EmptyParts {
+            side: HiddenLogUpSide::Query,
+        });
+    }
+    if table_parts.is_empty() {
+        return Err(HiddenLogUpError::EmptyParts {
+            side: HiddenLogUpSide::Table,
+        });
+    }
+    for (side, parts) in [
+        (HiddenLogUpSide::Query, query_parts),
+        (HiddenLogUpSide::Table, table_parts),
+    ] {
+        for (part_index, (_, columns)) in parts.iter().enumerate() {
+            let Some(first) = columns.first() else {
+                return Err(HiddenLogUpError::EmptyTuple);
+            };
+            let logical_len = mixed_statement_len(first);
+            if logical_len < 2 || !logical_len.is_power_of_two() {
+                return Err(HiddenLogUpError::InvalidLogicalLength(logical_len));
+            }
+            for (column_index, column) in columns.iter().enumerate() {
+                let actual = mixed_statement_len(column);
+                if actual != logical_len {
+                    return Err(HiddenLogUpError::PartColumnLength {
+                        side,
+                        part: part_index,
+                        column: column_index,
+                        expected: logical_len,
+                        actual,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn tagged_prover_part_len(part: TaggedMixedLogUpProverPart<'_, '_>) -> usize {
+    match &part.columns[0] {
+        MixedLogUpColumn::Hidden(table) => table.committed.logical_len,
+        MixedLogUpColumn::Public(table) => table.logical_len(),
+    }
+}
+
+fn tagged_verifier_part_len(part: TaggedMixedLogUpVerifierPart<'_, '_>) -> usize {
+    mixed_statement_len(&part.columns[0])
+}
+
+fn heterogeneous_domain_plans(
+    query_lengths: impl IntoIterator<Item = usize>,
+    table_lengths: impl IntoIterator<Item = usize>,
+) -> Result<Vec<HeterogeneousDomainPlan>, HiddenLogUpError> {
+    let mut domains = BTreeMap::<usize, (Vec<usize>, Vec<usize>)>::new();
+    for (index, logical_len) in query_lengths.into_iter().enumerate() {
+        domains.entry(logical_len).or_default().0.push(index);
+    }
+    for (index, logical_len) in table_lengths.into_iter().enumerate() {
+        domains.entry(logical_len).or_default().1.push(index);
+    }
+    if domains.is_empty() {
+        return Err(HiddenLogUpError::ProofShape);
+    }
+    Ok(domains
+        .into_iter()
+        .map(
+            |(logical_len, (query_indices, table_indices))| HeterogeneousDomainPlan {
+                logical_len,
+                query_indices,
+                table_indices,
+            },
+        )
+        .collect())
+}
+
+fn tagged_prover_transcript_and_challenge(
+    label: &[u8],
+    query_parts: &[TaggedMixedLogUpProverPart<'_, '_>],
+    table_parts: &[TaggedMixedLogUpProverPart<'_, '_>],
+) -> Result<(Blake2bTranscript<JoltFr>, ArkFr), HiddenLogUpError> {
+    let query = query_parts
+        .iter()
+        .map(|part| {
+            (
+                part.tag,
+                part.columns
+                    .iter()
+                    .map(|column| match column {
+                        MixedLogUpColumn::Hidden(table) => MixedLogUpColumnStatement::Hidden(
+                            HiddenRelationTableStatement::from(table.committed),
+                        ),
+                        MixedLogUpColumn::Public(table) => {
+                            MixedLogUpColumnStatement::Public(*table)
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let table = table_parts
+        .iter()
+        .map(|part| {
+            (
+                part.tag,
+                part.columns
+                    .iter()
+                    .map(|column| match column {
+                        MixedLogUpColumn::Hidden(table) => MixedLogUpColumnStatement::Hidden(
+                            HiddenRelationTableStatement::from(table.committed),
+                        ),
+                        MixedLogUpColumn::Public(table) => {
+                            MixedLogUpColumnStatement::Public(*table)
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    tagged_statement_transcript_and_challenge(label, &query, &table)
+}
+
+fn tagged_verifier_transcript_and_challenge(
+    label: &[u8],
+    query_parts: &[TaggedMixedLogUpVerifierPart<'_, '_>],
+    table_parts: &[TaggedMixedLogUpVerifierPart<'_, '_>],
+) -> Result<(Blake2bTranscript<JoltFr>, ArkFr), HiddenLogUpError> {
+    let query = query_parts
+        .iter()
+        .map(|part| (part.tag, part.columns.to_vec()))
+        .collect::<Vec<_>>();
+    let table = table_parts
+        .iter()
+        .map(|part| (part.tag, part.columns.to_vec()))
+        .collect::<Vec<_>>();
+    tagged_statement_transcript_and_challenge(label, &query, &table)
+}
+
+fn tagged_statement_transcript_and_challenge(
+    label: &[u8],
+    query_parts: &[(ArkFr, Vec<MixedLogUpColumnStatement<'_>>)],
+    table_parts: &[(ArkFr, Vec<MixedLogUpColumnStatement<'_>>)],
+) -> Result<(Blake2bTranscript<JoltFr>, ArkFr), HiddenLogUpError> {
+    let mut transcript = Blake2bTranscript::<JoltFr>::new(LOGUP_TRANSCRIPT_DOMAIN);
+    transcript.append(&Label(b"lu_heterogeneous_sources"));
+    transcript.append(&LabelWithCount(b"lu_label", label.len() as u64));
+    transcript.append_bytes(label);
+    for (side, parts) in [
+        (HiddenLogUpSide::Query, query_parts),
+        (HiddenLogUpSide::Table, table_parts),
+    ] {
+        let count_label = match side {
+            HiddenLogUpSide::Query => b"lu_query_parts".as_slice(),
+            HiddenLogUpSide::Table => b"lu_table_parts".as_slice(),
+        };
+        transcript.append(&LabelWithCount(count_label, parts.len() as u64));
+        for (part_index, (tag, columns)) in parts.iter().enumerate() {
+            let index_label = match side {
+                HiddenLogUpSide::Query => b"lu_query_part".as_slice(),
+                HiddenLogUpSide::Table => b"lu_table_part".as_slice(),
+            };
+            transcript.append_labeled(index_label, &U64Word(part_index as u64));
+            append_tag(&mut transcript, side, *tag)?;
+            let len_label = match side {
+                HiddenLogUpSide::Query => b"lu_query_part_len".as_slice(),
+                HiddenLogUpSide::Table => b"lu_table_part_len".as_slice(),
+            };
+            transcript.append_labeled(len_label, &U64Word(mixed_statement_len(&columns[0]) as u64));
+            let width_label = match side {
+                HiddenLogUpSide::Query => b"lu_query_cols".as_slice(),
+                HiddenLogUpSide::Table => b"lu_table_cols".as_slice(),
+            };
+            transcript.append(&LabelWithCount(width_label, columns.len() as u64));
+            for column in columns {
+                append_source_column(&mut transcript, side, column)?;
+            }
+        }
+    }
+    let challenge = ArkFr::from(transcript.challenge());
+    if challenge.is_zero() {
+        return Err(HiddenLogUpError::ZeroCompressionChallenge);
+    }
+    Ok((transcript, challenge))
+}
+
+fn append_tag(
+    transcript: &mut Blake2bTranscript<JoltFr>,
+    side: HiddenLogUpSide,
+    tag: ArkFr,
+) -> Result<(), HiddenLogUpError> {
+    let mut encoded = Vec::new();
+    tag.serialize_compressed(&mut encoded)
+        .map_err(|error| HiddenLogUpError::Encoding(error.to_string()))?;
+    let label = match side {
+        HiddenLogUpSide::Query => b"lu_query_tag".as_slice(),
+        HiddenLogUpSide::Table => b"lu_table_tag".as_slice(),
+    };
+    transcript.append(&LabelWithCount(label, encoded.len() as u64));
+    transcript.append_bytes(&encoded);
+    Ok(())
+}
+
+fn compress_tagged_prover_part(
+    part: TaggedMixedLogUpProverPart<'_, '_>,
+    challenge: ArkFr,
+) -> Result<Vec<ArkFr>, HiddenLogUpError> {
+    let logical_len = tagged_prover_part_len(part);
+    let columns = part
+        .columns
+        .iter()
+        .map(mixed_prover_values)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut coefficient = challenge;
+    let coefficients = columns
+        .iter()
+        .map(|_| {
+            let current = coefficient;
+            coefficient *= challenge;
+            current
+        })
+        .collect::<Vec<_>>();
+    Ok((0..logical_len)
+        .into_par_iter()
+        .map(|index| {
+            part.tag
+                + columns
+                    .iter()
+                    .zip(&coefficients)
+                    .map(|(column, coefficient)| column[index] * coefficient)
+                    .sum::<ArkFr>()
+        })
+        .collect())
+}
+
+fn compute_heterogeneous_multiplicities(
+    query_keys: &[Vec<ArkFr>],
+    table_keys: &[Vec<ArkFr>],
+) -> Result<Vec<Vec<ArkFr>>, HiddenLogUpError> {
+    let table_capacity = table_keys.iter().map(Vec::len).sum();
+    let mut first_table_position = HashMap::with_capacity(table_capacity);
+    let mut table_offsets = Vec::with_capacity(table_keys.len());
+    let mut offset = 0;
+    for (part, keys) in table_keys.iter().enumerate() {
+        table_offsets.push(offset);
+        for (index, key) in keys.iter().copied().enumerate() {
+            first_table_position.entry(key).or_insert((part, index));
+        }
+        offset += keys.len();
+    }
+    let mut counts = table_keys
+        .iter()
+        .map(|keys| vec![0_u64; keys.len()])
+        .collect::<Vec<_>>();
+    let mut query_index = 0;
+    for keys in query_keys {
+        for key in keys {
+            let Some(&(part, index)) = first_table_position.get(key) else {
+                return Err(HiddenLogUpError::MissingQueryTuple { query_index });
+            };
+            counts[part][index] = counts[part][index].checked_add(1).ok_or(
+                HiddenLogUpError::MultiplicityOverflow {
+                    table_index: table_offsets[part] + index,
+                },
+            )?;
+            query_index += 1;
+        }
+    }
+    Ok(counts
+        .into_iter()
+        .map(|part| part.into_iter().map(ArkFr::from).collect())
+        .collect())
+}
+
+fn commit_optional_auxiliary_matrix(
+    parameters: &DoryProverParameters,
+    grid: &Section6DoryGrid,
+    columns: &[Vec<ArkFr>],
+) -> Result<Vec<CommittedDoryFieldVector>, HiddenLogUpError> {
+    if columns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let logical_len = columns[0].len();
+    if columns.iter().any(|column| column.len() != logical_len) {
+        return Err(HiddenLogUpError::ProofShape);
+    }
+    let matrix_len = logical_len
+        .checked_mul(columns.len().next_power_of_two())
+        .ok_or(HiddenLogUpError::ProofShape)?;
+    if matrix_len > grid.logical_len() {
+        return Err(HiddenLogUpError::ProofShape);
+    }
+    let slices = columns.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    commit_section6_field_matrix_columns_on_grid_zk(
+        parameters,
+        grid,
+        &slices,
+        columns.len().next_power_of_two(),
+    )
+    .map_err(|error| HiddenLogUpError::Dory(error.to_string()))
+}
+
+fn heterogeneous_domain_aux_commitments(
+    domain: &HiddenLogUpHeterogeneousProverDomain<'_>,
+) -> HiddenLogUpDomainAuxCommitments {
+    HiddenLogUpDomainAuxCommitments {
+        query_keys: domain
+            .committed_query_keys
+            .first()
+            .map(|column| column.commitment.clone()),
+        table_keys: domain
+            .committed_table_keys
+            .first()
+            .map(|column| column.commitment.clone()),
+        multiplicities: domain
+            .committed_multiplicities
+            .first()
+            .map(|column| column.commitment.clone()),
+        query_inverses: domain
+            .committed_query_inverses
+            .first()
+            .map(|column| column.commitment.clone()),
+        table_inverses: domain
+            .committed_table_inverses
+            .first()
+            .map(|column| column.commitment.clone()),
+    }
+}
+
+fn append_heterogeneous_pre_beta_and_challenge(
+    transcript: &mut Blake2bTranscript<JoltFr>,
+    plans: &[HeterogeneousDomainPlan],
+    domains: &[HiddenLogUpHeterogeneousProverDomain<'_>],
+) -> ArkFr {
+    let commitments = domains
+        .iter()
+        .map(heterogeneous_domain_aux_commitments)
+        .collect::<Vec<_>>();
+    append_heterogeneous_pre_beta_commitments_and_challenge(transcript, plans, commitments.iter())
+}
+
+fn append_heterogeneous_pre_beta_commitments_and_challenge<'a>(
+    transcript: &mut Blake2bTranscript<JoltFr>,
+    plans: &[HeterogeneousDomainPlan],
+    commitments: impl IntoIterator<Item = &'a HiddenLogUpDomainAuxCommitments>,
+) -> ArkFr {
+    transcript.append(&LabelWithCount(b"lu_hetero_pre_beta", plans.len() as u64));
+    for (domain_index, (plan, auxiliary)) in plans.iter().zip(commitments).enumerate() {
+        transcript.append_labeled(b"lu_domain", &U64Word(domain_index as u64));
+        transcript.append_labeled(b"lu_domain_len", &U64Word(plan.logical_len as u64));
+        append_optional_auxiliary_commitment(
+            transcript,
+            b"lu_query_key_parts",
+            b"lu_query_keys",
+            plan.query_indices.len(),
+            auxiliary.query_keys.as_ref(),
+        );
+        append_optional_auxiliary_commitment(
+            transcript,
+            b"lu_table_key_parts",
+            b"lu_table_keys",
+            plan.table_indices.len(),
+            auxiliary.table_keys.as_ref(),
+        );
+        append_optional_auxiliary_commitment(
+            transcript,
+            b"lu_mult_parts",
+            b"lu_mult",
+            plan.table_indices.len(),
+            auxiliary.multiplicities.as_ref(),
+        );
+    }
+    ArkFr::from(transcript.challenge())
+}
+
+fn append_heterogeneous_post_inverse_and_challenge(
+    transcript: &mut Blake2bTranscript<JoltFr>,
+    plans: &[HeterogeneousDomainPlan],
+    domains: &[HiddenLogUpHeterogeneousProverDomain<'_>],
+) -> ArkFr {
+    let commitments = domains
+        .iter()
+        .map(heterogeneous_domain_aux_commitments)
+        .collect::<Vec<_>>();
+    append_heterogeneous_post_inverse_commitments_and_challenge(
+        transcript,
+        plans,
+        commitments.iter(),
+    )
+}
+
+fn append_heterogeneous_post_inverse_commitments_and_challenge<'a>(
+    transcript: &mut Blake2bTranscript<JoltFr>,
+    plans: &[HeterogeneousDomainPlan],
+    commitments: impl IntoIterator<Item = &'a HiddenLogUpDomainAuxCommitments>,
+) -> ArkFr {
+    transcript.append(&LabelWithCount(
+        b"lu_hetero_post_inverse",
+        plans.len() as u64,
+    ));
+    for (domain_index, (plan, auxiliary)) in plans.iter().zip(commitments).enumerate() {
+        transcript.append_labeled(b"lu_domain", &U64Word(domain_index as u64));
+        append_optional_auxiliary_commitment(
+            transcript,
+            b"lu_query_inverse_parts",
+            b"lu_query_inverses",
+            plan.query_indices.len(),
+            auxiliary.query_inverses.as_ref(),
+        );
+        append_optional_auxiliary_commitment(
+            transcript,
+            b"lu_table_inverse_parts",
+            b"lu_table_inverses",
+            plan.table_indices.len(),
+            auxiliary.table_inverses.as_ref(),
+        );
+    }
+    let mut challenge = ArkFr::from(transcript.challenge());
+    let mut retry = 0_u64;
+    while challenge.is_zero() {
+        retry += 1;
+        transcript.append_labeled(b"lu_batch_retry", &U64Word(retry));
+        challenge = ArkFr::from(transcript.challenge());
+    }
+    challenge
+}
+
+fn append_optional_auxiliary_commitment(
+    transcript: &mut Blake2bTranscript<JoltFr>,
+    count_label: &'static [u8],
+    commitment_label: &'static [u8],
+    count: usize,
+    commitment: Option<&DoryCommitment>,
+) {
+    transcript.append_labeled(count_label, &U64Word(count as u64));
+    if let Some(commitment) = commitment {
+        transcript.append_labeled(commitment_label, commitment);
+    }
+}
+
+fn invert_heterogeneous_domain(
+    query_keys: &[Vec<ArkFr>],
+    table_keys: &[Vec<ArkFr>],
+    beta: ArkFr,
+    _domain_index: usize,
+) -> Result<(Vec<Vec<ArkFr>>, Vec<Vec<ArkFr>>), HiddenLogUpError> {
+    let logical_len = query_keys
+        .first()
+        .or_else(|| table_keys.first())
+        .map(Vec::len)
+        .ok_or(HiddenLogUpError::ProofShape)?;
+    let mut denominators = Vec::with_capacity(
+        logical_len
+            .checked_mul(query_keys.len() + table_keys.len())
+            .ok_or(HiddenLogUpError::ProofShape)?,
+    );
+    for (side, parts) in [
+        (HiddenLogUpSide::Query, query_keys),
+        (HiddenLogUpSide::Table, table_keys),
+    ] {
+        for (part, keys) in parts.iter().enumerate() {
+            for (index, key) in keys.iter().enumerate() {
+                let denominator = beta + key;
+                if denominator.is_zero() {
+                    return Err(HiddenLogUpError::SingularPartDenominator { side, part, index });
+                }
+                denominators.push(denominator);
+            }
+        }
+    }
+    batch_inversion(&mut denominators);
+    let mut values = denominators.into_iter();
+    let mut take_parts = |part_count: usize| {
+        (0..part_count)
+            .map(|_| values.by_ref().take(logical_len).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+    };
+    let query_inverses = take_parts(query_keys.len());
+    let table_inverses = take_parts(table_keys.len());
+    Ok((query_inverses, table_inverses))
+}
+
+fn prover_tagged_key_relation_inputs<'source, 'output>(
+    parts: &'output [TaggedMixedLogUpProverPart<'output, 'source>],
+    key_values: &'output [Vec<ArkFr>],
+    committed_keys: &'output [CommittedDoryFieldVector],
+    compression_challenge: ArkFr,
+    batch_challenge: ArkFr,
+) -> (
+    Vec<HiddenRelationTable<'output>>,
+    Vec<PublicRelationTable<'output>>,
+    RelationExpression,
+)
+where
+    'source: 'output,
+{
+    let total_hidden = parts.len()
+        + parts
+            .iter()
+            .flat_map(|part| part.columns)
+            .filter(|column| matches!(column, MixedLogUpColumn::Hidden(_)))
+            .count();
+    let mut hidden = Vec::with_capacity(total_hidden);
+    let mut public = Vec::new();
+    let mut expression = RelationExpression::constant(ArkFr::zero());
+    let mut batch_coefficient = ArkFr::one();
+    for (part_index, part) in parts.iter().enumerate() {
+        let mut compressed = RelationExpression::constant(part.tag);
+        let mut compression_coefficient = compression_challenge;
+        for column in part.columns {
+            let table_index = match column {
+                MixedLogUpColumn::Hidden(table) => {
+                    let index = hidden.len();
+                    hidden.push(*table);
+                    index
+                }
+                MixedLogUpColumn::Public(table) => {
+                    let index = total_hidden + public.len();
+                    public.push(*table);
+                    index
+                }
+            };
+            compressed = compressed.add(
+                RelationExpression::constant(compression_coefficient)
+                    .mul(RelationExpression::table(table_index)),
+            );
+            compression_coefficient *= compression_challenge;
+        }
+        let key_index = hidden.len();
+        hidden.push(HiddenRelationTable {
+            values: &key_values[part_index],
+            committed: &committed_keys[part_index],
+        });
+        expression = expression.add(
+            RelationExpression::constant(batch_coefficient)
+                .mul(RelationExpression::table(key_index).sub(compressed)),
+        );
+        batch_coefficient *= batch_challenge;
+    }
+    (hidden, public, expression)
+}
+
+fn verifier_tagged_key_relation_inputs<'a>(
+    parts: &[TaggedMixedLogUpVerifierPart<'_, 'a>],
+    key_statements: &[HiddenRelationTableStatement<'a>],
+    compression_challenge: ArkFr,
+    batch_challenge: ArkFr,
+) -> (
+    Vec<HiddenRelationTableStatement<'a>>,
+    Vec<PublicRelationTable<'a>>,
+    RelationExpression,
+) {
+    let total_hidden = parts.len()
+        + parts
+            .iter()
+            .flat_map(|part| part.columns)
+            .filter(|column| matches!(column, MixedLogUpColumnStatement::Hidden(_)))
+            .count();
+    let mut hidden = Vec::with_capacity(total_hidden);
+    let mut public = Vec::new();
+    let mut expression = RelationExpression::constant(ArkFr::zero());
+    let mut batch_coefficient = ArkFr::one();
+    for (part_index, part) in parts.iter().enumerate() {
+        let mut compressed = RelationExpression::constant(part.tag);
+        let mut compression_coefficient = compression_challenge;
+        for column in part.columns {
+            let table_index = match column {
+                MixedLogUpColumnStatement::Hidden(table) => {
+                    let index = hidden.len();
+                    hidden.push(*table);
+                    index
+                }
+                MixedLogUpColumnStatement::Public(table) => {
+                    let index = total_hidden + public.len();
+                    public.push(*table);
+                    index
+                }
+            };
+            compressed = compressed.add(
+                RelationExpression::constant(compression_coefficient)
+                    .mul(RelationExpression::table(table_index)),
+            );
+            compression_coefficient *= compression_challenge;
+        }
+        let key_index = hidden.len();
+        hidden.push(key_statements[part_index]);
+        expression = expression.add(
+            RelationExpression::constant(batch_coefficient)
+                .mul(RelationExpression::table(key_index).sub(compressed)),
+        );
+        batch_coefficient *= batch_challenge;
+    }
+    (hidden, public, expression)
+}
+
+fn prover_domain_inverse_inputs<'a>(
+    keys: &'a [Vec<ArkFr>],
+    committed_keys: &'a [CommittedDoryFieldVector],
+    inverses: &'a [Vec<ArkFr>],
+    committed_inverses: &'a [CommittedDoryFieldVector],
+    beta: ArkFr,
+    batch_challenge: ArkFr,
+) -> (
+    Vec<HiddenRelationTable<'a>>,
+    Vec<PublicRelationTable<'a>>,
+    RelationExpression,
+) {
+    let mut tables = Vec::with_capacity(2 * keys.len());
+    for part in 0..keys.len() {
+        tables.push(HiddenRelationTable {
+            values: &keys[part],
+            committed: &committed_keys[part],
+        });
+        tables.push(HiddenRelationTable {
+            values: &inverses[part],
+            committed: &committed_inverses[part],
+        });
+    }
+    (
+        tables,
+        Vec::new(),
+        batched_inverse_expression(keys.len(), beta, batch_challenge),
+    )
+}
+
+fn verifier_domain_inverse_inputs<'a>(
+    keys: &[HiddenRelationTableStatement<'a>],
+    inverses: &[HiddenRelationTableStatement<'a>],
+    beta: ArkFr,
+    batch_challenge: ArkFr,
+) -> (
+    Vec<HiddenRelationTableStatement<'a>>,
+    Vec<PublicRelationTable<'a>>,
+    RelationExpression,
+) {
+    (
+        interleave_statements(keys, inverses),
+        Vec::new(),
+        batched_inverse_expression(keys.len(), beta, batch_challenge),
+    )
+}
+
+fn prover_heterogeneous_sum_tables<'a>(
+    domain: &'a HiddenLogUpHeterogeneousProverDomain<'_>,
+) -> Vec<HiddenRelationTable<'a>> {
+    let mut tables =
+        Vec::with_capacity(domain.query_inverses.len() + 2 * domain.table_inverses.len());
+    for part in 0..domain.query_inverses.len() {
+        tables.push(HiddenRelationTable {
+            values: &domain.query_inverses[part],
+            committed: &domain.committed_query_inverses[part],
+        });
+    }
+    for part in 0..domain.table_inverses.len() {
+        tables.push(HiddenRelationTable {
+            values: &domain.multiplicities[part],
+            committed: &domain.committed_multiplicities[part],
+        });
+        tables.push(HiddenRelationTable {
+            values: &domain.table_inverses[part],
+            committed: &domain.committed_table_inverses[part],
+        });
+    }
+    tables
+}
+
+fn verifier_heterogeneous_sum_tables<'a>(
+    domain: &HiddenLogUpHeterogeneousVerifierDomain<'_, 'a>,
+) -> Vec<HiddenRelationTableStatement<'a>> {
+    let mut tables = domain.query_inverses.clone();
+    for part in 0..domain.table_inverses.len() {
+        tables.push(domain.multiplicities[part]);
+        tables.push(domain.table_inverses[part]);
+    }
+    tables
+}
+
+fn heterogeneous_domain_sum(domain: &HiddenLogUpHeterogeneousProverDomain<'_>) -> ArkFr {
+    let query_sum = domain
+        .query_inverses
+        .par_iter()
+        .map(|part| part.par_iter().copied().sum::<ArkFr>())
+        .sum::<ArkFr>();
+    let table_sum = domain
+        .multiplicities
+        .par_iter()
+        .zip(&domain.table_inverses)
+        .map(|(multiplicity, inverse)| {
+            multiplicity
+                .par_iter()
+                .zip(inverse)
+                .map(|(multiplicity, inverse)| *multiplicity * inverse)
+                .sum::<ArkFr>()
+        })
+        .sum::<ArkFr>();
+    query_sum - table_sum
+}
+
+fn heterogeneous_domain_label(label: &[u8], domain: usize, logical_len: usize) -> Vec<u8> {
+    let mut domain_label = Vec::with_capacity(label.len() + 16);
+    domain_label.extend_from_slice(label);
+    domain_label.extend_from_slice(&(domain as u64).to_le_bytes());
+    domain_label.extend_from_slice(&(logical_len as u64).to_le_bytes());
+    domain_label
+}
+
+fn validate_heterogeneous_domain_auxiliary_shape(
+    plan: &HeterogeneousDomainPlan,
+    auxiliary: &HiddenLogUpDomainAuxCommitments,
+    grid: &Section6DoryGrid,
+) -> Result<(), HiddenLogUpError> {
+    for (count, commitment) in [
+        (plan.query_indices.len(), auxiliary.query_keys.as_ref()),
+        (plan.table_indices.len(), auxiliary.table_keys.as_ref()),
+        (plan.table_indices.len(), auxiliary.multiplicities.as_ref()),
+        (plan.query_indices.len(), auxiliary.query_inverses.as_ref()),
+        (plan.table_indices.len(), auxiliary.table_inverses.as_ref()),
+    ] {
+        if (count == 0) != commitment.is_none() {
+            return Err(HiddenLogUpError::ProofShape);
+        }
+        if count != 0 {
+            let matrix_len = plan
+                .logical_len
+                .checked_mul(count.next_power_of_two())
+                .ok_or(HiddenLogUpError::ProofShape)?;
+            if matrix_len > grid.logical_len() {
+                return Err(HiddenLogUpError::ProofShape);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn optional_auxiliary_matrix_statements<'a>(
+    commitment: Option<&'a DoryCommitment>,
+    logical_len: usize,
+    part_count: usize,
+) -> Result<Vec<HiddenRelationTableStatement<'a>>, HiddenLogUpError> {
+    match (part_count, commitment) {
+        (0, None) => Ok(Vec::new()),
+        (0, Some(_)) | (_, None) => Err(HiddenLogUpError::ProofShape),
+        (_, Some(commitment)) => Ok(auxiliary_matrix_statements(
+            commitment,
+            logical_len,
+            part_count,
+        )),
+    }
 }
 
 fn validate_parts_proof_shape(
@@ -2523,6 +3958,7 @@ fn auxiliary_matrix_statements<'a>(
             HiddenRelationTableStatement::matrix_column(
                 commitment,
                 logical_len,
+                part_count,
                 part_count.next_power_of_two(),
                 part,
             )

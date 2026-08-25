@@ -1,8 +1,9 @@
 //! Hidden Packed EO-LiteBullet scalar transcript for Section 6.
 //!
 //! Cross terms, binary-round scalars, and terminal fold scalars are committed
-//! in G1 before their Fiat--Shamir challenges are sampled. BlindFold checks the
-//! terminal scalar identity. The resulting continuation state feeds two
+//! in G1 before their Fiat--Shamir challenges are sampled. The affine terms are
+//! batched into one Pedersen commitment before BlindFold checks the remaining
+//! multiplication. The continuation feeds two
 //! independent hidden stages: a Dory opening of the registered dense BVA and
 //! the final Section 6 TBV consistency relation.
 
@@ -28,7 +29,9 @@ use crate::{
         TensorBasisVector,
     },
     hidden_relation::{
-        prove_hidden_scalar_relation, verify_hidden_scalar_relation, HiddenRelationError,
+        combine_hidden_linear_commitments, combine_hidden_linear_witness,
+        prove_hidden_linear_relation, prove_hidden_scalar_relation, verify_hidden_linear_relation,
+        verify_hidden_scalar_relation, HiddenLinearRelationProof, HiddenRelationError,
         HiddenScalarRelationProof, HiddenScalarWitness, RelationExpression,
     },
     jolt_dory::{
@@ -68,7 +71,7 @@ impl HiddenPackedEoProof {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HiddenBvaOpeningProof {
     pub dory_opening: HiddenDenseI8DoryProof,
-    pub evaluation_binding: HiddenScalarRelationProof,
+    pub evaluation_binding: HiddenLinearRelationProof,
 }
 
 /// Mutually exclusive timings for one hidden dense-BVA opening.
@@ -127,7 +130,7 @@ impl HiddenBvaOpeningVerifierProfile {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HiddenBvaOpeningReductionProof {
     pub normalized_evaluation_commitment: Bn254G1,
-    pub evaluation_binding: HiddenScalarRelationProof,
+    pub evaluation_binding: HiddenLinearRelationProof,
 }
 
 /// Prover-retained normalized dense-BVA claim for the terminal Dory batch.
@@ -512,18 +515,23 @@ where
     }
     identity_witnesses.push(a_reduced.clone());
     identity_witnesses.push(b_reduced.clone());
-    let identity_expression = scalar_identity_expression(
+    let linear_expression = scalar_identity_linear_expression(
         claimed,
         packing_stride,
         &output.challenges,
         identity_witnesses.len(),
     )
     .map_err(HiddenPackedEoProverError::Protocol)?;
+    let linear_witness =
+        combine_hidden_linear_witness(parameters, &identity_witnesses, &linear_expression)
+            .map_err(HiddenPackedEoError::from)
+            .map_err(HiddenPackedEoProverError::Protocol)?;
+    let multiplication_expression = scalar_identity_multiplication_expression();
     let scalar_identity = prove_hidden_scalar_relation(
         &transcript_state,
         parameters,
-        &identity_witnesses,
-        &identity_expression,
+        &[linear_witness, a_reduced.clone(), b_reduced.clone()],
+        &multiplication_expression,
         rng,
     )
     .map_err(HiddenPackedEoError::from)
@@ -568,7 +576,7 @@ pub fn prove_hidden_bva_opening_profiled<S: DenseI8BvaSource>(
     source: &S,
     committed: &CommittedDoryBva,
     packed: &HiddenPackedEoProverState,
-    rng: &mut impl RngCore,
+    _rng: &mut impl RngCore,
 ) -> Result<(HiddenBvaOpeningProof, HiddenBvaOpeningProverProfile), HiddenPackedEoError> {
     let total_started = Instant::now();
 
@@ -613,12 +621,10 @@ pub fn prove_hidden_bva_opening_profiled<S: DenseI8BvaSource>(
     let evaluation_expression = RelationExpression::table(1)
         .mul(RelationExpression::constant(normalized.scale))
         .sub(RelationExpression::table(0));
-    let evaluation_binding = prove_hidden_scalar_relation(
-        &packed.transcript_state,
+    let evaluation_binding = prove_hidden_linear_relation(
         parameters,
         &[packed.a_reduced.clone(), normalized_a],
         &evaluation_expression,
-        rng,
     )?;
     let scalar_binding_seconds = scalar_binding_started.elapsed().as_secs_f64();
 
@@ -643,7 +649,7 @@ pub fn prove_hidden_bva_i16_opening_profiled<S: DenseI16BvaSource>(
     source: &S,
     committed: &CommittedDoryBva,
     packed: &HiddenPackedEoProverState,
-    rng: &mut impl RngCore,
+    _rng: &mut impl RngCore,
 ) -> Result<(HiddenBvaOpeningProof, HiddenBvaOpeningProverProfile), HiddenPackedEoError> {
     let total_started = Instant::now();
 
@@ -688,12 +694,10 @@ pub fn prove_hidden_bva_i16_opening_profiled<S: DenseI16BvaSource>(
     let evaluation_expression = RelationExpression::table(1)
         .mul(RelationExpression::constant(normalized.scale))
         .sub(RelationExpression::table(0));
-    let evaluation_binding = prove_hidden_scalar_relation(
-        &packed.transcript_state,
+    let evaluation_binding = prove_hidden_linear_relation(
         parameters,
         &[packed.a_reduced.clone(), normalized_a],
         &evaluation_expression,
-        rng,
     )?;
     let scalar_binding_seconds = scalar_binding_started.elapsed().as_secs_f64();
 
@@ -725,12 +729,10 @@ pub fn prepare_hidden_bva_opening(
     let evaluation_expression = RelationExpression::table(1)
         .mul(RelationExpression::constant(normalized.scale))
         .sub(RelationExpression::table(0));
-    let evaluation_binding = prove_hidden_scalar_relation(
-        &packed.transcript_state,
+    let evaluation_binding = prove_hidden_linear_relation(
         parameters,
         &[packed.a_reduced.clone(), normalized_evaluation.clone()],
         &evaluation_expression,
-        rng,
     )?;
     Ok((
         HiddenBvaOpeningReductionProof {
@@ -782,17 +784,23 @@ pub fn verify_hidden_packed_i8_reduction(
     }
     identity_commitments.push(proof.a_reduced_commitment);
     identity_commitments.push(proof.b_reduced_commitment);
-    let identity_expression = scalar_identity_expression(
+    let linear_expression = scalar_identity_linear_expression(
         claimed,
         expected_stride,
         &replay.challenges,
         identity_commitments.len(),
     )?;
+    let linear_commitment =
+        combine_hidden_linear_commitments(parameters, &identity_commitments, &linear_expression)?;
     verify_hidden_scalar_relation(
         &replay.transcript_state,
         parameters,
-        &identity_commitments,
-        &identity_expression,
+        &[
+            linear_commitment,
+            proof.a_reduced_commitment,
+            proof.b_reduced_commitment,
+        ],
+        &scalar_identity_multiplication_expression(),
         &proof.scalar_identity,
     )?;
 
@@ -889,8 +897,7 @@ pub fn verify_hidden_shortint_bva_opening_profiled(
     let evaluation_expression = RelationExpression::table(1)
         .mul(RelationExpression::constant(normalized.scale))
         .sub(RelationExpression::table(0));
-    verify_hidden_scalar_relation(
-        &packed.transcript_state,
+    verify_hidden_linear_relation(
         parameters,
         &[packed.a_reduced_commitment, evaluation_commitment],
         &evaluation_expression,
@@ -918,8 +925,7 @@ pub fn prepare_hidden_bva_opening_verification(
     let evaluation_expression = RelationExpression::table(1)
         .mul(RelationExpression::constant(normalized.scale))
         .sub(RelationExpression::table(0));
-    verify_hidden_scalar_relation(
-        &packed.transcript_state,
+    verify_hidden_linear_relation(
         parameters,
         &[
             packed.a_reduced_commitment,
@@ -1003,7 +1009,7 @@ fn replay_commitment_transcript(
     })
 }
 
-fn scalar_identity_expression(
+fn scalar_identity_linear_expression(
     claimed: Fr,
     packing_stride: usize,
     challenges: &[Fr],
@@ -1048,11 +1054,11 @@ fn scalar_identity_expression(
         );
         index += 2;
     }
-    terms.push(
-        RelationExpression::constant(-Fr::one())
-            .mul(RelationExpression::table(index).mul(RelationExpression::table(index + 1))),
-    );
     balanced_sum(terms).ok_or(HiddenPackedEoError::Shape)
+}
+
+fn scalar_identity_multiplication_expression() -> RelationExpression {
+    RelationExpression::table(0).sub(RelationExpression::table(1).mul(RelationExpression::table(2)))
 }
 
 fn balanced_sum(mut terms: Vec<RelationExpression>) -> Option<RelationExpression> {

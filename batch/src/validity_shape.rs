@@ -1,4 +1,4 @@
-//! Shape-mask commitment and its one-time validity proof.
+//! Shape-mask commitment and its deferred validity reduction.
 //!
 //! The prover commits the two Boolean shape masks `[D_eta | D_Z]` as one
 //! column-major Dory matrix and proves once that the masks encode aligned
@@ -16,9 +16,9 @@
 //!   `{(h, vartheta^h)}` for `h in [0, 2^m]`.
 //!
 //! Every auxiliary column (the two prefix chains, `mu`, `nu`, and the two
-//! power columns) lives in one committed matrix, and every deferred claim -
-//! including the LogUp auxiliary openings - resolves in one terminal Dory
-//! batch inside the validity proof.
+//! power columns) lives in one committed matrix. The shape relations and the
+//! two power lookup families are deferred to the opening protocol, where they
+//! share the joint LogUp and terminal Dory batch with the point reductions.
 
 use std::fmt::{Display, Formatter};
 
@@ -31,39 +31,34 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    hidden_logup::{
-        prove_hidden_logup_parts_deferred_on_grid, verify_hidden_logup_parts_deferred_on_grid,
-        HiddenLogUpError, HiddenLogUpPartsReductionProof, MixedLogUpColumn,
-        MixedLogUpColumnStatement,
-    },
+    hidden_logup::{HiddenLogUpError, MixedLogUpColumn, MixedLogUpColumnStatement},
+    hidden_logup_union::{HiddenLogUpUnionProverFamilyData, HiddenLogUpUnionVerifierFamilyData},
     hidden_relation::{
         prove_hidden_sum_relation_deferred_with_public,
         verify_hidden_sum_relation_deferred_with_public, HiddenRelationError,
-        HiddenRelationReductionProof, HiddenRelationTable, HiddenRelationTableStatement,
-        OwnedPublicColumn, RelationExpression,
+        HiddenRelationProverOpening, HiddenRelationReductionProof, HiddenRelationTable,
+        HiddenRelationTableStatement, HiddenRelationVerifierOpening, OwnedPublicColumn,
+        RelationExpression,
     },
     hidden_relation_batch::{
+        deduplicate_prover_hidden_tables, deduplicate_verifier_hidden_tables,
         prove_hidden_relations_batch_deferred, verify_hidden_relations_batch_deferred,
         HiddenRelationBatchProverItem, HiddenRelationBatchReductionProof,
         HiddenRelationBatchVerifierItem,
     },
     jolt_dory::{CommittedDoryFieldVector, DoryProverParameters, DoryVerifierParameters},
     matrix_collection::DenseBvaDescriptor,
-    section6_claim_collection::{Section6ProverClaimCollection, Section6VerifierClaimCollection},
     section6_data::{
         field_from_usize, PrivateShapeMetadata, Section6DataError, Section6Layout,
         Section6ShapeMasks,
     },
     section6_final_opening::{
-        commit_section6_owned_field_matrix_on_grid_zk, prove_section6_final_opening,
-        verify_section6_final_opening, Section6DoryGrid, Section6FinalOpeningError,
-        Section6FinalOpeningProof,
+        commit_section6_owned_field_matrix_on_grid_zk, Section6DoryGrid, Section6FinalOpeningError,
     },
     structured_column::{ColumnPattern, ColumnSegment, StructuredColumn, StructuredColumnError},
 };
 
 const SHAPE_DOMAIN: &[u8] = b"parcomm-shape-commit-v1";
-const VALIDITY_OPENING_ROLE: &[u8] = b"shape-validity-opening-v1";
 
 /// Verifier-visible statement for the committed shape masks.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -105,6 +100,7 @@ impl ShapeCommitStatement {
         HiddenRelationTableStatement::matrix_column(
             &self.mask_commitment,
             self.padded_rows,
+            self.mask_logical_cols(),
             self.mask_padded_cols(),
             column,
         )
@@ -173,11 +169,7 @@ impl CommittedShapeMasks {
     }
 }
 
-/// One-time validity proof for the committed shape masks.
-///
-/// The terminal batch inside this proof opens every deferred claim of the
-/// identity batch, the coverage sum, and the power lookup - including the
-/// committed LogUp auxiliary vectors - in one Dory opening.
+/// Serializable shape-validity reduction with no lookup or PCS opening.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ShapeValidityProof {
     /// Commitment to the auxiliary matrix `[Pi'_eta | Pi'_Q | mu | nu |
@@ -185,15 +177,25 @@ pub struct ShapeValidityProof {
     pub aux_commitment: DoryCommitment,
     pub identity: HiddenRelationBatchReductionProof,
     pub coverage: HiddenRelationReductionProof,
-    pub power_lookup: HiddenLogUpPartsReductionProof,
-    /// Terminal batch over every deferred claim above.
-    pub opening: Section6FinalOpeningProof,
 }
 
 impl ShapeValidityProof {
+    /// The shape reduction contributes no standalone physical Dory proof.
     pub fn physical_dory_proof_count(&self) -> usize {
-        self.opening.physical_dory_proof_count()
+        0
     }
+}
+
+/// Prover-side shape relation claims retained for the shared terminal batch.
+pub struct ShapeValidityProverOpenings<'a> {
+    pub identity: HiddenRelationProverOpening<'a>,
+    pub coverage: HiddenRelationProverOpening<'a>,
+}
+
+/// Verifier-side shape relation claims retained for the shared terminal batch.
+pub struct ShapeValidityVerifierOpenings<'a> {
+    pub identity: HiddenRelationVerifierOpening<'a>,
+    pub coverage: HiddenRelationVerifierOpening<'a>,
 }
 
 #[derive(Debug)]
@@ -437,6 +439,7 @@ pub fn shape_validity_aux_padded_cols(layout: &Section6Layout) -> usize {
 }
 
 /// Coverage challenges sampled before the auxiliary matrix is committed.
+#[derive(Clone, Copy)]
 struct ShapeChallenges {
     /// Row-side (`alpha_l`, `mu`) base point.
     theta: Fr,
@@ -447,6 +450,7 @@ struct ShapeChallenges {
 }
 
 /// Combination weights sampled after the auxiliary matrix is committed.
+#[derive(Clone, Copy)]
 struct CombineChallenges {
     booleanity: Fr,
     alignment: Fr,
@@ -571,16 +575,152 @@ struct ValidityPublicColumns {
     indicator: OwnedPublicColumn,
     /// `omega^j` on the first `t` rows, `0` afterwards.
     geo_omega: OwnedPublicColumn,
-    /// Constant `0` tag for the `theta` lookup side.
-    tag_theta: OwnedPublicColumn,
-    /// Constant `1` tag for the `vartheta` lookup side.
-    tag_vartheta: OwnedPublicColumn,
-    /// Table parts enumerating the exponents `h in [0, 2^m]`.
-    exponent_parts: Vec<OwnedPublicColumn>,
-    /// Table parts enumerating `theta^h`.
-    theta_power_parts: Vec<OwnedPublicColumn>,
-    /// Table parts enumerating `vartheta^h`.
-    vartheta_power_parts: Vec<OwnedPublicColumn>,
+    /// One complete table enumerating the exponents `h in [0, 2^m]`.
+    exponent: OwnedPublicColumn,
+    /// One complete table enumerating `theta^h`.
+    theta_power: OwnedPublicColumn,
+    /// One complete table enumerating `vartheta^h`.
+    vartheta_power: OwnedPublicColumn,
+}
+
+/// Prover-owned shape-validity auxiliary commitment and public lookup tables.
+pub struct ShapeValidityProverContext {
+    aux_layout: ShapeAuxLayout,
+    aux_columns: Vec<CommittedDoryFieldVector>,
+    binding: [u8; 32],
+    points: Vec<Fr>,
+    challenges: ShapeChallenges,
+    combine: CombineChallenges,
+    publics: ValidityPublicColumns,
+}
+
+impl ShapeValidityProverContext {
+    pub fn aux_commitment(&self) -> &DoryCommitment {
+        &self.aux_columns[0].commitment
+    }
+
+    fn aux_table(&self, column: usize) -> Result<HiddenRelationTable<'_>, ShapeValidityError> {
+        let committed = self
+            .aux_columns
+            .get(column)
+            .ok_or(ShapeValidityError::ProofShape)?;
+        Ok(HiddenRelationTable {
+            values: committed
+                .matrix_column_values()
+                .ok_or(ShapeValidityError::ProofShape)?,
+            committed,
+        })
+    }
+
+    /// The row- and column-dimension power families appended to the joint
+    /// opening-time LogUp.
+    pub fn power_lookup_families(
+        &self,
+    ) -> Result<Vec<HiddenLogUpUnionProverFamilyData<'_>>, ShapeValidityError> {
+        let mu = self.aux_table(self.aux_layout.mu_col())?;
+        let w_theta = self.aux_table(self.aux_layout.w_theta_col())?;
+        let nu = self.aux_table(self.aux_layout.nu_col())?;
+        let w_vartheta = self.aux_table(self.aux_layout.w_vartheta_col())?;
+        let theta_tables = vec![vec![
+            MixedLogUpColumn::Public(self.publics.exponent.table()),
+            MixedLogUpColumn::Public(self.publics.theta_power.table()),
+        ]];
+        let vartheta_tables = vec![vec![
+            MixedLogUpColumn::Public(self.publics.exponent.table()),
+            MixedLogUpColumn::Public(self.publics.vartheta_power.table()),
+        ]];
+        Ok(vec![
+            HiddenLogUpUnionProverFamilyData {
+                query_parts: vec![vec![
+                    MixedLogUpColumn::Hidden(mu),
+                    MixedLogUpColumn::Hidden(w_theta),
+                ]],
+                table_hidden_parts: (0..theta_tables.len()).map(|_| Vec::new()).collect(),
+                table_parts: theta_tables,
+                query_hidden_parts: vec![vec![mu, w_theta]],
+            },
+            HiddenLogUpUnionProverFamilyData {
+                query_parts: vec![vec![
+                    MixedLogUpColumn::Hidden(nu),
+                    MixedLogUpColumn::Hidden(w_vartheta),
+                ]],
+                table_hidden_parts: (0..vartheta_tables.len()).map(|_| Vec::new()).collect(),
+                table_parts: vartheta_tables,
+                query_hidden_parts: vec![vec![nu, w_vartheta]],
+            },
+        ])
+    }
+}
+
+/// Verifier-owned public data used by the deferred shape reductions.
+pub struct ShapeValidityVerifierContext {
+    aux_layout: ShapeAuxLayout,
+    binding: [u8; 32],
+    points: Vec<Fr>,
+    challenges: ShapeChallenges,
+    combine: CombineChallenges,
+    publics: ValidityPublicColumns,
+}
+
+impl ShapeValidityVerifierContext {
+    fn aux_statement<'a>(
+        &self,
+        layout: &Section6Layout,
+        proof: &'a ShapeValidityProof,
+        column: usize,
+    ) -> Result<HiddenRelationTableStatement<'a>, ShapeValidityError> {
+        if column >= self.aux_layout.logical_cols() {
+            return Err(ShapeValidityError::ProofShape);
+        }
+        Ok(HiddenRelationTableStatement::matrix_column(
+            &proof.aux_commitment,
+            layout.row_cover()?,
+            self.aux_layout.logical_cols(),
+            self.aux_layout.padded_cols(),
+            column,
+        ))
+    }
+
+    /// The row- and column-dimension power families appended to the joint
+    /// opening-time LogUp.
+    pub fn power_lookup_families<'a>(
+        &'a self,
+        layout: &Section6Layout,
+        proof: &'a ShapeValidityProof,
+    ) -> Result<Vec<HiddenLogUpUnionVerifierFamilyData<'a>>, ShapeValidityError> {
+        let mu = self.aux_statement(layout, proof, self.aux_layout.mu_col())?;
+        let w_theta = self.aux_statement(layout, proof, self.aux_layout.w_theta_col())?;
+        let nu = self.aux_statement(layout, proof, self.aux_layout.nu_col())?;
+        let w_vartheta = self.aux_statement(layout, proof, self.aux_layout.w_vartheta_col())?;
+        let theta_tables = vec![vec![
+            MixedLogUpColumnStatement::Public(self.publics.exponent.table()),
+            MixedLogUpColumnStatement::Public(self.publics.theta_power.table()),
+        ]];
+        let vartheta_tables = vec![vec![
+            MixedLogUpColumnStatement::Public(self.publics.exponent.table()),
+            MixedLogUpColumnStatement::Public(self.publics.vartheta_power.table()),
+        ]];
+        Ok(vec![
+            HiddenLogUpUnionVerifierFamilyData {
+                query_parts: vec![vec![
+                    MixedLogUpColumnStatement::Hidden(mu),
+                    MixedLogUpColumnStatement::Hidden(w_theta),
+                ]],
+                table_hidden_parts: (0..theta_tables.len()).map(|_| Vec::new()).collect(),
+                table_parts: theta_tables,
+                query_hidden_parts: vec![vec![mu, w_theta]],
+            },
+            HiddenLogUpUnionVerifierFamilyData {
+                query_parts: vec![vec![
+                    MixedLogUpColumnStatement::Hidden(nu),
+                    MixedLogUpColumnStatement::Hidden(w_vartheta),
+                ]],
+                table_hidden_parts: (0..vartheta_tables.len()).map(|_| Vec::new()).collect(),
+                table_parts: vartheta_tables,
+                query_hidden_parts: vec![vec![nu, w_vartheta]],
+            },
+        ])
+    }
 }
 
 fn validity_public_columns(
@@ -589,87 +729,79 @@ fn validity_public_columns(
     materialize: bool,
 ) -> Result<ValidityPublicColumns, ShapeValidityError> {
     let cover = layout.row_cover()?;
-    let column = |segments: Vec<ColumnSegment>| -> Result<StructuredColumn, ShapeValidityError> {
-        StructuredColumn::with_zero_tail(cover, segments, Vec::new()).map_err(structured_error)
+    let column = |padded_len: usize,
+                  segments: Vec<ColumnSegment>|
+     -> Result<StructuredColumn, ShapeValidityError> {
+        StructuredColumn::with_zero_tail(padded_len, segments, Vec::new()).map_err(structured_error)
     };
     let owned = |column: StructuredColumn| -> OwnedPublicColumn {
         OwnedPublicColumn::new(column, materialize)
     };
 
-    let indicator = owned(column(vec![ColumnSegment {
-        len: layout.bucket_count,
-        pattern: ColumnPattern::Constant(Fr::one()),
-    }])?);
-    let geo_omega = owned(column(vec![ColumnSegment {
-        len: layout.matrix_count,
+    let indicator = owned(column(
+        cover,
+        vec![ColumnSegment {
+            len: layout.bucket_count,
+            pattern: ColumnPattern::Constant(Fr::one()),
+        }],
+    )?);
+    let geo_omega = owned(column(
+        cover,
+        vec![ColumnSegment {
+            len: layout.matrix_count,
+            pattern: ColumnPattern::Geometric {
+                scale: Fr::one(),
+                ratio: challenges.omega,
+            },
+        }],
+    )?);
+    // Each power family is one complete logical table. Its power-of-two tail
+    // repeats the valid pair `(0, 1)` and never creates proof-visible parts.
+    let table_len = (1_usize << layout.point_log()) + 1;
+    let table_cover = table_len.next_power_of_two();
+    let tail_len = table_cover - table_len;
+    let mut exponent_segments = vec![ColumnSegment {
+        len: table_len,
+        pattern: ColumnPattern::RowIndex { start: Fr::zero() },
+    }];
+    let mut theta_segments = vec![ColumnSegment {
+        len: table_len,
         pattern: ColumnPattern::Geometric {
             scale: Fr::one(),
-            ratio: challenges.omega,
+            ratio: challenges.theta,
         },
-    }])?);
-    let tag_theta = owned(column(Vec::new())?);
-    let tag_vartheta = owned(column(vec![ColumnSegment {
-        len: cover,
-        pattern: ColumnPattern::Constant(Fr::one()),
-    }])?);
-
-    // The power tables enumerate (h, base^h) for h in [0, 2^m]; padding rows
-    // repeat the valid pair (0, 1), and multiple parts cover 2^m + 1 > cover.
-    let table_len = (1_usize << layout.point_log()) + 1;
-    let part_count = table_len.div_ceil(cover);
-    let mut exponent_parts = Vec::with_capacity(part_count);
-    let mut theta_power_parts = Vec::with_capacity(part_count);
-    let mut vartheta_power_parts = Vec::with_capacity(part_count);
-    for part in 0..part_count {
-        let first = part * cover;
-        let live = (table_len - first).min(cover);
-        let mut exponent_segments = vec![ColumnSegment {
-            len: live,
-            pattern: ColumnPattern::RowIndex {
-                start: field_from_usize(first),
-            },
-        }];
-        let mut theta_segments = vec![ColumnSegment {
-            len: live,
-            pattern: ColumnPattern::Geometric {
-                scale: challenges.theta.pow([first as u64]),
-                ratio: challenges.theta,
-            },
-        }];
-        let mut vartheta_segments = vec![ColumnSegment {
-            len: live,
-            pattern: ColumnPattern::Geometric {
-                scale: challenges.vartheta.pow([first as u64]),
-                ratio: challenges.vartheta,
-            },
-        }];
-        if live < cover {
-            exponent_segments.push(ColumnSegment {
-                len: cover - live,
-                pattern: ColumnPattern::Constant(Fr::zero()),
-            });
-            theta_segments.push(ColumnSegment {
-                len: cover - live,
-                pattern: ColumnPattern::Constant(Fr::one()),
-            });
-            vartheta_segments.push(ColumnSegment {
-                len: cover - live,
-                pattern: ColumnPattern::Constant(Fr::one()),
-            });
-        }
-        exponent_parts.push(owned(column(exponent_segments)?));
-        theta_power_parts.push(owned(column(theta_segments)?));
-        vartheta_power_parts.push(owned(column(vartheta_segments)?));
+    }];
+    let mut vartheta_segments = vec![ColumnSegment {
+        len: table_len,
+        pattern: ColumnPattern::Geometric {
+            scale: Fr::one(),
+            ratio: challenges.vartheta,
+        },
+    }];
+    if tail_len != 0 {
+        exponent_segments.push(ColumnSegment {
+            len: tail_len,
+            pattern: ColumnPattern::Constant(Fr::zero()),
+        });
+        theta_segments.push(ColumnSegment {
+            len: tail_len,
+            pattern: ColumnPattern::Constant(Fr::one()),
+        });
+        vartheta_segments.push(ColumnSegment {
+            len: tail_len,
+            pattern: ColumnPattern::Constant(Fr::one()),
+        });
     }
+    let exponent = owned(column(table_cover, exponent_segments)?);
+    let theta_power = owned(column(table_cover, theta_segments)?);
+    let vartheta_power = owned(column(table_cover, vartheta_segments)?);
 
     Ok(ValidityPublicColumns {
         indicator,
         geo_omega,
-        tag_theta,
-        tag_vartheta,
-        exponent_parts,
-        theta_power_parts,
-        vartheta_power_parts,
+        exponent,
+        theta_power,
+        vartheta_power,
     })
 }
 
@@ -945,26 +1077,18 @@ fn build_validity_aux_matrix(
     Ok(values)
 }
 
-/// Prove the one-time shape validity and open every deferred claim in one
-/// terminal Dory batch.
-pub fn prove_shape_validity(
+/// Commit the shape-validity auxiliary matrix and retain its lookup tables.
+pub fn prepare_shape_validity_prover_context(
     parameters: &DoryProverParameters,
     grid: &Section6DoryGrid,
     committed: &CommittedShapeMasks,
-    rng: &mut impl RngCore,
-) -> Result<ShapeValidityProof, ShapeValidityError> {
+) -> Result<ShapeValidityProverContext, ShapeValidityError> {
     let layout = &committed.layout;
     let cover = layout.row_cover()?;
-    let q = layout.eta_width();
-    let pair = layout.pair_width();
     let aux = ShapeAuxLayout::new(layout);
-
     let binding = shape_binding(layout, &committed.statement)?;
     let challenges = shape_challenges(&binding);
     let points = coverage_test_points(layout, &challenges);
-
-    // The auxiliary matrix is committed only after the coverage challenges
-    // are fixed; the combination weights bind to it in turn.
     let aux_values = build_validity_aux_matrix(
         layout,
         &committed.masks,
@@ -983,23 +1107,33 @@ pub fn prove_shape_validity(
     )?;
     let aux_commitment = aux_columns
         .first()
-        .map(|column| column.commitment.clone())
+        .map(|column| &column.commitment)
         .ok_or(ShapeValidityError::ProofShape)?;
-    let binding = validity_binding(&binding, &aux_commitment)?;
+    let binding = validity_binding(&binding, aux_commitment)?;
     let combine = combine_challenges(&binding);
     let publics = validity_public_columns(layout, &challenges, true)?;
+    Ok(ShapeValidityProverContext {
+        aux_layout: aux,
+        aux_columns,
+        binding,
+        points,
+        challenges,
+        combine,
+        publics,
+    })
+}
 
-    let aux_table = |column: usize| -> Result<HiddenRelationTable<'_>, ShapeValidityError> {
-        let committed_column = aux_columns
-            .get(column)
-            .ok_or(ShapeValidityError::ProofShape)?;
-        Ok(HiddenRelationTable {
-            values: committed_column
-                .matrix_column_values()
-                .ok_or(ShapeValidityError::ProofShape)?,
-            committed: committed_column,
-        })
-    };
+/// Reduce the shape identities while deferring their terminal PCS claims.
+pub fn prove_shape_validity_deferred<'a>(
+    parameters: &DoryProverParameters,
+    committed: &'a CommittedShapeMasks,
+    context: &'a ShapeValidityProverContext,
+    rng: &mut impl RngCore,
+) -> Result<(ShapeValidityProof, ShapeValidityProverOpenings<'a>), ShapeValidityError> {
+    let layout = &committed.layout;
+    let q = layout.eta_width();
+    let pair = layout.pair_width();
+    let aux = context.aux_layout;
     let resolve =
         |reference: &ShapeTableRef| -> Result<HiddenRelationTable<'_>, ShapeValidityError> {
             match reference {
@@ -1009,12 +1143,12 @@ pub fn prove_shape_validity(
                 ShapeTableRef::DZ(h) => committed
                     .mask_table(q + *h)
                     .ok_or(ShapeValidityError::ProofShape),
-                ShapeTableRef::EtaPrefix(h) => aux_table(aux.eta_prefix_col(*h)),
-                ShapeTableRef::QPrefix(h) => aux_table(aux.q_prefix_col(*h)),
+                ShapeTableRef::EtaPrefix(h) => context.aux_table(aux.eta_prefix_col(*h)),
+                ShapeTableRef::QPrefix(h) => context.aux_table(aux.q_prefix_col(*h)),
             }
         };
 
-    let items = shape_identity_items(layout, &points, &combine);
+    let items = shape_identity_items(layout, &context.points, &context.combine);
     let resolved_items = items
         .iter()
         .map(|item| {
@@ -1033,148 +1167,117 @@ pub fn prove_shape_validity(
             expression: &item.expression,
         })
         .collect::<Vec<_>>();
+    let identity_tables = deduplicate_prover_hidden_tables(
+        resolved_items
+            .iter()
+            .flat_map(|tables| tables.iter().copied()),
+    );
     let (identity, identity_opening) = prove_hidden_relations_batch_deferred(
-        &scoped_label(b"identity", &binding),
+        &scoped_label(b"identity", &context.binding),
         parameters,
         &batch_items,
         rng,
     )?;
+    let identity_opening = identity_opening
+        .into_claims()
+        .bind_tables(identity_tables)?;
 
     let coverage_hidden = vec![
         resolve(&ShapeTableRef::DEta(q - 1))?,
         resolve(&ShapeTableRef::EtaPrefix(q - 2))?,
         resolve(&ShapeTableRef::DZ(pair - 1))?,
         resolve(&ShapeTableRef::QPrefix(pair - 2))?,
-        aux_table(aux.w_theta_col())?,
-        aux_table(aux.w_vartheta_col())?,
+        context.aux_table(aux.w_theta_col())?,
+        context.aux_table(aux.w_vartheta_col())?,
     ];
-    let coverage_publics = vec![publics.indicator.table(), publics.geo_omega.table()];
-    let coverage_expression = coverage_expression(&points, pair, &challenges);
+    let coverage_publics = vec![
+        context.publics.indicator.table(),
+        context.publics.geo_omega.table(),
+    ];
+    let coverage_expression = coverage_expression(&context.points, pair, &context.challenges);
     let (coverage, coverage_opening) = prove_hidden_sum_relation_deferred_with_public(
-        &scoped_label(b"coverage", &binding),
+        &scoped_label(b"coverage", &context.binding),
         parameters,
         &coverage_hidden,
         &coverage_publics,
         &coverage_expression,
         rng,
     )?;
-
-    // Keyed power lookup {(tag, exponent, power)} against both base tables.
-    let query_parts = vec![
-        vec![
-            MixedLogUpColumn::Public(publics.tag_theta.table()),
-            MixedLogUpColumn::Hidden(aux_table(aux.mu_col())?),
-            MixedLogUpColumn::Hidden(aux_table(aux.w_theta_col())?),
-        ],
-        vec![
-            MixedLogUpColumn::Public(publics.tag_vartheta.table()),
-            MixedLogUpColumn::Hidden(aux_table(aux.nu_col())?),
-            MixedLogUpColumn::Hidden(aux_table(aux.w_vartheta_col())?),
-        ],
-    ];
-    let mut table_parts = Vec::new();
-    for (exponent, value) in publics
-        .exponent_parts
-        .iter()
-        .zip(&publics.theta_power_parts)
-    {
-        table_parts.push(vec![
-            MixedLogUpColumn::Public(publics.tag_theta.table()),
-            MixedLogUpColumn::Public(exponent.table()),
-            MixedLogUpColumn::Public(value.table()),
-        ]);
-    }
-    for (exponent, value) in publics
-        .exponent_parts
-        .iter()
-        .zip(&publics.vartheta_power_parts)
-    {
-        table_parts.push(vec![
-            MixedLogUpColumn::Public(publics.tag_vartheta.table()),
-            MixedLogUpColumn::Public(exponent.table()),
-            MixedLogUpColumn::Public(value.table()),
-        ]);
-    }
-    let (power_lookup, lookup_state) = prove_hidden_logup_parts_deferred_on_grid(
-        &scoped_label(b"power-lookup", &binding),
-        parameters,
-        grid,
-        &query_parts,
-        &table_parts,
-        rng,
-    )?;
-
-    // Terminal batch: every deferred claim, including the LogUp
-    // auxiliary-vector openings, resolves in one Dory opening.
-    let mut claims = Section6ProverClaimCollection::new();
-    claims.push_relation(&identity_opening, grid)?;
-    claims.push_relation(&coverage_opening, grid)?;
-    let lookup_openings = lookup_state.relation_openings()?;
-    for opening in &lookup_openings {
-        claims.push_relation(opening, grid)?;
-    }
-    let opening = prove_section6_final_opening(
-        VALIDITY_OPENING_ROLE,
-        &binding,
-        parameters,
-        grid,
-        &claims.claims(),
-        rng,
-    )?;
-
-    Ok(ShapeValidityProof {
-        aux_commitment,
-        identity,
-        coverage,
-        power_lookup,
-        opening,
-    })
+    let coverage_opening = coverage_opening
+        .into_claims()
+        .bind_tables(coverage_hidden)?;
+    Ok((
+        ShapeValidityProof {
+            aux_commitment: context.aux_commitment().clone(),
+            identity,
+            coverage,
+        },
+        ShapeValidityProverOpenings {
+            identity: identity_opening,
+            coverage: coverage_opening,
+        },
+    ))
 }
 
-/// Verify the one-time shape validity proof from public data only.
-pub fn verify_shape_validity(
-    parameters: &DoryVerifierParameters,
-    grid: &Section6DoryGrid,
+/// Reconstruct the public shape-validity context from commitments only.
+pub fn prepare_shape_validity_verifier_context(
     layout: &Section6Layout,
     statement: &ShapeCommitStatement,
     proof: &ShapeValidityProof,
-) -> Result<(), ShapeValidityError> {
+) -> Result<ShapeValidityVerifierContext, ShapeValidityError> {
     layout.validate()?;
     statement.validate(layout)?;
-    let cover = layout.row_cover()?;
-    let q = layout.eta_width();
-    let pair = layout.pair_width();
-    let aux = ShapeAuxLayout::new(layout);
-
+    let aux_layout = ShapeAuxLayout::new(layout);
     let binding = shape_binding(layout, statement)?;
     let challenges = shape_challenges(&binding);
     let points = coverage_test_points(layout, &challenges);
     let binding = validity_binding(&binding, &proof.aux_commitment)?;
     let combine = combine_challenges(&binding);
     let publics = validity_public_columns(layout, &challenges, false)?;
+    Ok(ShapeValidityVerifierContext {
+        aux_layout,
+        binding,
+        points,
+        challenges,
+        combine,
+        publics,
+    })
+}
 
-    let aux_statement = |column: usize| -> HiddenRelationTableStatement<'_> {
-        HiddenRelationTableStatement::matrix_column(
-            &proof.aux_commitment,
-            cover,
-            aux.padded_cols(),
-            column,
-        )
-    };
-    let resolve = |reference: &ShapeTableRef| -> HiddenRelationTableStatement<'_> {
-        match reference {
+/// Verify the deferred shape reductions without performing a PCS opening.
+pub fn verify_shape_validity_deferred<'a>(
+    parameters: &DoryVerifierParameters,
+    layout: &Section6Layout,
+    statement: &'a ShapeCommitStatement,
+    proof: &'a ShapeValidityProof,
+    context: &'a ShapeValidityVerifierContext,
+) -> Result<ShapeValidityVerifierOpenings<'a>, ShapeValidityError> {
+    let q = layout.eta_width();
+    let pair = layout.pair_width();
+    let aux = context.aux_layout;
+    let resolve = |reference: &ShapeTableRef| -> Result<HiddenRelationTableStatement<'a>, ShapeValidityError> {
+        Ok(match reference {
             ShapeTableRef::DEta(h) => statement.mask_column(*h),
             ShapeTableRef::DZ(h) => statement.mask_column(q + *h),
-            ShapeTableRef::EtaPrefix(h) => aux_statement(aux.eta_prefix_col(*h)),
-            ShapeTableRef::QPrefix(h) => aux_statement(aux.q_prefix_col(*h)),
-        }
+            ShapeTableRef::EtaPrefix(h) => {
+                context.aux_statement(layout, proof, aux.eta_prefix_col(*h))?
+            }
+            ShapeTableRef::QPrefix(h) => {
+                context.aux_statement(layout, proof, aux.q_prefix_col(*h))?
+            }
+        })
     };
 
-    let items = shape_identity_items(layout, &points, &combine);
+    let items = shape_identity_items(layout, &context.points, &context.combine);
     let resolved_items = items
         .iter()
-        .map(|item| item.hidden.iter().map(&resolve).collect::<Vec<_>>())
-        .collect::<Vec<_>>();
+        .map(|item| {
+            item.hidden
+                .iter()
+                .map(&resolve)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .collect::<Result<Vec<_>, ShapeValidityError>>()?;
     let batch_items = resolved_items
         .iter()
         .zip(&items)
@@ -1184,94 +1287,49 @@ pub fn verify_shape_validity(
             expression: &item.expression,
         })
         .collect::<Vec<_>>();
+    let identity_tables = deduplicate_verifier_hidden_tables(
+        resolved_items
+            .iter()
+            .flat_map(|tables| tables.iter().copied()),
+    );
     let identity_opening = verify_hidden_relations_batch_deferred(
-        &scoped_label(b"identity", &binding),
+        &scoped_label(b"identity", &context.binding),
         parameters,
         &batch_items,
         &proof.identity,
     )?;
+    let identity_opening = identity_opening
+        .into_claims()
+        .bind_tables(identity_tables)?;
 
     let coverage_hidden = vec![
-        resolve(&ShapeTableRef::DEta(q - 1)),
-        resolve(&ShapeTableRef::EtaPrefix(q - 2)),
-        resolve(&ShapeTableRef::DZ(pair - 1)),
-        resolve(&ShapeTableRef::QPrefix(pair - 2)),
-        aux_statement(aux.w_theta_col()),
-        aux_statement(aux.w_vartheta_col()),
+        resolve(&ShapeTableRef::DEta(q - 1))?,
+        resolve(&ShapeTableRef::EtaPrefix(q - 2))?,
+        resolve(&ShapeTableRef::DZ(pair - 1))?,
+        resolve(&ShapeTableRef::QPrefix(pair - 2))?,
+        context.aux_statement(layout, proof, aux.w_theta_col())?,
+        context.aux_statement(layout, proof, aux.w_vartheta_col())?,
     ];
-    let coverage_publics = vec![publics.indicator.table(), publics.geo_omega.table()];
-    let coverage_expression = coverage_expression(&points, pair, &challenges);
+    let coverage_publics = vec![
+        context.publics.indicator.table(),
+        context.publics.geo_omega.table(),
+    ];
+    let coverage_expression = coverage_expression(&context.points, pair, &context.challenges);
     let coverage_opening = verify_hidden_sum_relation_deferred_with_public(
-        &scoped_label(b"coverage", &binding),
+        &scoped_label(b"coverage", &context.binding),
         parameters,
         &coverage_hidden,
         &coverage_publics,
         &coverage_expression,
         &proof.coverage,
     )?;
-
-    let query_parts = vec![
-        vec![
-            MixedLogUpColumnStatement::Public(publics.tag_theta.table()),
-            MixedLogUpColumnStatement::Hidden(aux_statement(aux.mu_col())),
-            MixedLogUpColumnStatement::Hidden(aux_statement(aux.w_theta_col())),
-        ],
-        vec![
-            MixedLogUpColumnStatement::Public(publics.tag_vartheta.table()),
-            MixedLogUpColumnStatement::Hidden(aux_statement(aux.nu_col())),
-            MixedLogUpColumnStatement::Hidden(aux_statement(aux.w_vartheta_col())),
-        ],
-    ];
-    let mut table_parts = Vec::new();
-    for (exponent, value) in publics
-        .exponent_parts
-        .iter()
-        .zip(&publics.theta_power_parts)
-    {
-        table_parts.push(vec![
-            MixedLogUpColumnStatement::Public(publics.tag_theta.table()),
-            MixedLogUpColumnStatement::Public(exponent.table()),
-            MixedLogUpColumnStatement::Public(value.table()),
-        ]);
-    }
-    for (exponent, value) in publics
-        .exponent_parts
-        .iter()
-        .zip(&publics.vartheta_power_parts)
-    {
-        table_parts.push(vec![
-            MixedLogUpColumnStatement::Public(publics.tag_vartheta.table()),
-            MixedLogUpColumnStatement::Public(exponent.table()),
-            MixedLogUpColumnStatement::Public(value.table()),
-        ]);
-    }
-    let lookup_state = verify_hidden_logup_parts_deferred_on_grid(
-        &scoped_label(b"power-lookup", &binding),
-        parameters,
-        grid,
-        &query_parts,
-        &table_parts,
-        &proof.power_lookup,
-    )?;
-
-    let mut claims = Section6VerifierClaimCollection::new();
-    claims.push_relation(&identity_opening, grid)?;
-    claims.push_relation(&coverage_opening, grid)?;
-    let lookup_openings = lookup_state
-        .relation_openings()
-        .map_err(ShapeValidityError::LogUp)?;
-    for opening in &lookup_openings {
-        claims.push_relation(opening, grid)?;
-    }
-    verify_section6_final_opening(
-        VALIDITY_OPENING_ROLE,
-        &binding,
-        parameters,
-        grid,
-        &claims.claims(),
-        &proof.opening,
-    )?;
-    Ok(())
+    let coverage_opening = coverage_opening
+        .into_claims()
+        .bind_tables(coverage_hidden)?;
+    Ok(ShapeValidityVerifierOpenings {
+        identity: identity_opening,
+        coverage: coverage_opening,
+    })
 }
 
 #[cfg(test)]
@@ -1279,7 +1337,53 @@ mod tests {
     use ark_std::rand::{rngs::StdRng, SeedableRng};
 
     use super::*;
-    use crate::jolt_dory::setup_dory_parameters;
+    use crate::{
+        jolt_dory::setup_dory_parameters,
+        section6_claim_collection::{
+            Section6ProverClaimCollection, Section6VerifierClaimCollection,
+        },
+    };
+
+    #[test]
+    fn shape_power_tables_are_single_full_range_columns() {
+        let descriptor = DenseBvaDescriptor::from_shapes(&[(1023, 1023)]).unwrap();
+        let layout = Section6Layout::from_descriptor(&descriptor, 8).unwrap();
+        assert!((1_usize << layout.point_log()) + 1 > layout.row_cover().unwrap());
+        let challenges = ShapeChallenges {
+            theta: Fr::from(5_u64),
+            vartheta: Fr::from(7_u64),
+            omega: Fr::from(11_u64),
+        };
+
+        let public = validity_public_columns(&layout, &challenges, true).unwrap();
+        let full_table_len = ((1_usize << layout.point_log()) + 1).next_power_of_two();
+
+        assert_eq!(public.exponent.column.padded_len, full_table_len);
+        assert_eq!(public.theta_power.column.padded_len, full_table_len);
+        assert_eq!(public.vartheta_power.column.padded_len, full_table_len);
+
+        let active_len = (1_usize << layout.point_log()) + 1;
+        let exponent = public.exponent.values.as_ref().unwrap();
+        let theta = public.theta_power.values.as_ref().unwrap();
+        let vartheta = public.vartheta_power.values.as_ref().unwrap();
+        assert_eq!(exponent[active_len - 1], field_from_usize(active_len - 1));
+        assert_eq!(
+            theta[active_len - 1],
+            challenges.theta.pow([(active_len - 1) as u64])
+        );
+        assert_eq!(
+            vartheta[active_len - 1],
+            challenges.vartheta.pow([(active_len - 1) as u64])
+        );
+        assert_eq!(
+            (exponent[active_len], theta[active_len]),
+            (Fr::zero(), Fr::one())
+        );
+        assert_eq!(
+            (exponent[active_len], vartheta[active_len]),
+            (Fr::zero(), Fr::one())
+        );
+    }
 
     #[test]
     fn shape_commit_and_validity_round_trip() {
@@ -1296,28 +1400,77 @@ mod tests {
             8,
         )
         .unwrap();
-        let proof = prove_shape_validity(&prover_parameters, &grid, &committed, &mut rng).unwrap();
-        assert_eq!(proof.physical_dory_proof_count(), 1);
-        verify_shape_validity(
-            &verifier_parameters,
-            &grid,
+        let context =
+            prepare_shape_validity_prover_context(&prover_parameters, &grid, &committed).unwrap();
+        let power_families = context.power_lookup_families().unwrap();
+        assert_eq!(power_families.len(), 2);
+        assert!(power_families
+            .iter()
+            .all(|family| family.table_parts.len() == 1));
+        let (proof, prover_openings) =
+            prove_shape_validity_deferred(&prover_parameters, &committed, &context, &mut rng)
+                .unwrap();
+        assert_eq!(proof.physical_dory_proof_count(), 0);
+        let verifier_context = prepare_shape_validity_verifier_context(
             committed.layout(),
             committed.statement(),
             &proof,
         )
         .unwrap();
+        let verifier_openings = verify_shape_validity_deferred(
+            &verifier_parameters,
+            committed.layout(),
+            committed.statement(),
+            &proof,
+            &verifier_context,
+        )
+        .unwrap();
+        assert_eq!(
+            prover_openings.identity.evaluation_commitments(),
+            verifier_openings.identity.evaluation_commitments()
+        );
+        assert_eq!(
+            prover_openings.coverage.evaluation_commitments(),
+            verifier_openings.coverage.evaluation_commitments()
+        );
+
+        let mut prover_claims = Section6ProverClaimCollection::new();
+        prover_claims
+            .push_relation(&prover_openings.identity, &grid)
+            .unwrap();
+        assert_eq!(prover_claims.len(), 2);
+        prover_claims
+            .push_relation(&prover_openings.coverage, &grid)
+            .unwrap();
+        assert_eq!(prover_claims.len(), 4);
+
+        let mut verifier_claims = Section6VerifierClaimCollection::new();
+        verifier_claims
+            .push_relation(&verifier_openings.identity, &grid)
+            .unwrap();
+        assert_eq!(verifier_claims.len(), 2);
+        verifier_claims
+            .push_relation(&verifier_openings.coverage, &grid)
+            .unwrap();
+        assert_eq!(verifier_claims.len(), 4);
 
         // Replacing the mask commitment must break the validity proof.
         let mut tampered = committed.statement().clone();
         tampered.mask_commitment = proof.aux_commitment.clone();
-        assert!(verify_shape_validity(
-            &verifier_parameters,
-            &grid,
-            committed.layout(),
-            &tampered,
-            &proof,
-        )
-        .is_err());
+        let tampered_context =
+            prepare_shape_validity_verifier_context(committed.layout(), &tampered, &proof);
+        assert!(tampered_context
+            .and_then(|context| {
+                verify_shape_validity_deferred(
+                    &verifier_parameters,
+                    committed.layout(),
+                    &tampered,
+                    &proof,
+                    &context,
+                )
+                .map(|_| ())
+            })
+            .is_err());
     }
 
     #[test]
@@ -1335,15 +1488,27 @@ mod tests {
         let committed =
             commit_shape_masks_on_grid_zk(&prover_parameters, &grid, layout, metadata, wrong_dims)
                 .unwrap();
-        let result = prove_shape_validity(&prover_parameters, &grid, &committed, &mut rng)
+        let result = prepare_shape_validity_prover_context(&prover_parameters, &grid, &committed)
+            .and_then(|context| {
+                prove_shape_validity_deferred(&prover_parameters, &committed, &context, &mut rng)
+                    .map(|(proof, _)| proof)
+            })
             .and_then(|proof| {
-                verify_shape_validity(
-                    &verifier_parameters,
-                    &grid,
+                prepare_shape_validity_verifier_context(
                     committed.layout(),
                     committed.statement(),
                     &proof,
                 )
+                .and_then(|context| {
+                    verify_shape_validity_deferred(
+                        &verifier_parameters,
+                        committed.layout(),
+                        committed.statement(),
+                        &proof,
+                        &context,
+                    )
+                    .map(|_| ())
+                })
             });
         assert!(result.is_err());
     }

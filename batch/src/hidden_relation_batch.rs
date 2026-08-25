@@ -66,7 +66,7 @@ struct BatchBindingItem {
 struct BatchBindingTable {
     commitment: Vec<u8>,
     logical_len: usize,
-    matrix: Option<(usize, usize)>,
+    matrix: Option<(usize, usize, usize)>,
 }
 
 #[derive(Serialize)]
@@ -448,7 +448,7 @@ fn batch_binding_table(table: &HiddenRelationTableStatement<'_>) -> BatchBinding
         logical_len: table.logical_len,
         matrix: table
             .matrix
-            .map(|matrix| (matrix.padded_cols, matrix.column)),
+            .map(|matrix| (matrix.logical_cols, matrix.padded_cols, matrix.column)),
     }
 }
 

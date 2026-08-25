@@ -163,6 +163,7 @@ impl FinalAuxStatement {
         HiddenRelationTableStatement::matrix_column(
             &self.commitment,
             self.padded_rows,
+            self.columns().count(),
             self.columns().padded_cols(),
             column,
         )

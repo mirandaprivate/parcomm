@@ -19,11 +19,10 @@ use batch::{
     matrix_collection::{constant_matrix_mle_evaluate, DenseMatrixBva},
     section6_data::{Section6Layout, Section6MatrixClaim},
     validity_protocol::{
-        commit_opening_collection_profiled, prove_opening, prove_shape_validity_for_collection,
-        validity_required_dory_log, verify_shape_commitment, verify_validity_opening,
+        commit_opening_collection_profiled, prove_opening, prove_opening_with_shape_validity,
+        validity_required_dory_log, verify_opening, verify_validity_opening,
         ValidityCommitStatement, ValidityOpeningProof,
     },
-    validity_shape::ShapeValidityProof,
 };
 use bincode::Options;
 use sha2::{Digest, Sha256};
@@ -33,7 +32,7 @@ const DEFAULT_MAX_LOG: usize = 15;
 const MAX_SUPPORTED_LOG: usize = 17;
 const MIN_LOG: usize = 2;
 const DEFAULT_SEED: u64 = 0x5345_4354_494f_4e36;
-const PROOF_MAGIC: [u8; 8] = *b"S6VALID2";
+const PROOF_MAGIC: [u8; 8] = *b"S6VALID3";
 
 #[derive(Debug)]
 struct Arguments {
@@ -60,7 +59,7 @@ fn parse_arguments_from(arguments: impl IntoIterator<Item = String>) -> Result<O
     let mut max_log = DEFAULT_MAX_LOG;
     let mut seed = DEFAULT_SEED;
     let mut allow_non_64_threads = false;
-    let mut shape_validity_proof = false;
+    let mut shape_validity_proof = true;
     let mut target_log = None;
     let mut uniform_count = None;
     let mut uniform_log = None;
@@ -113,6 +112,7 @@ fn parse_arguments_from(arguments: impl IntoIterator<Item = String>) -> Result<O
             }
             "--allow-non-64-threads" => allow_non_64_threads = true,
             "--shape-validity-proof" | "--shape-validity" => shape_validity_proof = true,
+            "--skip-shape-validity-proof" => shape_validity_proof = false,
             "-h" | "--help" => {
                 print_help();
                 return Ok(None);
@@ -215,7 +215,9 @@ fn print_help() {
            --interleaved-rectangles Compatibility flag for the fixed family\n\
            --start-with-rectangle   Compatibility flag for the fixed family\n\
            --allow-non-64-threads   Permit a local smoke run with fewer threads\n\
-           --shape-validity-proof   Include the optional shape validity proof\n\
+           --shape-validity-proof   Explicitly enable shape validity proving (default)\n\
+           --skip-shape-validity-proof\n\
+                                   Disable shape validity proving for a performance-only run\n\
            -h, --help               Print this help\n\
          \n\
          The full experiment is the default. Run it with:\n\
@@ -301,15 +303,10 @@ fn proof_codec() -> impl Options {
 
 fn encode_proof_artifact(
     statement: &ValidityCommitStatement,
-    validity: Option<&ShapeValidityProof>,
     opening: &ValidityOpeningProof,
-) -> Result<(Vec<u8>, [usize; 3])> {
+) -> Result<(Vec<u8>, [usize; 2])> {
     let components = [
         proof_codec().serialize(statement)?,
-        validity
-            .map(|proof| proof_codec().serialize(proof))
-            .transpose()?
-            .unwrap_or_default(),
         proof_codec().serialize(opening)?,
     ];
     let lengths = components.each_ref().map(|component| component.len());
@@ -321,7 +318,7 @@ fn encode_proof_artifact(
     let mut artifact = Vec::with_capacity(
         PROOF_MAGIC
             .len()
-            .checked_add(3 * size_of::<u64>())
+            .checked_add(2 * size_of::<u64>())
             .and_then(|header| header.checked_add(payload_len))
             .context("proof artifact overflowed")?,
     );
@@ -337,12 +334,8 @@ fn encode_proof_artifact(
 
 fn decode_proof_artifact_exact(
     artifact: &[u8],
-) -> Result<(
-    ValidityCommitStatement,
-    Option<ShapeValidityProof>,
-    ValidityOpeningProof,
-)> {
-    let header_len = PROOF_MAGIC.len() + 3 * size_of::<u64>();
+) -> Result<(ValidityCommitStatement, ValidityOpeningProof)> {
+    let header_len = PROOF_MAGIC.len() + 2 * size_of::<u64>();
     ensure!(
         artifact.len() >= header_len,
         "truncated proof artifact header"
@@ -351,7 +344,7 @@ fn decode_proof_artifact_exact(
         artifact[..PROOF_MAGIC.len()] == PROOF_MAGIC,
         "invalid proof artifact magic"
     );
-    let mut lengths = [0_usize; 3];
+    let mut lengths = [0_usize; 2];
     for (component, length) in lengths.iter_mut().enumerate() {
         let start = PROOF_MAGIC.len() + component * size_of::<u64>();
         let end = start + size_of::<u64>();
@@ -371,15 +364,9 @@ fn decode_proof_artifact_exact(
         "proof artifact has truncated or trailing bytes"
     );
     let statement_end = header_len + lengths[0];
-    let validity_end = statement_end + lengths[1];
     let statement = proof_codec().deserialize(&artifact[header_len..statement_end])?;
-    let validity = if lengths[1] == 0 {
-        None
-    } else {
-        Some(proof_codec().deserialize(&artifact[statement_end..validity_end])?)
-    };
-    let opening = proof_codec().deserialize(&artifact[validity_end..expected_len])?;
-    Ok((statement, validity, opening))
+    let opening = proof_codec().deserialize(&artifact[statement_end..expected_len])?;
+    Ok((statement, opening))
 }
 
 fn report_stage(name: &str, started: Instant, monitor: &MemoryMonitor) -> f64 {
@@ -590,31 +577,41 @@ fn main() -> Result<()> {
     let mut rng = StdRng::seed_from_u64(arguments.seed);
 
     let commit_phase_started = Instant::now();
-    let (committed, mut commit_profile) =
+    let (committed, commit_profile) =
         commit_opening_collection_profiled(&prover_parameters, &source, BIT_WIDTH)?;
-    let validity_proof = if arguments.shape_validity_proof {
-        let (proof, seconds) =
-            prove_shape_validity_for_collection(&prover_parameters, &committed, &mut rng)?;
-        commit_profile.validity_prove_seconds = seconds;
-        Some(proof)
-    } else {
-        None
-    };
     let commit_phase_seconds = report_stage("commit_phase", commit_phase_started, &monitor);
     let statement = committed.statement().clone();
     let bva_commit_profile = committed.bva().profile;
 
     let opening_prove_started = Instant::now();
-    let (opening_proof, opening_profile) = prove_opening(
-        &prover_parameters,
-        &committed,
-        &mut source,
-        &claims,
-        &mut rng,
-    )?;
+    let (opening_proof, opening_profile) = if arguments.shape_validity_proof {
+        prove_opening_with_shape_validity(
+            &prover_parameters,
+            &committed,
+            &mut source,
+            &claims,
+            &mut rng,
+        )?
+    } else {
+        prove_opening(
+            &prover_parameters,
+            &committed,
+            &mut source,
+            &claims,
+            &mut rng,
+        )?
+    };
+    ensure!(
+        opening_proof.shape_validity.is_some() == arguments.shape_validity_proof,
+        "shape validity proof mode does not match the generated opening"
+    );
     ensure!(
         opening_proof.physical_dory_proof_count() == 2,
-        "Section 6 opening must use one native-i8 BVA proof and one auxiliary proof"
+        "Section 6 must use one native-i8 BVA opening and one joint terminal opening"
+    );
+    ensure!(
+        opening_proof.physical_logup_reduction_count() == 1,
+        "shape and point lookups must share one physical LogUp reduction"
     );
     let opening_prove_seconds = report_stage("opening_prove", opening_prove_started, &monitor);
 
@@ -630,13 +627,15 @@ fn main() -> Result<()> {
     let point_reduction_size_bytes = sized(proof_codec().serialized_size(&opening_proof.point)?)?;
     let final_evaluation_size_bytes =
         sized(proof_codec().serialized_size(&opening_proof.final_eval)?)?;
-    let (proof_bytes, component_sizes) =
-        encode_proof_artifact(&statement, validity_proof.as_ref(), &opening_proof)?;
+    let shape_validity_reduction_size_bytes = match opening_proof.shape_validity.as_ref() {
+        Some(proof) => sized(proof_codec().serialized_size(proof)?)?,
+        None => 0,
+    };
+    let (proof_bytes, component_sizes) = encode_proof_artifact(&statement, &opening_proof)?;
     let proof_sha256 = Sha256::digest(&proof_bytes);
-    let (decoded_statement, decoded_validity, decoded_opening) =
-        decode_proof_artifact_exact(&proof_bytes)?;
+    let (decoded_statement, decoded_opening) = decode_proof_artifact_exact(&proof_bytes)?;
     ensure!(
-        decoded_validity.is_some() == arguments.shape_validity_proof,
+        decoded_opening.shape_validity.is_some() == arguments.shape_validity_proof,
         "shape validity proof mode does not match the artifact"
     );
     let mut trailing = proof_bytes.clone();
@@ -647,27 +646,23 @@ fn main() -> Result<()> {
     );
     let serialization_seconds = report_stage("serialization", serialization_started, &monitor);
 
-    let validity_verify_seconds = if let Some(validity) = decoded_validity.as_ref() {
-        let validity_verify_started = Instant::now();
-        verify_shape_commitment(&verifier_parameters, &decoded_statement, validity)?;
-        report_stage("validity_verify", validity_verify_started, &monitor)
-    } else {
-        println!("validity_verify_seconds=0.000000");
-        println!("peak_rss_after_validity_verify_kib={}", monitor.peak_kib());
-        io::stdout()
-            .flush()
-            .context("flush skipped validity stage")?;
-        0.0
-    };
-
     let opening_verify_started = Instant::now();
     let claimed_values = claims.iter().map(|claim| claim.value).collect::<Vec<_>>();
-    let verification = verify_validity_opening(
-        &verifier_parameters,
-        &decoded_statement,
-        &claimed_values,
-        &decoded_opening,
-    )?;
+    let verification = if arguments.shape_validity_proof {
+        verify_validity_opening(
+            &verifier_parameters,
+            &decoded_statement,
+            &claimed_values,
+            &decoded_opening,
+        )?
+    } else {
+        verify_opening(
+            &verifier_parameters,
+            &decoded_statement,
+            &claimed_values,
+            &decoded_opening,
+        )?
+    };
     let opening_verify_seconds = report_stage("opening_verify", opening_verify_started, &monitor);
 
     ensure!(
@@ -689,12 +684,14 @@ fn main() -> Result<()> {
     );
 
     let total_prover_seconds = commit_phase_seconds + opening_prove_seconds;
-    let total_verifier_seconds = validity_verify_seconds + opening_verify_seconds;
+    let total_verifier_seconds = opening_verify_seconds;
     let total_seconds = experiment_started.elapsed().as_secs_f64();
     let peak_rss_kib = monitor.finish();
 
     // These top-level prover categories are mutually exclusive. The terminal
-    // auxiliary opening serves both conversion phases and is added only once.
+    // auxiliary opening serves shape validity and both conversion phases once.
+    let shape_validity_seconds =
+        opening_profile.shape_prepare_seconds + opening_profile.shape_prove_seconds;
     let point_conversion_seconds = opening_profile.x_commit_seconds
         + opening_profile.point_witness_seconds
         + opening_profile.tbv_commit_seconds
@@ -709,18 +706,18 @@ fn main() -> Result<()> {
         point_conversion_seconds + tbv_evaluation_seconds + opening_profile.terminal_open_seconds;
     let commit_orchestration_seconds = (commit_phase_seconds
         - commit_profile.shape_commit_seconds
-        - commit_profile.validity_prove_seconds
         - commit_profile.bva_commit_seconds)
         .max(0.0);
-    let classified_opening_seconds = point_conversion_plus_tbv_evaluation_seconds
+    let classified_opening_seconds = shape_validity_seconds
+        + point_conversion_plus_tbv_evaluation_seconds
         + opening_profile.packed_eo_seconds
         + opening_profile.bva_open_seconds;
     let opening_orchestration_seconds =
         (opening_prove_seconds - classified_opening_seconds).max(0.0);
     let other_prover_seconds = commit_orchestration_seconds + opening_orchestration_seconds;
     let prover_breakdown_sum_seconds = commit_profile.shape_commit_seconds
-        + commit_profile.validity_prove_seconds
         + commit_profile.bva_commit_seconds
+        + shape_validity_seconds
         + opening_profile.packed_eo_seconds
         + opening_profile.bva_open_seconds
         + point_conversion_plus_tbv_evaluation_seconds
@@ -734,8 +731,8 @@ fn main() -> Result<()> {
         (opening_profile.packed_eo_seconds - eo_ip_accounted_seconds).max(0.0);
 
     println!("commit_statement_size_bytes={}", component_sizes[0]);
-    println!("validity_proof_size_bytes={}", component_sizes[1]);
-    println!("opening_proof_size_bytes={}", component_sizes[2]);
+    println!("opening_proof_size_bytes={}", component_sizes[1]);
+    println!("shape_validity_reduction_size_bytes={shape_validity_reduction_size_bytes}");
     println!("x_statement_size_bytes={x_statement_size_bytes}");
     println!("tbv_statement_size_bytes={tbv_statement_size_bytes}");
     println!("point_reduction_size_bytes={point_reduction_size_bytes}");
@@ -748,9 +745,10 @@ fn main() -> Result<()> {
         opening_proof.physical_dory_proof_count()
     );
     println!(
-        "proof_objects_size_bytes={}",
-        component_sizes[1] + component_sizes[2]
+        "physical_logup_reduction_count={}",
+        opening_proof.physical_logup_reduction_count()
     );
+    println!("proof_objects_size_bytes={}", component_sizes[1]);
     println!("proof_size_bytes={}", proof_bytes.len());
     println!("total_communication_bytes={}", proof_bytes.len());
     println!("proof_sha256={proof_sha256:x}");
@@ -879,9 +877,14 @@ fn main() -> Result<()> {
     );
     println!("commit_phase_seconds={commit_phase_seconds:.6}");
     println!(
-        "validity_prove_seconds={:.6}",
-        commit_profile.validity_prove_seconds
+        "shape_prepare_seconds={:.6}",
+        opening_profile.shape_prepare_seconds
     );
+    println!(
+        "shape_prove_seconds={:.6}",
+        opening_profile.shape_prove_seconds
+    );
+    println!("validity_prove_seconds={shape_validity_seconds:.6}");
     println!("opening_prove_seconds={opening_prove_seconds:.6}");
     println!(
         "shape_commitment_seconds={:.6}",
@@ -913,7 +916,6 @@ fn main() -> Result<()> {
     println!("other_prover_seconds={other_prover_seconds:.6}");
     println!("prover_breakdown_sum_seconds={prover_breakdown_sum_seconds:.6}");
     println!("serialization_seconds={serialization_seconds:.6}");
-    println!("validity_verify_seconds={validity_verify_seconds:.6}");
     println!("opening_verify_seconds={opening_verify_seconds:.6}");
     println!("total_prover_seconds={total_prover_seconds:.6}");
     println!("total_verifier_seconds={total_verifier_seconds:.6}");
@@ -1107,13 +1109,22 @@ mod tests {
 
         let defaults = parse_arguments_from(Vec::new()).unwrap().unwrap();
         assert_eq!(defaults.max_log, DEFAULT_MAX_LOG);
-        assert!(!defaults.shape_validity_proof);
+        assert!(defaults.shape_validity_proof);
 
         let explicit_shape_validity =
             parse_arguments_from(["--shape-validity-proof"].into_iter().map(String::from))
                 .unwrap()
                 .unwrap();
         assert!(explicit_shape_validity.shape_validity_proof);
+
+        let skipped_shape_validity = parse_arguments_from(
+            ["--skip-shape-validity-proof"]
+                .into_iter()
+                .map(String::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!skipped_shape_validity.shape_validity_proof);
 
         let homogeneous = parse_arguments_from(
             [
