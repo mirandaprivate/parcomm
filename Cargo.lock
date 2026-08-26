@@ -1088,7 +1088,7 @@ dependencies = [
 [[package]]
 name = "jolt-blindfold"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "jolt-claims",
  "jolt-crypto",
@@ -1107,7 +1107,7 @@ dependencies = [
 [[package]]
 name = "jolt-claims"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "blake2 0.11.0-rc.6",
  "derive_more",
@@ -1125,7 +1125,7 @@ dependencies = [
 [[package]]
 name = "jolt-claims-derive"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1135,7 +1135,7 @@ dependencies = [
 [[package]]
 name = "jolt-crypto"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -1156,7 +1156,7 @@ dependencies = [
 [[package]]
 name = "jolt-dory"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -1176,7 +1176,7 @@ dependencies = [
 [[package]]
 name = "jolt-field"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "ark-bn254",
  "ark-ff 0.5.0",
@@ -1190,7 +1190,7 @@ dependencies = [
 [[package]]
 name = "jolt-lookup-tables"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "jolt-field",
  "jolt-riscv",
@@ -1201,7 +1201,7 @@ dependencies = [
 [[package]]
 name = "jolt-openings"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "jolt-crypto",
  "jolt-field",
@@ -1233,7 +1233,7 @@ dependencies = [
 [[package]]
 name = "jolt-poly"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "jolt-field",
  "jolt-utils",
@@ -1248,7 +1248,7 @@ dependencies = [
 [[package]]
 name = "jolt-r1cs"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "jolt-claims",
  "jolt-field",
@@ -1263,7 +1263,7 @@ dependencies = [
 [[package]]
 name = "jolt-riscv"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "ark-serialize 0.5.0",
  "serde",
@@ -1274,7 +1274,7 @@ dependencies = [
 [[package]]
 name = "jolt-sumcheck"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "jolt-crypto",
  "jolt-field",
@@ -1291,7 +1291,7 @@ dependencies = [
 [[package]]
 name = "jolt-transcript"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "ark-bn254",
  "ark-ff 0.5.0",
@@ -1306,7 +1306,7 @@ dependencies = [
 [[package]]
 name = "jolt-utils"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=1b44909502f5f2b98bedec9053c77ca54490045b#1b44909502f5f2b98bedec9053c77ca54490045b"
+source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "num-traits",
 ]

@@ -21,15 +21,15 @@ fs = { path = "../fs" }
 atomic_proof = { path = "../atomic_proof" }
 rand = "0.9"
 sha2 = "0.10.8"
-jolt-crypto = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
-jolt-blindfold = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
-jolt-claims = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
-jolt-dory = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
-jolt-field = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
-jolt-openings = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
-jolt-poly = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
-jolt-sumcheck = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
-jolt-transcript = { git = "https://github.com/mirandaprivate/jolt", rev = "1b44909502f5f2b98bedec9053c77ca54490045b" }
+jolt-crypto = { git = "https://github.com/mirandaprivate/jolt", rev = "53d5a1eab2897d0eea90cbe12b517af8d3e833a5" }
+jolt-blindfold = { git = "https://github.com/mirandaprivate/jolt", rev = "53d5a1eab2897d0eea90cbe12b517af8d3e833a5" }
+jolt-claims = { git = "https://github.com/mirandaprivate/jolt", rev = "53d5a1eab2897d0eea90cbe12b517af8d3e833a5" }
+jolt-dory = { git = "https://github.com/mirandaprivate/jolt", rev = "53d5a1eab2897d0eea90cbe12b517af8d3e833a5" }
+jolt-field = { git = "https://github.com/mirandaprivate/jolt", rev = "53d5a1eab2897d0eea90cbe12b517af8d3e833a5" }
+jolt-openings = { git = "https://github.com/mirandaprivate/jolt", rev = "53d5a1eab2897d0eea90cbe12b517af8d3e833a5" }
+jolt-poly = { git = "https://github.com/mirandaprivate/jolt", rev = "53d5a1eab2897d0eea90cbe12b517af8d3e833a5" }
+jolt-sumcheck = { git = "https://github.com/mirandaprivate/jolt", rev = "53d5a1eab2897d0eea90cbe12b517af8d3e833a5" }
+jolt-transcript = { git = "https://github.com/mirandaprivate/jolt", rev = "53d5a1eab2897d0eea90cbe12b517af8d3e833a5" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bincode = "1.3"
