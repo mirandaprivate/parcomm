@@ -1,0 +1,130 @@
+   Compiling serde_core v1.0.229
+   Compiling mikros-qafold v0.1.0 (/mnt/c/Users/miranda/git/parcomm/artifact/src/qafold/f65521/vendor/qafold)
+warning: unused import: `crate::ShortFieldElement`
+ --> vendor/qafold/src/full_extension_multiply.rs:7:5
+  |
+7 | use crate::ShortFieldElement;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+  --> vendor/qafold/src/full_extension_multiply.rs:78:5
+   |
+78 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+   --> vendor/qafold/src/full_extension_multiply.rs:123:5
+    |
+123 |     unsafe {
+    |     ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> vendor/qafold/src/full_extension_multiply.rs:228:5
+    |
+228 |     unsafe {
+    |     ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> vendor/qafold/src/full_extension_multiply.rs:273:5
+    |
+273 |     unsafe {
+    |     ^^^^^^ unnecessary `unsafe` block
+
+warning: field `words` is never read
+  --> vendor/qafold/src/qafold_short.rs:84:16
+   |
+83 | pub struct PreparedEncodingMultipliers<F> {
+   |            --------------------------- field in this struct
+84 |     pub(crate) words: Vec<u32>,
+   |                ^^^^^
+   |
+   = note: `PreparedEncodingMultipliers` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `hash_inner_prefixed` is never used
+    --> vendor/qafold/src/qafold_short_pc.rs:2608:4
+     |
+2608 | fn hash_inner_prefixed(
+     |    ^^^^^^^^^^^^^^^^^^^
+
+   Compiling serde_json v1.0.154
+warning: `mikros-qafold` (lib) generated 7 warnings (run `cargo fix --lib -p mikros-qafold` to apply 1 suggestion)
+warning: `mikros-qafold` (lib test) generated 6 warnings (6 duplicates)
+    Finished `release` profile [optimized] target(s) in 55.45s
+     Running unittests src/lib.rs (/tmp/parcomm-artifact-build/f65521/release/deps/mikros_qafold-a3f68192fa65421e)
+
+running 21 tests
+test full_extension::simd::tests::butterfly_simd_matches_scalar_at_carry_and_borrow_boundaries ... ok
+test full_extension::multiply::tests::octic_products_and_folds_match_independent_convolution ... ok
+test packed::kernel_tests::delayed_projection_matches_field_arithmetic_and_maximum_bound ... ok
+test packed::kernel_tests::delayed_weight_map_matches_eight_field_scaled_images ... ok
+test packed::terminal_batch::tests::valid_folded_commitment_with_wrong_linear_relation_is_rejected ... ok
+test packed::terminal_batch::tests::replacement_witness_cannot_open_original_roots ... ok
+test packed::kernel_tests::cache_blocked_mobius_matches_original_stage_order ... ok
+test packed::kernel_tests::sumcheck_tail_and_parallel_boundary_match_serial_reference ... ok
+test packed::kernel_tests::fused_equality_projection_matches_unsplit_order ... ok
+test qafold_short::wht_stripe_tests::compare_blocked_wht_timings ... ignored, manual single-thread cache-stripe timing
+test qafold_short::encoding_profile::tests::f65521_fused_profile_preserves_operation_counts ... ok
+test qafold_short_pc::engineering_tests::reusable_row_hashing_propagates_shape_and_encoding_errors ... ok
+test qafold_short_pc::engineering_tests::reusable_row_hashing_preserves_extension_roots_and_domain ... ok
+test packed::terminal_batch::tests::direct_commit_preserves_root_and_complete_opening ... ok
+test qafold_short::wht_stripe_tests::large_blocked_wht_matches_independent_scalar_reference ... ok
+test qafold_short_pc::engineering_tests::opening_kernels_match_serial_reference ... ok
+test qafold_short_pc::engineering_tests::native_opening_and_decide_wire_fixture ... ok
+test qafold_short::encoding_profile::tests::profiled_encoding_matches_normal_path_and_counts ... ok
+test qafold_short_pc::engineering_tests::reusable_row_hashing_preserves_base_roots_and_paths ... ok
+test packed::terminal_batch::tests::batch_mle_matches_direct_oracle_including_boolean_points ... ok
+test packed::terminal_batch::tests::recomputed_batch_is_byte_identical_and_checks_sources ... ok
+
+test result: ok. 20 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.83s
+
+     Running tests/encoding_optimization.rs (/tmp/parcomm-artifact-build/f65521/release/deps/encoding_optimization-d7fa9d77250bc478)
+
+running 2 tests
+test fused_f65521_encoding_crosses_high_stripe_boundary ... ok
+test qa_encoding_and_projection_match_independent_scalar_reference ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.55s
+
+     Running tests/full_extension.rs (/tmp/parcomm-artifact-build/f65521/release/deps/full_extension-031377a6326960d5)
+
+running 8 tests
+test canonical_codec_and_unbiased_full_field_sampling ... ok
+test arithmetic_and_frobenius_use_the_polynomial_field ... ok
+test modulus_is_prime_and_octic_polynomial_is_irreducible ... ok
+test qa_generator_and_distance_use_the_full_message_field ... ok
+test direct_frobenius_table_matches_independent_exponentiation ... ok
+test butterfly_dispatch_matches_canonical_integer_arithmetic ... ok
+test lazy_product_and_fused_multiply_add_match_integer_convolution ... ok
+test full_opening_recursive_decide_and_tamper_checks ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/packed.rs (/tmp/parcomm-artifact-build/f65521/release/deps/packed-b89feadb76710fa9)
+
+running 5 tests
+test rejects_shape_and_profile_mismatches ... ok
+test extension_query_authenticates_original_base_table ... ok
+test boolean_boundary_points_select_the_original_entry ... ok
+test rejects_modified_statements_messages_and_noncanonical_encodings ... ok
+test adjacent_eight_lanes_use_the_last_three_msb_first_coordinates ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/reconstructed.rs (/tmp/parcomm-artifact-build/f65521/release/deps/reconstructed-57295bae23b81c6f)
+
+running 1 test
+test reconstructed_witness_keeps_proof_bytes_and_rejects_wrong_source ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests mikros_qafold
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

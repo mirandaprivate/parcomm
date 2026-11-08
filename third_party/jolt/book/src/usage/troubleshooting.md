@@ -1,0 +1,165 @@
+# Troubleshooting
+
+## Insufficient Memory or Stack Size
+Jolt provides reasonable defaults for the total allocated memory and stack size. It is however possible that the defaults are not sufficient, leading to unpredictable errors within our tracer. To fix this we can try to increase these sizes. We suggest starting with the stack size first as this is much more likely to run out.
+
+Below is an example of manually specifying both the total memory and stack size.
+```rust
+#![cfg_attr(feature = "guest", no_std)]
+#![no_main]
+
+extern crate alloc;
+use alloc::vec::Vec;
+
+#[jolt::provable(stack_size = 10000, heap_size = 10000000)]
+fn waste_memory(size: u32, n: u32) {
+    let mut v = Vec::new();
+    for i in 0..size {
+        v.push(i);
+    }
+}
+```
+
+## Maximum Input or Output Size Exceeded
+Jolt restricts the size of the inputs and outputs to 4096 bytes by default. Using inputs and outputs that exceed this size will lead to errors. These values can be configured via the macro.
+
+```rust
+#![cfg_attr(feature = "guest", no_std)]
+#![no_main]
+
+#[jolt::provable(max_input_size = 10000, max_output_size = 10000)]
+fn sum(input: &[u8]) -> u32 {
+    let mut sum = 0;
+    for value in input {
+        sum += *value as u32;
+    }
+
+    sum
+}
+```
+
+## Guest Attempts to Compile Standard Library
+Sometimes after installing the toolchain the guest still tries to compile with the standard library which will fail with a large number of errors that certain items such as `Result` are referenced and not available. This generally happens when one tries to run jolt before installing the toolchain. To address, try rerunning `jolt install-toolchain`, restarting your terminal, and delete both your rust target directory and any files under `/tmp` that begin with jolt.
+
+## Guest Fails to Compile on the Host
+By default, Jolt will attempt to compile the guest for the host architecture. This is useful if you want to run and test the guest's tagged functions directly. If you know your guest code cannot compile on the host (for example, if your guest uses inline RISCV assembly), you can specify to only build for the guest architecture.
+```rust
+#[jolt::provable(guest_only)]
+fn inline_asm() -> (i32, u32, i32, u32) {
+    use core::arch::asm;
+
+    let mut data: [u8; 8] = [0; 8];
+    unsafe {
+        let ptr = data.as_mut_ptr();
+
+        // Store Byte (SB instruction)
+        asm!(
+        "sb {value}, 0({ptr})",
+        ptr = in(reg) ptr,
+        value = in(reg) 0x12,
+        );
+    }
+}
+```
+
+
+## Null Pointer Write / "Unknown memory mapping: 0x0"
+If you see `Null pointer write detected (store to 0x0)` or `Illegal device store: Unknown memory mapping: 0x0`, it means your guest program crashed. This happens when musl's `abort()` cannot deliver a signal and falls back to writing to a null pointer.
+
+The most common cause is a missing jolt-sdk feature. If your guest uses:
+- **rayon or threading** — add `"thread"` to your jolt-sdk features
+- **randomness (getrandom)** — add `"random"` to your jolt-sdk features
+
+```toml
+[dependencies]
+jolt = { package = "jolt-sdk", features = ["guest-std", "thread", "random"] }
+```
+
+To diagnose which syscall is failing, add the `"debug"` feature to enable syscall logging:
+```toml
+jolt = { package = "jolt-sdk", features = ["guest-std", "debug"] }
+```
+This prints every syscall the guest makes (e.g. `[syscall] SYS_clone`), which helps identify which capability is missing.
+
+## Release runs with fat LTO fail a lookup-table test
+
+If `cargo nextest run --release -p jolt-prover-legacy` fails at:
+
+```
+'zkvm::lookup_table::equal::test::prefix_suffix' panicked at crates/jolt-prover-legacy/src/zkvm/lookup_table/test.rs:108:17:
+assertion `left == right` failed
+```
+
+this appears to be a **fat LTO** miscompile in the current compiler pass pipeline. 
+This class of miscompilations is generally tracked in [rust-lang/rust#116941](https://github.com/rust-lang/rust/issues/116941).
+
+**Workarounds**
+
+- Prefer **thin LTO** (default in `Cargo.toml`):
+  - `profile.release.lto = "thin"`
+- If you must keep fat LTO, disable LLVM prepopulate passes (use Cargo’s profile override
+  to avoid applying LTO to proc-macro/build scripts):
+  - `CARGO_PROFILE_RELEASE_LTO=fat RUSTFLAGS="-C no-prepopulate-passes"`
+
+These avoid the miscompile while keeping release runs functional.
+
+## LTO Configuration Details
+
+We have investigated three primary LTO configurations.
+
+### 1. `lto = "fat"` (Problematic)
+
+Enabling "fat" LTO without additional flags triggers a compiler miscompilation in the current toolchain.
+
+To reproduce:
+```bash
+CARGO_PROFILE_RELEASE_LTO=fat cargo nextest run --release -p jolt-prover-legacy -E 'test(=zkvm::lookup_table::equal::test::prefix_suffix)'
+```
+
+You will see an error similar to:
+```text
+thread 'zkvm::lookup_table::equal::test::prefix_suffix' panicked at crates/jolt-prover-legacy/src/zkvm/lookup_table/test.rs:108:17:
+assertion `left == right` failed
+  left: 3421757210433941145757981284077922153733430471292915370254709621273756639318
+ right: 15993602859885613318374216934674599210221976492830069114166327961258944178919
+```
+
+### 2. `lto = "thin"` (Recommended)
+
+The above error can be fixed by setting `lto = "thin"`. You can verify with:
+
+```bash
+CARGO_PROFILE_RELEASE_LTO=thin cargo nextest run --release -p jolt-prover-legacy -E 'test(=zkvm::lookup_table::equal::test::prefix_suffix)'
+```
+
+### 3. `lto = "fat"` with `-C no-prepopulate-passes`
+
+If you must use fat LTO, adding `RUSTFLAGS="-C no-prepopulate-passes"` prevents the miscompilation described above. However, this flag alters the guest ELF code generation, which can increase the execution trace length slightly.
+
+This may cause tests with tight trace length limits—such as `advice_e2e_dory`—to fail.
+
+To reproduce:
+```bash
+CARGO_PROFILE_RELEASE_LTO=fat RUSTFLAGS="-C no-prepopulate-passes" cargo nextest run --release -p jolt-prover-legacy -E 'test(=zkvm::prover::tests::advice_e2e_dory)'
+```
+
+You will see a trace length error:
+```text
+    thread 'zkvm::prover::tests::advice_e2e_dory' panicked at crates/jolt-prover-legacy/src/zkvm/prover.rs:336:13:
+    Execution trace length (105501 cycles, padded to 131072) exceeds max_trace_length (65536) configured in MemoryConfig. Increase max_trace_length to at least 131072.
+```
+
+To fix this, simply increase the `max_trace_length` in the failing test setup. For example, in `advice_e2e_dory`:
+
+```diff
+let shared_preprocessing = JoltSharedPreprocessing::new(
+    bytecode.clone(),
+    io_device.memory_layout.clone(),
+    init_memory_state,
+-   1 << 16,
++   1 << 17,
+);
+```
+
+## Getting Help
+If none of the above solve the problem, please create a Github issue with a detailed bug report including the Jolt commit hash, the hardware or container configuration used, and a minimal guest program to reproduce the bug.

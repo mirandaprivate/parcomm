@@ -1,0 +1,7 @@
+# Cargo vendor checksums cover exact bytes, including line endings.
+/dependencies/** -text
+/dependencies-jolt/** -text
+/third_party/** -text
+/qafold/f65521/** -text
+/qafold/koalabear/** -text
+/results/reference/** -text

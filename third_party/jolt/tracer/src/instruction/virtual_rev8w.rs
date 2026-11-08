@@ -1,0 +1,30 @@
+use serde::{Deserialize, Serialize};
+
+use crate::{declare_riscv_instr, emulator::cpu::Cpu};
+
+use super::{format::format_t::FormatT, RISCVInstruction, RISCVTrace};
+
+declare_riscv_instr!(
+    name = VirtualRev8W,
+    mask = 0,
+    match = 0,
+    format = FormatT,
+    ram = ()
+);
+
+impl VirtualRev8W {
+    fn exec(&self, cpu: &mut Cpu, _: &mut <VirtualRev8W as RISCVInstruction>::RAMAccess) {
+        let v = cpu.x[self.operands.rs1 as usize] as u64;
+        cpu.write_register(self.operands.rd as usize, rev8w(v) as i64);
+    }
+}
+
+impl RISCVTrace for VirtualRev8W {}
+
+/// Reverses the bytes in each 32-bit word.
+#[inline]
+pub fn rev8w(v: u64) -> u64 {
+    let lo = (v as u32).swap_bytes();
+    let hi = ((v >> 32) as u32).swap_bytes();
+    lo as u64 + ((hi as u64) << 32)
+}

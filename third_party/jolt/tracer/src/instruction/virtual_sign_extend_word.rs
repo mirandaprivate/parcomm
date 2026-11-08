@@ -1,0 +1,24 @@
+use serde::{Deserialize, Serialize};
+
+use crate::{declare_riscv_instr, emulator::cpu::Cpu};
+
+use super::{format::format_i::FormatI, RISCVInstruction, RISCVTrace};
+
+declare_riscv_instr!(
+    name = VirtualSignExtendWord,
+    mask = 0,
+    match = 0,
+    format = FormatI,
+    ram = ()
+);
+
+impl VirtualSignExtendWord {
+    fn exec(&self, cpu: &mut Cpu, _: &mut <VirtualSignExtendWord as RISCVInstruction>::RAMAccess) {
+        cpu.write_register(
+            self.operands.rd as usize,
+            (cpu.x[self.operands.rs1 as usize] << 32) >> 32,
+        );
+    }
+}
+
+impl RISCVTrace for VirtualSignExtendWord {}

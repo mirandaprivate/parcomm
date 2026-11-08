@@ -1,0 +1,25 @@
+[files]
+extend-exclude = ["patches/*.patch"]
+
+[default.extend-words]
+"groth" = "groth"
+"fle" = "fle"
+"sie" = "sie"
+"stip" = "stip"
+"thr" = "thr"
+"thre" = "thre"
+"numer" = "numer"
+"Hax" = "Hax"
+"Toom" = "Toom"
+# "iy" is an index variable (paired with "ix") in jolt-poly's lagrange code.
+"iy" = "iy"
+# sail_riscv_sim config schema field names (tests/arch-tests/jolt/sail.json):
+# "nto" is Zawrs "no timeout", "useed"/"sseed" are Zkr entropy CSR fields.
+"nto" = "nto"
+"useed" = "useed"
+"sseed" = "sseed"
+"mis" = "mis"
+# "tru"/"unt" are the trusted/untrusted advice commitment-object shorthands
+# (A_tru, A_unt) in the packed (Akita) prove path docs.
+"tru" = "tru"
+"unt" = "unt"

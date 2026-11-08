@@ -1,0 +1,20 @@
+[test-groups]
+# Dory tests mutate global state and use #[serial] from serial_test, but that
+# only serializes within a single process. Nextest runs each test in its own
+# process, so we use a test group to enforce serial execution instead.
+dory = { max-threads = 1 }
+# ZK verifier fixture tests generate shared temp artifacts and use large stacks;
+# keep them serial to avoid host memory and fixture contention.
+zk-core-fixtures = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(dory)'
+test-group = 'dory'
+
+[[profile.default.overrides]]
+filter = 'package(jolt-prover-legacy) and (test(max_advice_with_small_trace) or test(advice_opening_point_derives_from_unified_point) or test(blindfold_r1cs_satisfaction) or test(truncated_trace) or test(malicious_trace) or test(initial_pc_is_constrained_to_entry_point) or test(blindfold_protocol_e2e))'
+test-group = 'dory'
+
+[[profile.default.overrides]]
+filter = 'package(jolt-verifier) and test(zk)'
+test-group = 'zk-core-fixtures'

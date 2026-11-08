@@ -1,0 +1,25 @@
+[package]
+name = "modinv-guest"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+guest = []
+field-inline = ["jolt/field-inline"]
+compute_advice = []
+
+[dependencies]
+jolt = { package = "jolt-sdk", path = "../../../jolt-sdk", features = [
+  "guest-std",
+] }
+
+[lib]
+test = false
+doctest = false
+bench = false
+
+[[bin]]
+name = "modinv-guest"
+path = "src/main.rs"
+test = false
+bench = false

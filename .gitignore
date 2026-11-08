@@ -77,3 +77,31 @@ __pycache__/
 # Generated local manifests
 /MANIFEST.md
 /*_PACKAGE.md
+
+# Local experiment history; the supported backends are the two directories below.
+/experiments/
+/maintenance/
+/artifact/
+/parcomm-artifact-*.tar.gz*
+/qafold/*
+!/qafold/f65521/
+!/qafold/koalabear/
+/build/
+/runs/
+
+# Reference measurements are part of the repository release.
+!/results/
+/results/*
+!/results/reference/
+!/results/summary.csv
+!/results/summary.md
+
+# Optional local Cargo dependency mirrors and their machine-local configuration.
+/dependencies/
+/dependencies-jolt/
+/.cargo/jolt-vendor-config.toml
+/.cargo/qafold-vendor-config.toml
+
+# Generated smoke-test proof bundles and compiler output.
+/validation/**/bundle/
+/validation/**/build.log

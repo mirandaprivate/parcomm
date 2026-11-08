@@ -1,0 +1,177 @@
+//! Typed inputs consumed and outputs produced by stage 5 verification.
+
+use jolt_field::Field;
+use jolt_sumcheck::BatchedCommittedSumcheckConsistency;
+
+use crate::stages::relations::SumcheckBatch;
+use crate::stages::zk::outputs::CommittedOutputClaimOutput;
+
+use super::instruction_read_raf::{reconstruct_r_address, InstructionReadRaf};
+use super::ram_ra_claim_reduction::RamRaClaimReduction;
+use super::registers_val_evaluation::RegistersValEvaluation;
+
+/// Source-of-truth for stage 5's sumcheck batch: the three instances in
+/// Fiat-Shamir batch order (instruction read-RAF, RAM-RA reduction, register
+/// value-evaluation). `#[derive(SumcheckBatch)]` generates the
+/// `Stage5{Input,Output}{Claims,Points}<F>` and `Stage5Challenges<F>`
+/// aggregates — one field per instance, in this declaration order — plus the
+/// Fiat-Shamir absorb plumbing (`opening_values` / `append_output_claims` on this
+/// struct). The field order is load-bearing: it fixes the canonical opening order
+/// absorbed into the transcript, which must match the prover's commitment order.
+#[derive(SumcheckBatch)]
+#[sumcheck_batch(crate = "crate")]
+pub struct Stage5Sumchecks<F: Field> {
+    pub instruction_read_raf: InstructionReadRaf<F>,
+    pub ram_ra_claim_reduction: RamRaClaimReduction<F>,
+    pub registers_val_evaluation: RegistersValEvaluation<F>,
+}
+
+/// The shared opening-point accessors over the point-only stage-5 aggregate.
+impl<F: Field> Stage5OutputPoints<F> {
+    /// The instruction read-RAF cycle point (shared by the lookup-table-flag
+    /// and RAF-flag openings).
+    pub fn instruction_r_cycle(&self) -> &[F] {
+        self.instruction_read_raf.instruction_raf_flag()
+    }
+
+    /// The contiguous instruction address point, reconstructed from the
+    /// virtual-RA opening points (each is `chunk ++ r_cycle`).
+    pub fn instruction_r_address(&self) -> Vec<F> {
+        reconstruct_r_address(&self.instruction_read_raf, self.instruction_r_cycle().len())
+    }
+
+    /// The reduced RAM-RA opening point (`address ++ cycle`).
+    pub fn ram_reduced_opening_point(&self) -> &[F] {
+        self.ram_ra_claim_reduction.ram_ra()
+    }
+
+    /// The register value-evaluation opening point (shared by `rd_inc`/`rd_wa`).
+    pub fn registers_opening_point(&self) -> &[F] {
+        self.registers_val_evaluation.rd_inc()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "allocative", derive(::allocative::Allocative))]
+pub struct Stage5ClearOutput<F: Field> {
+    pub challenges: Stage5Challenges<F>,
+    /// The produced stage-5 opening *values* (wire form); read by later stages and
+    /// the Fiat-Shamir opening-claim encoder.
+    pub output_values: Stage5OutputClaims<F>,
+    /// The produced stage-5 opening *points*, paired field-for-field with
+    /// `output_values`. Later stages read each opening's point off these cells.
+    pub output_points: Stage5OutputPoints<F>,
+    /// The instruction read-RAF address point, materialized contiguously from the
+    /// virtual-RA opening points (which tile it as `chunk ++ r_cycle`). Stored
+    /// because stage 6 re-chunks it by the committed-chunk width — a different
+    /// split than the virtual-RA cells carry — so it needs a contiguous copy that
+    /// downstream code can borrow.
+    pub instruction_r_address: Vec<F>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stage5ZkOutput<F: Field, C> {
+    pub challenges: Stage5Challenges<F>,
+    pub batch_consistency: BatchedCommittedSumcheckConsistency<F, C>,
+    pub batch_output_claims: CommittedOutputClaimOutput<C>,
+    /// The produced opening points, the ZK counterpart of the clear path's
+    /// `output_points`. Read through the same `*_point()` accessors.
+    pub output_points: Stage5OutputPoints<F>,
+    /// The contiguous instruction address point, stored (rather than reconstructed
+    /// from `output_points` on demand) so stage 6 can borrow it — the per-chunk
+    /// virtual-RA cells don't hold it contiguously. Mirrors `Stage5ClearOutput`.
+    pub instruction_r_address: Vec<F>,
+}
+
+// The clear variant carries the located opening claims (point + value) that
+// later stages read on the hot path; the ZK variant carries the committed
+// consistency and output-claim commitments. Boxing the common clear variant to
+// shrink the rarer ZK one would add indirection to every clear-path access.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Stage5Output<F: Field, C> {
+    Clear(Stage5ClearOutput<F>),
+    Zk(Stage5ZkOutput<F, C>),
+}
+
+impl<F: Field, C> Stage5Output<F, C> {
+    /// The produced opening points, available regardless of proving mode.
+    pub fn output_points(&self) -> &Stage5OutputPoints<F> {
+        match self {
+            Self::Clear(output) => &output.output_points,
+            Self::Zk(output) => &output.output_points,
+        }
+    }
+
+    /// The contiguous stage-5 instruction address point, stored on both output
+    /// variants because the per-chunk virtual-RA cells don't hold it contiguously.
+    pub fn instruction_r_address(&self) -> &[F] {
+        match self {
+            Self::Clear(output) => &output.instruction_r_address,
+            Self::Zk(output) => &output.instruction_r_address,
+        }
+    }
+
+    pub fn clear(&self) -> Result<&Stage5ClearOutput<F>, crate::VerifierError> {
+        match self {
+            Self::Clear(output) => Ok(output),
+            Self::Zk(_) => Err(crate::VerifierError::ExpectedClearProof { field: "stage5" }),
+        }
+    }
+
+    pub fn zk(&self) -> Result<&Stage5ZkOutput<F, C>, crate::VerifierError> {
+        match self {
+            Self::Zk(output) => Ok(output),
+            Self::Clear(_) => Err(crate::VerifierError::ExpectedCommittedProof { field: "stage5" }),
+        }
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use jolt_claims::protocols::jolt::geometry::dimensions::TraceDimensions;
+    use jolt_claims::protocols::jolt::geometry::instruction::InstructionReadRafDimensions;
+    use jolt_claims::protocols::jolt::relations::instruction::InstructionReadRafOutputClaims;
+    use jolt_claims::protocols::jolt::relations::ram::RamRaClaimReductionOutputClaims;
+    use jolt_claims::protocols::jolt::relations::registers::RegistersValEvaluationOutputClaims;
+    use jolt_field::{Fr, FromPrimitiveInt};
+
+    fn fr(value: u64) -> Fr {
+        Fr::from_u64(value)
+    }
+
+    /// Locks the stage-5 Fiat-Shamir append order against silent drift: the
+    /// instruction read-RAF openings, then the RAM-RA reduced opening, then the
+    /// register value-evaluation openings, each member single-sourcing its own
+    /// per-field order from its `OutputClaims` derive. A wrong batch order here
+    /// silently breaks soundness, so it is pinned with distinct sentinels.
+    #[test]
+    fn opening_values_follow_canonical_order() {
+        let trace_dimensions = TraceDimensions::new(4);
+        let sumchecks = Stage5Sumchecks::<Fr> {
+            instruction_read_raf: InstructionReadRaf::new(
+                InstructionReadRafDimensions::try_from((5, 128, 3)).unwrap(),
+            ),
+            ram_ra_claim_reduction: RamRaClaimReduction::new(trace_dimensions, 3),
+            registers_val_evaluation: RegistersValEvaluation::new(trace_dimensions),
+        };
+        let claims = Stage5OutputClaims::<Fr> {
+            instruction_read_raf: InstructionReadRafOutputClaims {
+                lookup_table_flags: vec![fr(1), fr(2)],
+                instruction_ra: vec![fr(3), fr(4)],
+                instruction_raf_flag: fr(5),
+            },
+            ram_ra_claim_reduction: RamRaClaimReductionOutputClaims { ram_ra: fr(6) },
+            registers_val_evaluation: RegistersValEvaluationOutputClaims {
+                rd_inc: fr(7),
+                rd_wa: fr(8),
+            },
+        };
+
+        assert_eq!(
+            sumchecks.opening_values(&claims),
+            (1..=8).map(fr).collect::<Vec<_>>()
+        );
+    }
+}

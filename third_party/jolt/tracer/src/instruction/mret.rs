@@ -1,0 +1,78 @@
+//! MRET — Machine Return from Trap.
+//!
+//! Encoding: 0x30200073 (SYSTEM opcode, funct3=000, imm=0x302)
+//!
+//! # Privilege model
+//!
+//! Jolt targets M-mode-only execution with no interrupt hardware. MRET is
+//! implemented as a single JALR to mepc — it does not modify mstatus.
+//!
+//! The full RISC-V spec requires MRET to restore MIE from MPIE, set MPIE=1,
+//! and reset MPP to the least-privileged mode. These operations are omitted
+//! because:
+//! - There is only one privilege level (Machine) — MPP is always 3.
+//! - No interrupt sources exist and the MIE CSR (0x304) is inaccessible,
+//!   so MIE/MPIE bits are unused.
+//! - The ZeroOS trap trampoline restores mstatus via `csrw mstatus, <saved>`
+//!   before executing `mret`, so the virtual register holds the correct value
+//!   without MRET needing to manipulate it.
+
+use serde::{Deserialize, Serialize};
+
+use crate::{declare_riscv_instr, emulator::cpu::Cpu};
+
+use super::{format::format_i::FormatI, Cycle, Instruction, RISCVInstruction, RISCVTrace};
+
+declare_riscv_instr!(
+    name   = MRET,
+    mask   = 0xffffffff,  // Exact match
+    match  = 0x30200073,  // MRET encoding: priv=0x302, funct3=000, opcode=1110011
+    format = FormatI,
+    ram    = ()
+);
+
+/// CSR address for mepc (Machine Exception Program Counter)
+const CSR_MEPC_ADDRESS: u16 = 0x341;
+
+impl MRET {
+    fn exec(&self, cpu: &mut Cpu, _: &mut <MRET as RISCVInstruction>::RAMAccess) {
+        // Read mepc from CSR state and jump to it
+        let mepc = cpu.read_csr_raw(CSR_MEPC_ADDRESS);
+        cpu.pc = mepc;
+
+        // mstatus is not modified — see module-level docs for why this is
+        // correct in the M-mode-only model.
+    }
+}
+
+impl RISCVTrace for MRET {
+    fn trace(&self, cpu: &mut Cpu, trace: Option<&mut Vec<Cycle>>) {
+        // Don't call self.execute() - the inline sequence's JALR handles the PC update.
+        // The JALR reads mepc from virtual register vr36 and jumps to it.
+
+        // Generate and execute inline sequence
+        // The inline sequence reads mepc from virtual register (source of truth for proofs)
+        super::trace_inline_sequence(&Instruction::from(*self), cpu, trace);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::instruction::Instruction;
+
+    /// Test decoding of `mret`
+    #[test]
+    fn test_mret_decode() {
+        let instr: u32 = 0x30200073;
+        let address: u64 = 0x1000;
+
+        let decoded = Instruction::decode(instr, address, false).expect("Failed to decode MRET");
+
+        match decoded {
+            Instruction::MRET(_mret) => {
+                // MRET has no operands to check - it's a fixed encoding
+            }
+            _ => panic!("Expected MRET instruction, got {decoded:?}"),
+        }
+    }
+}

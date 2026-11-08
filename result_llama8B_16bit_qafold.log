@@ -1,0 +1,151 @@
+QAFold ParComm full public-metadata end-to-end experiment
+cache_mode = recompute (low memory)
+runs = 1; aggregation = none
+CPU only; prover_threads = 48; independent_verifier_threads = 1
+Scope: public shape/point/value; full verification; no zero-knowledge wrapper or model inference.
+16-bit input, where applicable: BF16 raw bit patterns.
+Timing: prover = commit + opening/serialization; setup, input and claims are separate.
+All codeword/Merkle reconstruction remains in prover time.
+source_measurement = C:\Users\miranda\git\parcomm\qafold\model_encoding_20261108\evidence\logs\measurements.json
+source_record = 8b16-recompute
+
+prover_seconds = 72.415789405
+commit_seconds = 20.487045756
+opening_with_serialization_seconds = 51.928743649
+independent_verifier_seconds = 0.145789988
+prover_setup_seconds = 8.017747152
+verifier_setup_seconds = 10.448460385
+input_seconds = 81.277562105
+claim_generation_seconds = 0.769742233
+pipeline_wall_seconds = 162.699111399008
+peak_rss_gib = 37.9435691833496
+proof_bytes = 10404021
+
+=== Full original measurement record (JSON) ===
+{
+  "label": "8b16-recompute",
+  "runs": 1,
+  "result": {
+    "active_entries": 8053329920,
+    "bucket_count": 489,
+    "cache_mode": "recompute",
+    "claim_generation_seconds": 0.769742233,
+    "commit_seconds": 20.487045756,
+    "field": "KoalaBear/KoalaBear^4",
+    "input_seconds": 81.277562105,
+    "input_stream_blake2s": "65657955844544f92da3325c1685ee9c783be5aa28a5173f4e605ec2eb16ab8d",
+    "logical_entries": 8589934592,
+    "matrix_count": 291,
+    "opening_with_serialization_seconds": 51.928743649,
+    "proof_blake2s": "[c4, 15, 1b, 24, 77, cd, 39, ed, 52, 4f, 3e, d4, 78, b7, cc, d, bb, ea, a1, 5f, df, 3, 65, 3c, 7, e8, b7, 30, e5, 74, be, 27]",
+    "proof_bytes": 10404021,
+    "prover_profile": {
+      "conversion_seconds": 0.003139903,
+      "eo": {
+        "binary_eo_seconds": 4.074422219,
+        "consistency_check_seconds": 0.435126231,
+        "folded_tbv_seconds": 3.463014163,
+        "packed_witness_seconds": 0.583157105,
+        "tbv_cross_terms_seconds": 0.773337736
+      },
+      "native_openings": 1,
+      "packed_eo_seconds": 10.271429168,
+      "pcs_decide_seconds": 0.698722354,
+      "pcs_native_opening_seconds": 2.281322266,
+      "pcs_open_seconds": 40.706096785,
+      "pcs_projection_seconds": 5.452676257,
+      "pcs_reconstruction_seconds": 0.0,
+      "pcs_sumcheck_seconds": 1.2939530989999999,
+      "terminal_batch_binding_seconds": 23.227566953,
+      "terminal_batch_folding_seconds": 7.742845903
+    },
+    "prover_threads": 48,
+    "public_commitment_json_bytes": 8625,
+    "root_bytes": 256,
+    "scope": "public-metadata ParComm complete flow",
+    "setup_seconds": 8.017747152,
+    "total_prover_seconds": 72.415789405,
+    "verified": true,
+    "verifier_profile": {
+      "authenticated_roots": 8,
+      "conversion_eo_seconds": 0.004226709,
+      "native_openings": 1,
+      "pcs_seconds": 0.079734382
+    },
+    "verifier_threads": 1,
+    "verify_decode_seconds": 0.099218544,
+    "workflow_wall_seconds": 162.595045172
+  },
+  "verification": {
+    "profile": {
+      "authenticated_roots": 8,
+      "conversion_eo_seconds": 0.005045433,
+      "native_openings": 1,
+      "pcs_seconds": 0.094486617
+    },
+    "scope": "public-metadata ParComm complete flow",
+    "setup_seconds": 10.448460385,
+    "threads": 1,
+    "verification_with_read_decode_seconds": 0.145789988,
+    "verified": true
+  },
+  "artifact_sha256": {
+    "commitment.json": "2ea47bb9f1ccedb93a2474ebc879691ca7926fc5417ad6af3ec3d4ba18e6fc29",
+    "claims.json": "7d4e2a4d8b3c3d99604e676b1e3b4cf3e1b9ea86e5772afe02f260fea41c3e88",
+    "proof.bin": "7c18b0bbdf9d070a0d2d8a2b5628486a67347749e3371e1b3792f8a52c5ef577"
+  },
+  "input_sha256": "4a402790ceb49665c11d0f1466f0893b3b32d9445740756ee7eaf1a65c8d1c5f",
+  "peak_rss_kib": 39786716,
+  "pipeline_wall_seconds": 162.69911139900796
+}
+
+=== Exact prover command (JSON argv) ===
+[
+  "/usr/bin/time",
+  "-v",
+  "-o",
+  "/dev/shm/mscong1-parcomm-model-encoding-20261108/logs/8b16-recompute-resources.log",
+  "/dev/shm/mscong1-parcomm-model-encoding-20261108/target-koalabear/release/parcomm-qafold-koalabear-8b",
+  "prove",
+  "--description",
+  "/dev/shm/mscong1-parcomm-model-encoding-20261108/logs/8b16-description.json",
+  "--input",
+  "-",
+  "--output",
+  "/dev/shm/mscong1-parcomm-model-encoding-20261108/bundles/8b16-recompute",
+  "--threads",
+  "48",
+  "--chunk-log",
+  "30",
+  "--packed-log",
+  "4",
+  "--cache-mode",
+  "recompute"
+]
+
+
+=== Original process resource log ===
+	Command being timed: "/dev/shm/mscong1-parcomm-model-encoding-20261108/target-koalabear/release/parcomm-qafold-koalabear-8b prove --description /dev/shm/mscong1-parcomm-model-encoding-20261108/logs/8b16-description.json --input - --output /dev/shm/mscong1-parcomm-model-encoding-20261108/bundles/8b16-recompute --threads 48 --chunk-log 30 --packed-log 4 --cache-mode recompute"
+	User time (seconds): 2215.19
+	System time (seconds): 131.40
+	Percent of CPU this job got: 1442%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:42.69
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 39786716
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 35957913
+	Voluntary context switches: 296855
+	Involuntary context switches: 4780
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+

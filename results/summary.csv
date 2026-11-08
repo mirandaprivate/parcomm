@@ -1,0 +1,9 @@
+backend,case,mode,prover_s,commit_s,open_s,verifier_s,peak_rss_gib,prover_setup_s,verifier_setup_s,precision
+Jolt,8B_8bit,original archived configuration,94.007,54.805,39.202,0.432,16.11,55.656626,,rounded original final-results table
+Jolt,8B_16bit,original archived configuration,181.75199999999998,129.885,51.867,0.427,31.22,56.090509,,rounded original final-results table
+Jolt,70B_8bit,original archived configuration,643.676,465.72,177.956,0.45,132.84,220.319476,,rounded original final-results table
+Jolt,70B_16bit,original archived configuration,1054.3,814.515,239.785,0.45,265.01,220.767517,,rounded original final-results table
+QAFold,8b8,low memory,40.673405279,11.195281037,29.478124242,0.156747671,23.911598205566406,4.226452471,5.511136895,original JSON measurements; one run
+QAFold,8b16,low memory,72.415789405,20.487045756,51.928743649,0.145789988,37.94356918334961,8.017747152,10.448460385,original JSON measurements; one run
+QAFold,70b8,low memory,199.537174759,62.925980826,136.611193933,0.864905095,130.16223526000977,4.263903183,5.480282336,original JSON measurements; one run
+QAFold,70b16,low memory,351.719538323,129.668610406,222.050927917,0.828312468,196.4471549987793,8.044517395,10.376624583,original JSON measurements; one run

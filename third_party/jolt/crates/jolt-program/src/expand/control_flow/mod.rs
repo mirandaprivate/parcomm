@@ -1,0 +1,13 @@
+use super::*;
+use jolt_riscv::JoltInstructionKind as Kind;
+
+mod csrrs;
+mod csrrw;
+mod ebreak;
+mod ecall;
+mod mret;
+pub(super) use csrrs::expand_csrrs;
+pub(super) use csrrw::expand_csrrw;
+pub(super) use ebreak::expand_ebreak;
+pub(super) use ecall::expand_ecall;
+pub(super) use mret::expand_mret;

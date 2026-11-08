@@ -1,0 +1,9 @@
+{
+  "backend": "jolt",
+  "case": "8B-8bit",
+  "threads": 64,
+  "toolchain": "nightly-2026-03-21",
+  "runs": 1,
+  "input": "None",
+  "rustflags": ""
+}

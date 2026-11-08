@@ -1,0 +1,8 @@
+[book]
+authors = []
+language = "en"
+src = "src"
+title = "JoltBook"
+
+[preprocessor.katex]
+after = ["links"]

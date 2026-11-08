@@ -1,132 +1,143 @@
 # ParComm
 
-ParComm is a Rust implementation of collection commitments for heterogeneous
-low-bit-width matrix collections.
+This repository contains the Jolt-backed ParComm implementation and the small-field
+QAFold public-metadata implementation, with reference results for Llama 8B/70B at
+8/16 bits. Start with this document; no server login or private Git credentials
+are needed to build the included source snapshots.
 
-The paper source is available in [`latex/`](./latex/).
+## Contents
+
+| Path | Purpose |
+|---|---|
+| `Cargo.toml`, `batch/`, `atomic_proof/`, `fs/`, `mat/`, `poly-commit/` | Jolt-backed ParComm workspace |
+| `qafold/f65521/` | Optimized 8-bit public-metadata ParComm |
+| `qafold/koalabear/` | Optimized 16-bit public-metadata ParComm |
+| `third_party/` | Exact local Jolt snapshot and pinned Git dependency source trees |
+| `.cargo/jolt-patch.toml` | Local source overrides for the required customized dependencies |
+| `scripts/run.py` | Unified build, test, smoke-test and model experiment entry point |
+| `scripts/summarize.py` | Check saved results and export reference CSV tables |
+| `results/reference/` | Eight original result logs, QAFold measurements and provenance |
+| `validation/` | Build and correctness validation evidence; these are not new model timings |
+
+## Scope and timing
+
+| Property | Jolt | QAFold |
+|---|---|---|
+| Field | BN254 | F65521/degree-8 extension (8-bit); KoalaBear/degree-4 extension (16-bit) |
+| Statement visibility | Existing hidden-relation/BlindFold implementation | Public shape, query point and value |
+| CPU only | Yes | Yes |
+| Model-scale reference runs | Existing four archived logs | Four low-memory runs, one invocation each |
+| Prover time | Commit + open from the original final-results table | Commit + opening/serialization, including reconstruction |
+| Setup | Original setup fields retained | Separately reported, excluded from prover and verifier |
+
+The two backends do not have identical hiding guarantees. Do not interpret a
+timing comparison as a comparison of identical security configurations. These
+experiments commit to and open model parameter matrices; they do not prove a
+neural-network inference. BF16 inputs preserve their 16-bit payloads, not a new
+16-bit quantization scheme. QAFold verifies all original roots through one native
+PCS opening. Input conversion and claim generation are separate from prover time.
 
 ## Requirements
 
-- Ubuntu Linux or WSL2
-- [Rustup](https://rustup.rs/) with Rust 1.95
-- Python 3 with NumPy for the Llama experiments
-
-The Rust toolchain is pinned in [`rust-toolchain.toml`](./rust-toolchain.toml)
-and is selected automatically by Cargo.
-
-## Quick Start
-
-Clone and build the repository:
+Linux x86-64 (Ubuntu 22.04 or WSL2), Python >=3.10, NumPy 2.2.6 for checkpoint
+conversion, GNU `time`, and Rustup. No CUDA or GPU is used.
 
 ```bash
-git clone git@github.com:mirandaprivate/parcomm.git
-cd parcomm
-rustup toolchain install 1.95
-cargo build --locked --workspace --release
+rustup toolchain install nightly-2026-03-21 --profile minimal
+rustup toolchain install 1.97.1 --profile minimal
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -r requirements.txt
 ```
 
-Run a locally generated homogeneous experiment:
+Toolchain/Python installation and the first Rust build require Internet access.
+Rust dependencies are downloaded by Cargo with `--locked`; dependency mirrors
+and build products are excluded from Git. If optional local `dependencies/` or
+`dependencies-jolt/` mirrors and their vendor configurations exist, the runner
+uses them with `--offline --locked`. Required customized source snapshots remain
+in `third_party/` and `vendor/`. QAFold's reference
+server runs used Rust 1.95; artifact smoke validation uses 1.97.1. Jolt uses the
+historical nightly. Timing is hardware/compiler dependent.
+
+The reference server had two Xeon Gold 6342 CPUs, 48 physical/96 logical cores,
+AVX-512, and approximately 377 GiB RAM. Small smoke tests need no model weights
+and use two threads. Allow several GiB RAM and ample disk space for Rust builds.
+For all four model-scale runs, use a server with approximately 384 GiB RAM and
+sufficient checkpoint storage. QAFold observed prover RSS peaks were 23.91,
+37.94, 130.16 and 196.45 GiB respectively; input conversion and the OS also need
+memory. These are observations, not enforced memory limits. Run large cases
+sequentially. The reference runs used 48 QAFold prover threads and one verifier
+thread; Jolt uses 64 Rayon threads.
+
+## Quick smoke tests
+
+From this directory (each output must be new):
 
 ```bash
-RAYON_NUM_THREADS=8 cargo bench --locked --quiet -p batch \
-  --bench experiment -- \
-  homogeneous \
-  --matrix-count 128 \
-  --rows 127 \
-  --cols 127 \
-  --allow-non-64-threads
+python3 scripts/run.py smoke --backend qafold --case 8B-8bit --output runs/smoke-qafold8
+python3 scripts/run.py smoke --backend qafold --case 8B-16bit --output runs/smoke-qafold16
+python3 scripts/run.py smoke --backend jolt --output runs/smoke-jolt
 ```
 
-This command generates 128 matrices of shape `127 x 127` in memory and runs
-commitment, opening, and verification. It prints detailed stage timings,
-proof-size components, peak RSS, and the final result table.
+Each command builds first, runs a small generated instance, checks acceptance,
+and writes `status.txt` containing `success`. QAFold also runs an independent
+verifier. Jolt acceptance is `verified_marker=SECTION6_E2E_VERIFIED` in `run.log`.
+Use `--target-dir /path/with/space` to relocate build products.
 
-## Tests
-
-Run the focused end-to-end tests:
+## Correctness tests
 
 ```bash
-cargo test --locked -p batch --test packed_eo_short_int
-cargo test --locked -p batch --test matrix_collection_e2e -- --test-threads=1
+python3 scripts/run.py test --backend qafold --case 8B-8bit --output runs/test-qafold8
+python3 scripts/run.py test --backend qafold --case 8B-16bit --output runs/test-qafold16
+python3 scripts/run.py test --backend jolt --output runs/test-jolt
 ```
 
-Run the complete workspace test suite:
+The QAFold suite includes reconstruction equivalence, encoding reference checks,
+Merkle-root consistency and rejection of altered proofs/statements. The Jolt
+entry runs the focused packed-EO and matrix-collection end-to-end tests.
+
+## Model experiments
+
+Obtain compatible safetensors checkpoints separately under their respective
+licenses. Weights and access credentials are not distributed. Use local paths:
+
+| Case | Reference checkpoint directory name | QAFold chunk/packed log |
+|---|---|---|
+| `8B-8bit` | `Llama-3.1-8B-W8A8` | 30 / 4 |
+| `8B-16bit` | `Llama-3.1-8B-BF16` | 30 / 4 |
+| `70B-8bit` | `Llama-3.1-70B-W8A8` | 30 / 6 |
+| `70B-16bit` | `Llama-3.1-70B-BF16-community` | 30 / 6 |
 
 ```bash
-cargo test --locked --workspace -- --test-threads=1
+python3 scripts/run.py model --backend qafold --case 8B-8bit \
+  --input /data/Llama-3.1-8B-W8A8 --output runs/qafold-8b8
+python3 scripts/run.py model --backend jolt --case 8B-8bit \
+  --input /data/Llama-3.1-8B-W8A8 --output runs/jolt-8b8
 ```
 
-## Homogeneous Experiments
+Repeat with the other three case/path pairs. Each invocation runs exactly once;
+there is no automatic retry or median aggregation. QAFold always uses
+`recompute` low-memory mode here. It streams converted input, records SHA256,
+retains all reconstruction cost inside the prover timer, and writes the proof,
+statement, claims, profile and independent verification result. Recorded commands
+and process resource logs accompany each run. Avoid concurrent benchmarking.
 
-Use `--matrix-count`, `--rows`, and `--cols` to select the generated matrix
-collection. Paper-scale runs use 64 Rayon threads:
+## Inspect supplied results without rerunning models
 
 ```bash
-mkdir -p logs
-
-RAYON_NUM_THREADS=64 cargo bench --locked --quiet -p batch \
-  --bench experiment -- \
-  homogeneous \
-  --matrix-count 1024 \
-  --rows 4095 \
-  --cols 4095 \
-  2>&1 | tee logs/result_homogeneous.log
+python3 scripts/summarize.py
 ```
 
-## Llama Experiments
+The summary script validates acceptance and writes `results/summary.csv` and
+`results/summary.md`. Reference data are preserved verbatim, including historical
+machine paths; those paths are provenance, not paths required by this runner.
+The 70B 16-bit QAFold result comes from the preceding optimized run, and the
+other three QAFold results from the subsequent model sweep. No model-scale
+experiment was repeated just to package this artifact.
 
-The Llama benchmarks read sharded safetensors checkpoints from
-`../model-data` by default and stream the converted BVA directly into memory.
-
-| Benchmark | Default checkpoint directory |
-| --- | --- |
-| Llama-8B 8-bit | `../model-data/Llama-3.1-8B-W8A8` |
-| Llama-8B 16-bit | `../model-data/Llama-3.1-8B-BF16` |
-| Llama-70B 8-bit | `../model-data/Llama-3.1-70B-W8A8` |
-| Llama-70B 16-bit | `../model-data/Llama-3.1-70B` |
-
-Run the four model experiments from the repository root:
-
-```bash
-mkdir -p logs
-
-RAYON_NUM_THREADS=64 cargo bench --locked --quiet -p batch \
-  --bench experiment_llama8B_8bit \
-  2>&1 | tee logs/result_llama8B_8bit.log
-
-RAYON_NUM_THREADS=64 cargo bench --locked --quiet -p batch \
-  --bench experiment_llama8B_16bit \
-  2>&1 | tee logs/result_llama8B_16bit.log
-
-RAYON_NUM_THREADS=64 cargo bench --locked --quiet -p batch \
-  --bench experiment_llama70B_8bit \
-  2>&1 | tee logs/result_llama70B_8bit.log
-
-RAYON_NUM_THREADS=64 cargo bench --locked --quiet -p batch \
-  --bench experiment_llama70B_16bit \
-  2>&1 | tee logs/result_llama70B_16bit.log
-```
-
-Pass `--input PATH` after `--` to use another compatible checkpoint directory:
-
-```bash
-RAYON_NUM_THREADS=64 cargo bench --locked --quiet -p batch \
-  --bench experiment_llama70B_16bit -- \
-  --input /path/to/llama-70b-bf16
-```
-
-## Output
-
-Detailed stage timings and proof-size components are printed by default. A
-successful end-to-end run finishes with a `Final results` table and:
-
-```text
-verified_marker=SECTION6_E2E_VERIFIED
-```
-
-Print the available options with:
-
-```bash
-cargo bench --locked --quiet -p batch --bench experiment -- --help
-cargo bench --locked --quiet -p batch --bench experiment_llama8B_8bit -- --help
-```
+See `PROVENANCE.md`, `LICENSES.md` and `validation/STATUS.md` for source origins,
+repository-layout changes, attribution and the exact validation boundary.
+The repository is the distribution unit; no separate archive is required.
+Historical experiment, dependency-mirror and maintenance directories are ignored
+by Git. Required source snapshots preserve their line endings through
+`.gitattributes`.

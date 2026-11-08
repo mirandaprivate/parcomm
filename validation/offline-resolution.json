@@ -1,0 +1,26 @@
+[
+  {
+    "backend": "jolt",
+    "empty_cargo_home": true,
+    "offline": true,
+    "locked": true,
+    "packages": 234,
+    "success": true
+  },
+  {
+    "backend": "f65521",
+    "empty_cargo_home": true,
+    "offline": true,
+    "locked": true,
+    "packages": 44,
+    "success": true
+  },
+  {
+    "backend": "koalabear",
+    "empty_cargo_home": true,
+    "offline": true,
+    "locked": true,
+    "packages": 44,
+    "success": true
+  }
+]

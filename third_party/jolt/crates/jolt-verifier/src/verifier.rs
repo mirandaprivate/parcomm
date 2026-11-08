@@ -1,0 +1,1770 @@
+//! Top-level verifier entry point.
+
+use common::jolt_device::JoltDevice;
+use jolt_claims::protocols::jolt::JoltRelationId;
+use jolt_claims::protocols::jolt::{JoltOneHotConfig, JoltReadWriteConfig};
+#[cfg(not(feature = "akita"))]
+use jolt_crypto::HomomorphicCommitment;
+use jolt_crypto::VectorCommitment;
+use jolt_field::Field;
+#[cfg(not(feature = "akita"))]
+use jolt_field::{RingAccumulator, WithAccumulator};
+use jolt_openings::CommitmentScheme;
+#[cfg(not(feature = "akita"))]
+use jolt_openings::{AdditivelyHomomorphic, ZkOpeningScheme};
+use jolt_program::preprocess::{compute_max_ram_k, compute_min_ram_k};
+use jolt_sumcheck::SumcheckProof;
+#[cfg(feature = "akita")]
+use jolt_transcript::append_length_prefixed;
+use jolt_transcript::{AppendToTranscript, Label, LabelWithCount, Transcript, U64Word};
+
+#[cfg(not(feature = "akita"))]
+use crate::proof::JoltCommitments;
+use crate::{
+    config::{validate_proof_config, JoltProtocolConfig, ZkConfig, JOLT_VERIFIER_CONFIG},
+    num,
+    preprocessing::JoltVerifierPreprocessing,
+    proof::{JoltProof, TracePolynomialOrder},
+    stages::{
+        stage1, stage2, stage3, stage4, stage5, stage6a, stage6b, stage7, stage8,
+        CommittedProgramSchedule, PrecommittedSchedule,
+    },
+    VerifierError,
+};
+
+#[cfg(not(feature = "akita"))]
+pub fn verify<F, PCS, VC, T>(
+    preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
+    public_io: &JoltDevice,
+    proof: &JoltProof<PCS, VC>,
+    trusted_advice_commitment: Option<&PCS::Output>,
+) -> Result<(), VerifierError>
+where
+    F: Field + AppendToTranscript,
+    PCS: CommitmentScheme<Field = F>
+        + AdditivelyHomomorphic
+        + ZkOpeningScheme<HidingCommitment = VC::Output>,
+    PCS::Output: AppendToTranscript + HomomorphicCommitment<F>,
+    VC: VectorCommitment<Field = F>,
+    VC::Output: Copy + HomomorphicCommitment<F> + AppendToTranscript,
+    T: Transcript<Challenge = F>,
+    <F as WithAccumulator>::Accumulator: RingAccumulator<Element = F>,
+{
+    use crate::stages::zk::{blindfold, inputs::BlindFoldInputs};
+
+    let (checked, mut transcript) = validate_and_seed_transcript::<PCS, VC, T, _>(
+        preprocessing,
+        public_io,
+        proof,
+        trusted_advice_commitment,
+    )?;
+
+    // Built once for the whole verification and shared by the stages that read
+    // the RA layout (5-8), instead of each rebuilding the same dimensions.
+    let formula_dimensions = crate::stages::build_formula_dimensions(
+        proof,
+        preprocessing,
+        &checked,
+        num::ilog2(checked.trace_length),
+        JoltRelationId::InstructionReadRaf,
+    )?;
+
+    let stage1 = stage1::verify(&checked, proof, &mut transcript)?;
+    let stage2 = stage2::verify(&checked, proof, &mut transcript, &stage1)?;
+    let stage3 = stage3::verify(&checked, proof, &mut transcript, &stage1, &stage2)?;
+    let stage4 = stage4::verify(
+        &checked,
+        preprocessing,
+        proof,
+        &mut transcript,
+        &stage2,
+        &stage3,
+    )?;
+    let stage5 = stage5::verify(
+        &checked,
+        proof,
+        &formula_dimensions,
+        &mut transcript,
+        &stage2,
+        &stage4,
+    )?;
+    let stage6a = stage6a::verify(
+        &checked,
+        preprocessing,
+        proof,
+        &formula_dimensions,
+        &mut transcript,
+        &stage1,
+        &stage2,
+        &stage3,
+        &stage4,
+        &stage5,
+    )?;
+    let stage6b = stage6b::verify(
+        &checked,
+        preprocessing,
+        proof,
+        &formula_dimensions,
+        &mut transcript,
+        &stage1,
+        &stage2,
+        &stage3,
+        &stage4,
+        &stage5,
+        &stage6a,
+    )?;
+    let stage7 = stage7::verify(
+        &checked,
+        proof,
+        &formula_dimensions,
+        &mut transcript,
+        &stage4,
+        &stage6b,
+    )?;
+    let stage8 = stage8::verify(
+        &checked,
+        preprocessing,
+        proof,
+        &formula_dimensions,
+        trusted_advice_commitment,
+        &mut transcript,
+        &stage6b,
+        &stage7,
+    )?;
+
+    if checked.zk {
+        let blindfold = blindfold::build(BlindFoldInputs {
+            checked: &checked,
+            preprocessing,
+            proof,
+            stage1: stage1.zk()?,
+            stage2: stage2.zk()?,
+            stage3: stage3.zk()?,
+            stage4: stage4.zk()?,
+            stage5: stage5.zk()?,
+            stage6a: stage6a.zk()?,
+            stage6b: stage6b.zk()?,
+            stage7: stage7.zk()?,
+            stage8: stage8.zk()?,
+        })?;
+        let vc_setup = preprocessing
+            .vc_setup
+            .as_ref()
+            .ok_or(VerifierError::MissingVectorCommitmentSetup)?;
+        jolt_verifier_derive::fs_scope_guard!(BlindFold);
+
+        transcript.append(&Label(b"BlindFold"));
+        blindfold
+            .verify::<VC, T>(proof.blindfold_proof()?, vc_setup, &mut transcript)
+            .map_err(|error| VerifierError::BlindFoldVerificationFailed {
+                reason: error.to_string(),
+            })?;
+        return Ok(());
+    }
+
+    let stage8::Stage8Output::Clear(_) = stage8 else {
+        return Err(VerifierError::ExpectedClearProof { field: "stage8" });
+    };
+
+    Ok(())
+}
+
+/// The Akita verification path: the same stage spine, with the reconstruction
+/// phase producing auxiliary leaves, a random-selector opening of the
+/// prefix-packed OneHotTrace polynomial, and separate packed openings for
+/// auxiliary objects in place of the homomorphic RLC batch. No homomorphism
+/// bounds and no ZK tail.
+#[cfg(feature = "akita")]
+pub fn verify<F, PCS, VC, T>(
+    preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
+    public_io: &JoltDevice,
+    proof: &JoltProof<PCS, VC>,
+    trusted_advice_commitment: Option<&PCS::Output>,
+) -> Result<(), VerifierError>
+where
+    F: Field + AppendToTranscript,
+    PCS: CommitmentScheme<Field = F>,
+    PCS::Output: Clone + AppendToTranscript + stage8::OneHotTraceCommitmentMetadata,
+    PCS::VerifierSetup: stage8::OneHotTraceSetupMetadata,
+    VC: VectorCommitment<Field = F>,
+    VC::Output: Copy + AppendToTranscript,
+    T: Transcript<Challenge = F>,
+{
+    let (checked, mut transcript) = validate_and_seed_transcript::<PCS, VC, T, _>(
+        preprocessing,
+        public_io,
+        proof,
+        trusted_advice_commitment,
+    )?;
+
+    // Built once for the whole verification and shared by the stages that read
+    // the RA layout (5-8), instead of each rebuilding the same dimensions.
+    let formula_dimensions = crate::stages::build_formula_dimensions(
+        proof,
+        preprocessing,
+        &checked,
+        num::ilog2(checked.trace_length),
+        JoltRelationId::InstructionReadRaf,
+    )?;
+
+    let stage1 = stage1::verify(&checked, proof, &mut transcript)?;
+    let stage2 = stage2::verify(&checked, proof, &mut transcript, &stage1)?;
+    let stage3 = stage3::verify(&checked, proof, &mut transcript, &stage1, &stage2)?;
+    let stage4 = stage4::verify(
+        &checked,
+        preprocessing,
+        proof,
+        &mut transcript,
+        &stage2,
+        &stage3,
+    )?;
+    let stage5 = stage5::verify(
+        &checked,
+        proof,
+        &formula_dimensions,
+        &mut transcript,
+        &stage2,
+        &stage4,
+    )?;
+    let stage6a = stage6a::verify(
+        &checked,
+        preprocessing,
+        proof,
+        &formula_dimensions,
+        &mut transcript,
+        &stage1,
+        &stage2,
+        &stage3,
+        &stage4,
+        &stage5,
+    )?;
+    let stage6b = stage6b::verify(
+        &checked,
+        preprocessing,
+        proof,
+        &formula_dimensions,
+        &mut transcript,
+        &stage1,
+        &stage2,
+        &stage3,
+        &stage4,
+        &stage5,
+        &stage6a,
+    )?;
+    let stage7 = stage7::verify(
+        &checked,
+        proof,
+        &formula_dimensions,
+        &mut transcript,
+        &stage4,
+        &stage6b,
+    )?;
+    let stage8 = stage8::verify(
+        &checked,
+        preprocessing,
+        proof,
+        &formula_dimensions,
+        trusted_advice_commitment,
+        &mut transcript,
+        &stage6b,
+        &stage7,
+    )?;
+
+    let stage8::Stage8Output::Clear = stage8 else {
+        return Err(VerifierError::ExpectedClearProof { field: "stage8" });
+    };
+
+    Ok(())
+}
+
+/// Validates the inputs and proof shape, then seeds the Fiat-Shamir transcript
+/// with the preamble and commitment absorptions. Every consumer of the staged
+/// verification — [`verify`] on both builds, and the zk audit harness — starts
+/// here, so there is exactly one absorption order.
+pub fn validate_and_seed_transcript<PCS, VC, T, ZkProof>(
+    preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
+    public_io: &JoltDevice,
+    proof: &JoltProof<PCS, VC, ZkProof>,
+    trusted_advice_commitment: Option<&PCS::Output>,
+) -> Result<(CheckedInputs, T), VerifierError>
+where
+    PCS: CommitmentScheme,
+    PCS::Output: AppendToTranscript,
+    VC: VectorCommitment<Field = PCS::Field>,
+    VC::Output: AppendToTranscript,
+    T: Transcript<Challenge = PCS::Field>,
+{
+    let checked = validate_inputs(
+        preprocessing,
+        public_io,
+        proof,
+        trusted_advice_commitment.is_some(),
+    )?;
+    validate_proof_consistency(proof, checked.zk)?;
+    validate_proof_config(&JOLT_VERIFIER_CONFIG, proof.protocol)?;
+
+    let mut transcript = T::new(b"Jolt");
+    absorb_preamble(&checked, proof, &mut transcript);
+    absorb_commitments(
+        preprocessing,
+        proof,
+        trusted_advice_commitment,
+        &mut transcript,
+    );
+
+    Ok((checked, transcript))
+}
+
+#[expect(
+    non_snake_case,
+    reason = "Matches current jolt-prover-legacy proof field name."
+)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CheckedInputs {
+    pub public_io: JoltDevice,
+    pub zk: bool,
+    pub trace_length: usize,
+    pub ram_K: usize,
+    pub entry_address: u64,
+    pub preprocessing_digest: [u8; 32],
+    pub trusted_advice_commitment_present: bool,
+    pub vc_capacity: Option<usize>,
+    pub precommitted: PrecommittedSchedule,
+}
+
+pub fn validate_inputs<PCS, VC, ZkProof>(
+    preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
+    public_io: &JoltDevice,
+    proof: &JoltProof<PCS, VC, ZkProof>,
+    trusted_advice_commitment_present: bool,
+) -> Result<CheckedInputs, VerifierError>
+where
+    PCS: CommitmentScheme,
+    VC: VectorCommitment<Field = PCS::Field>,
+{
+    let trace_length = proof.trace_length;
+    let ram_k = proof.ram_K;
+    let trace_polynomial_order = proof.trace_polynomial_order;
+    let one_hot_config = proof.one_hot_config;
+    let untrusted_advice_commitment_present = proof.untrusted_advice_commitment.is_some();
+    // The zk axis is fixed at compile time; every branch below const-folds.
+    let zk = matches!(JOLT_VERIFIER_CONFIG.zk, ZkConfig::BlindFold);
+    let vc_capacity = if zk {
+        Some(validate_zk_vector_commitment_setup::<PCS, VC>(
+            preprocessing,
+        )?)
+    } else {
+        None
+    };
+    let program = &preprocessing.program;
+    let memory_layout = program.memory_layout();
+    if &public_io.memory_layout != memory_layout {
+        return Err(VerifierError::MemoryLayoutMismatch);
+    }
+    validate_ram_remap_base(memory_layout)?;
+
+    if num::u64_from_usize(public_io.inputs.len()) > memory_layout.max_input_size {
+        return Err(VerifierError::InputTooLarge {
+            got: public_io.inputs.len(),
+            // The failed comparison bounds the maximum below a usize length.
+            max: usize::try_from(memory_layout.max_input_size).unwrap_or(usize::MAX),
+        });
+    }
+
+    if num::u64_from_usize(public_io.outputs.len()) > memory_layout.max_output_size {
+        return Err(VerifierError::OutputTooLarge {
+            got: public_io.outputs.len(),
+            // The failed comparison bounds the maximum below a usize length.
+            max: usize::try_from(memory_layout.max_output_size).unwrap_or(usize::MAX),
+        });
+    }
+
+    if !trace_length.is_power_of_two() || trace_length > program.max_padded_trace_length() {
+        return Err(VerifierError::InvalidTraceLength {
+            got: trace_length,
+            max: program.max_padded_trace_length(),
+        });
+    }
+
+    let min_ram_k = compute_min_ram_k(
+        program.min_bytecode_address(),
+        program.program_image_len_words(),
+        memory_layout,
+    )
+    .map_err(|error| VerifierError::InvalidMemoryLayout {
+        reason: error.to_string(),
+    })?;
+    let max_ram_k =
+        compute_max_ram_k(memory_layout).map_err(|error| VerifierError::InvalidMemoryLayout {
+            reason: error.to_string(),
+        })?;
+    if !ram_k.is_power_of_two() || ram_k < min_ram_k || ram_k > max_ram_k {
+        return Err(VerifierError::InvalidRamK {
+            got: ram_k,
+            min: min_ram_k,
+            max: max_ram_k,
+        });
+    }
+
+    let mut normalized_public_io = public_io.clone();
+    normalized_public_io.outputs.truncate(
+        normalized_public_io
+            .outputs
+            .iter()
+            .rposition(|&byte| byte != 0)
+            .map_or(0, |position| position.saturating_add(1)),
+    );
+
+    let committed_program =
+        program
+            .committed()
+            .map(|committed| {
+                let meta = &committed.meta;
+                let program_image_start_index = memory_layout
+                    .remapped_word_address(meta.min_bytecode_address)
+                    .map_err(|error| VerifierError::InvalidCommittedProgram {
+                        reason: error.to_string(),
+                    })?;
+                if meta.entry_bytecode_index >= meta.bytecode_len {
+                    return Err(VerifierError::InvalidCommittedProgram {
+                        reason: format!(
+                            "entry bytecode index {} is out of range for bytecode length {}",
+                            meta.entry_bytecode_index, meta.bytecode_len
+                        ),
+                    });
+                }
+                let program_image_start_index = usize::try_from(program_image_start_index)
+                    .map_err(|_| VerifierError::InvalidCommittedProgram {
+                        reason: format!(
+                        "program image start index {program_image_start_index} does not fit usize"
+                    ),
+                    })?;
+                Ok(CommittedProgramSchedule {
+                    bytecode_len: meta.bytecode_len,
+                    bytecode_chunk_count: committed.bytecode_chunk_count(),
+                    program_image_len_words: meta.program_image_len_words,
+                    program_image_start_index,
+                })
+            })
+            .transpose()?;
+    let trusted_advice_size = trusted_advice_commitment_present
+        .then(|| advice_size_to_usize(memory_layout.max_trusted_advice_size, "trusted"))
+        .transpose()?;
+    let untrusted_advice_size = untrusted_advice_commitment_present
+        .then(|| advice_size_to_usize(memory_layout.max_untrusted_advice_size, "untrusted"))
+        .transpose()?;
+    let precommitted = PrecommittedSchedule::new(
+        trace_polynomial_order,
+        num::ilog2(trace_length),
+        one_hot_config.committed_chunk_bits(),
+        trusted_advice_size,
+        untrusted_advice_size,
+        committed_program,
+    )
+    .map_err(|error| VerifierError::InvalidPrecommittedSchedule {
+        reason: error.to_string(),
+    })?;
+
+    Ok(CheckedInputs {
+        public_io: normalized_public_io,
+        zk,
+        trace_length,
+        ram_K: ram_k,
+        entry_address: program.entry_address(),
+        preprocessing_digest: preprocessing.preprocessing_digest,
+        trusted_advice_commitment_present,
+        vc_capacity,
+        precommitted,
+    })
+}
+
+fn advice_size_to_usize(value: u64, kind: &'static str) -> Result<usize, VerifierError> {
+    usize::try_from(value).map_err(|_| VerifierError::InvalidMemoryLayout {
+        reason: format!("maximum {kind} advice size {value} does not fit usize"),
+    })
+}
+
+fn validate_zk_vector_commitment_setup<PCS, VC>(
+    preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
+) -> Result<usize, VerifierError>
+where
+    PCS: CommitmentScheme,
+    VC: VectorCommitment<Field = PCS::Field>,
+{
+    let setup = preprocessing
+        .vc_setup
+        .as_ref()
+        .ok_or(VerifierError::MissingVectorCommitmentSetup)?;
+    let required = common::constants::MAX_BLINDFOLD_GENERATORS;
+    let got = VC::capacity(setup);
+    if got < required {
+        return Err(VerifierError::InvalidVectorCommitmentCapacity { required, got });
+    }
+
+    Ok(got)
+}
+
+pub fn validate_proof_consistency<PCS, VC, ZkProof>(
+    proof: &JoltProof<PCS, VC, ZkProof>,
+    zk: bool,
+) -> Result<(), VerifierError>
+where
+    PCS: CommitmentScheme,
+    VC: VectorCommitment<Field = PCS::Field>,
+{
+    let stage_proofs = [
+        (
+            &proof.stages.stage1_uni_skip_first_round_proof,
+            "stage1_uni_skip_first_round_proof",
+        ),
+        (&proof.stages.stage1_sumcheck_proof, "stage1_sumcheck_proof"),
+        (
+            &proof.stages.stage2_uni_skip_first_round_proof,
+            "stage2_uni_skip_first_round_proof",
+        ),
+        (&proof.stages.stage2_sumcheck_proof, "stage2_sumcheck_proof"),
+        (&proof.stages.stage3_sumcheck_proof, "stage3_sumcheck_proof"),
+        (&proof.stages.stage4_sumcheck_proof, "stage4_sumcheck_proof"),
+        (&proof.stages.stage5_sumcheck_proof, "stage5_sumcheck_proof"),
+        (
+            &proof.stages.stage6a_sumcheck_proof,
+            "stage6a_sumcheck_proof",
+        ),
+        (
+            &proof.stages.stage6b_sumcheck_proof,
+            "stage6b_sumcheck_proof",
+        ),
+        (&proof.stages.stage7_sumcheck_proof, "stage7_sumcheck_proof"),
+    ];
+    for (stage_proof, field) in stage_proofs {
+        validate_sumcheck_representation(stage_proof, field, zk)?;
+    }
+    #[cfg(feature = "akita")]
+    if let Some(reconstruction) = proof.stages.reconstruction_sumcheck_proof.as_ref() {
+        validate_sumcheck_representation(reconstruction, "reconstruction_sumcheck_proof", zk)?;
+    }
+
+    match (&proof.claims, zk) {
+        (crate::proof::JoltProofClaims::Clear(_), false)
+        | (crate::proof::JoltProofClaims::Zk { .. }, true) => {}
+        (crate::proof::JoltProofClaims::Clear(_), true) => {
+            return Err(VerifierError::UnexpectedOpeningClaims);
+        }
+        (crate::proof::JoltProofClaims::Zk { .. }, false) => {
+            return Err(VerifierError::UnexpectedBlindFoldProof);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_sumcheck_representation<F, RoundCommitment>(
+    proof: &SumcheckProof<F, RoundCommitment>,
+    field: &'static str,
+    zk: bool,
+) -> Result<(), VerifierError>
+where
+    F: Field,
+{
+    if proof.is_committed() == zk {
+        return Ok(());
+    }
+
+    if zk {
+        Err(VerifierError::ExpectedCommittedProof { field })
+    } else {
+        Err(VerifierError::ExpectedClearProof { field })
+    }
+}
+
+/// Absorbs the Jolt Fiat-Shamir preamble: the preprocessing digest, public I/O
+/// metadata, and the proof-derived structural parameters. WARNING: the byte
+/// order here is consensus-critical — the prover's preamble must absorb
+/// identically or the transcripts diverge.
+#[jolt_verifier_derive::fs_scope(Preamble)]
+pub(crate) fn absorb_preamble<PCS, VC, ZkProof, T>(
+    checked: &CheckedInputs,
+    proof: &JoltProof<PCS, VC, ZkProof>,
+    transcript: &mut T,
+) where
+    PCS: CommitmentScheme,
+    VC: VectorCommitment<Field = PCS::Field>,
+    T: Transcript<Challenge = PCS::Field>,
+{
+    let public_io = &checked.public_io;
+    absorb_labeled_bytes(
+        transcript,
+        b"preprocessing_digest",
+        &checked.preprocessing_digest,
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"max_input_size",
+        public_io.memory_layout.max_input_size,
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"max_output_size",
+        public_io.memory_layout.max_output_size,
+    );
+    absorb_labeled_u64(transcript, b"heap_size", public_io.memory_layout.heap_size);
+    absorb_labeled_bytes(transcript, b"inputs", &public_io.inputs);
+    absorb_labeled_bytes(transcript, b"outputs", &public_io.outputs);
+    absorb_labeled_u64(transcript, b"panic", u64::from(public_io.panic));
+    absorb_labeled_u64(transcript, b"ram_K", num::u64_from_usize(checked.ram_K));
+    absorb_labeled_u64(
+        transcript,
+        b"trace_length",
+        num::u64_from_usize(checked.trace_length),
+    );
+    absorb_labeled_u64(transcript, b"entry_address", checked.entry_address);
+    absorb_labeled_u64(
+        transcript,
+        b"ram_rw_phase1_num_rounds",
+        u64::from(proof.rw_config.ram_rw_phase1_num_rounds),
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"ram_rw_phase2_num_rounds",
+        u64::from(proof.rw_config.ram_rw_phase2_num_rounds),
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"registers_rw_phase1_num_rounds",
+        u64::from(proof.rw_config.registers_rw_phase1_num_rounds),
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"registers_rw_phase2_num_rounds",
+        u64::from(proof.rw_config.registers_rw_phase2_num_rounds),
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"log_k_chunk",
+        u64::from(proof.one_hot_config.log_k_chunk),
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"lookups_ra_virtual_log_k_chunk",
+        u64::from(proof.one_hot_config.lookups_ra_virtual_log_k_chunk),
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"dory_layout",
+        proof.trace_polynomial_order.transcript_scalar(),
+    );
+}
+
+/// Absorbs the commitments in the consensus-critical order — the proof-carried
+/// polynomial commitments, the optional advice commitments, then the committed
+/// program's preprocessing-held commitments. WARNING: the prover must absorb
+/// identically or the transcripts diverge. On the `akita` build the order is
+/// the canonical commitment-object order: `OneHotTrace`, untrusted advice, trusted
+/// advice, `ProgramOneHot`.
+#[jolt_verifier_derive::fs_scope(Commitments)]
+pub(crate) fn absorb_commitments<PCS, VC, ZkProof, T>(
+    preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
+    proof: &JoltProof<PCS, VC, ZkProof>,
+    trusted_advice_commitment: Option<&PCS::Output>,
+    transcript: &mut T,
+) where
+    PCS: CommitmentScheme,
+    PCS::Output: AppendToTranscript,
+    VC: VectorCommitment<Field = PCS::Field>,
+    T: Transcript<Challenge = PCS::Field>,
+{
+    #[cfg(not(feature = "akita"))]
+    {
+        absorb_transcript_commitments(
+            &proof.commitments,
+            proof.untrusted_advice_commitment.as_ref(),
+            trusted_advice_commitment,
+            transcript,
+        );
+        if let Some(committed) = preprocessing.program.committed() {
+            absorb_committed_program_commitments(
+                &committed.bytecode_chunk_commitments,
+                &committed.program_image_commitment,
+                transcript,
+            );
+        }
+    }
+    #[cfg(feature = "akita")]
+    {
+        append_length_prefixed(transcript, b"commitment", &proof.commitments);
+        if let Some(commitment) = proof.untrusted_advice_commitment.as_ref() {
+            append_length_prefixed(transcript, b"untrusted_advice", commitment);
+        }
+        if let Some(commitment) = trusted_advice_commitment {
+            append_length_prefixed(transcript, b"trusted_advice", commitment);
+        }
+        if let Some(committed) = preprocessing.program.committed() {
+            absorb_packed_program_commitments(&committed.program_one_hot_commitments, transcript);
+        }
+    }
+}
+
+#[cfg(feature = "akita")]
+pub fn absorb_packed_program_commitments<C, T>(commitments: &[C], transcript: &mut T)
+where
+    C: AppendToTranscript,
+    T: Transcript,
+{
+    for commitment in commitments {
+        append_length_prefixed(transcript, b"program_one_hot_commitment", commitment);
+    }
+}
+
+/// Absorbs the preprocessing-held committed-program commitments (per-chunk
+/// bytecode, then the program image), immediately after the proof-carried
+/// commitments. Shared verbatim by the prover's stage 0.
+pub fn absorb_committed_program_commitments<C, T>(
+    bytecode_chunk_commitments: &[C],
+    program_image_commitment: &C,
+    transcript: &mut T,
+) where
+    C: AppendToTranscript,
+    T: Transcript,
+{
+    for commitment in bytecode_chunk_commitments {
+        append_payload_label(transcript, b"bytecode_chunk_commit", commitment);
+        transcript.append(commitment);
+    }
+    append_payload_label(
+        transcript,
+        b"program_image_commitment",
+        program_image_commitment,
+    );
+    transcript.append(program_image_commitment);
+}
+
+/// Absorbs the proof-derived polynomial commitments (increment, one-hot `ra`,
+/// and optional advice commitments) in the consensus-critical order. WARNING:
+/// this covers only the commitments carried by the proof itself; committed
+/// program-image commitments live in the preprocessing and are absorbed
+/// separately by [`absorb_commitments`] immediately after this call.
+#[cfg(not(feature = "akita"))]
+pub fn absorb_transcript_commitments<C, T>(
+    commitments: &JoltCommitments<C>,
+    untrusted_advice_commitment: Option<&C>,
+    trusted_advice_commitment: Option<&C>,
+    transcript: &mut T,
+) where
+    C: AppendToTranscript,
+    T: Transcript,
+{
+    let mut absorb_commitment = |commitment: &C| {
+        append_payload_label(transcript, b"commitment", commitment);
+        transcript.append(commitment);
+    };
+    absorb_commitment(&commitments.rd_inc);
+    absorb_commitment(&commitments.ram_inc);
+    for commitment in &commitments.instruction_ra {
+        absorb_commitment(commitment);
+    }
+    for commitment in &commitments.ram_ra {
+        absorb_commitment(commitment);
+    }
+    for commitment in &commitments.bytecode_ra {
+        absorb_commitment(commitment);
+    }
+    if let Some(untrusted_advice_commitment) = untrusted_advice_commitment {
+        append_payload_label(transcript, b"untrusted_advice", untrusted_advice_commitment);
+        transcript.append(untrusted_advice_commitment);
+    }
+    if let Some(trusted_advice_commitment) = trusted_advice_commitment {
+        append_payload_label(transcript, b"trusted_advice", trusted_advice_commitment);
+        transcript.append(trusted_advice_commitment);
+    }
+}
+
+fn append_payload_label<T, A>(transcript: &mut T, label: &'static [u8], payload: &A)
+where
+    T: Transcript,
+    A: AppendToTranscript,
+{
+    if let Some(len) = payload.transcript_payload_len() {
+        transcript.append(&LabelWithCount(label, len));
+    } else {
+        transcript.append(&Label(label));
+    }
+}
+
+/// Proof-derived configuration that participates in the Fiat-Shamir preamble.
+/// Bundles the parameters [`absorb_transcript_preamble`] reads from the proof so
+/// the modular prover can seed an identical transcript before it has a finished
+/// [`JoltProof`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProofTranscriptConfig {
+    pub rw_config: JoltReadWriteConfig,
+    pub one_hot_config: JoltOneHotConfig,
+    pub trace_polynomial_order: TracePolynomialOrder,
+}
+
+/// Verifier state captured immediately before stage 1, after input validation
+/// and the preamble/commitment absorption. The modular prover drives the staged
+/// verification itself, so it reuses this entry point to obtain the checked
+/// inputs and a transcript seeded identically to [`verify`].
+#[derive(Debug)]
+pub struct PreStage1VerifierState<T> {
+    pub checked: CheckedInputs,
+    pub transcript: T,
+}
+
+/// Absorbs the Jolt Fiat-Shamir preamble: the preprocessing digest, public I/O
+/// metadata, and the proof-derived structural parameters carried by
+/// [`ProofTranscriptConfig`]. WARNING: the byte order here is consensus-critical
+/// — it must stay identical to the order [`verify`] uses (via [`absorb_preamble`])
+/// or prover and verifier transcripts diverge.
+pub fn absorb_transcript_preamble<T>(
+    checked: &CheckedInputs,
+    config: ProofTranscriptConfig,
+    transcript: &mut T,
+) where
+    T: Transcript,
+{
+    let public_io = &checked.public_io;
+    absorb_labeled_bytes(
+        transcript,
+        b"preprocessing_digest",
+        &checked.preprocessing_digest,
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"max_input_size",
+        public_io.memory_layout.max_input_size,
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"max_output_size",
+        public_io.memory_layout.max_output_size,
+    );
+    absorb_labeled_u64(transcript, b"heap_size", public_io.memory_layout.heap_size);
+    absorb_labeled_bytes(transcript, b"inputs", &public_io.inputs);
+    absorb_labeled_bytes(transcript, b"outputs", &public_io.outputs);
+    absorb_labeled_u64(transcript, b"panic", u64::from(public_io.panic));
+    absorb_labeled_u64(transcript, b"ram_K", num::u64_from_usize(checked.ram_K));
+    absorb_labeled_u64(
+        transcript,
+        b"trace_length",
+        num::u64_from_usize(checked.trace_length),
+    );
+    absorb_labeled_u64(transcript, b"entry_address", checked.entry_address);
+    absorb_labeled_u64(
+        transcript,
+        b"ram_rw_phase1_num_rounds",
+        u64::from(config.rw_config.ram_rw_phase1_num_rounds),
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"ram_rw_phase2_num_rounds",
+        u64::from(config.rw_config.ram_rw_phase2_num_rounds),
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"registers_rw_phase1_num_rounds",
+        u64::from(config.rw_config.registers_rw_phase1_num_rounds),
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"registers_rw_phase2_num_rounds",
+        u64::from(config.rw_config.registers_rw_phase2_num_rounds),
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"log_k_chunk",
+        u64::from(config.one_hot_config.log_k_chunk),
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"lookups_ra_virtual_log_k_chunk",
+        u64::from(config.one_hot_config.lookups_ra_virtual_log_k_chunk),
+    );
+    absorb_labeled_u64(
+        transcript,
+        b"dory_layout",
+        config.trace_polynomial_order.transcript_scalar(),
+    );
+}
+
+/// Fail closed on a zero-based RAM remap. Stage 2's RAF-evaluation unmap is
+/// `8k + lowest_address`, and the lattice digit-zero reconstruction relies on
+/// `unmap(0) = lowest_address ≠ 0` to distinguish "no RAM access" from an
+/// access at remapped word zero (see "Where the RAM activation is pinned" in
+/// `specs/lattice-claims.md`). Mirrors the prover-side
+/// `UnmapRamAddressPolynomial::new` assertion (`start_address > 8`).
+fn validate_ram_remap_base(
+    memory_layout: &common::jolt_device::MemoryLayout,
+) -> Result<(), VerifierError> {
+    let lowest_address = memory_layout.get_lowest_address();
+    if lowest_address <= 8 {
+        return Err(VerifierError::InvalidMemoryLayout {
+            reason: format!(
+                "lowest remapped RAM address {lowest_address:#x} must exceed 8 so the RAF \
+                 unmap constant stays clear of the null-address range"
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Mirrors the proof-derived inputs validate_inputs threads through; bundling them would obscure the FS-critical parameter set."
+)]
+pub fn validate_inputs_from_parts<PCS, VC>(
+    preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
+    public_io: &JoltDevice,
+    trace_length: usize,
+    ram_k: usize,
+    trace_polynomial_order: TracePolynomialOrder,
+    one_hot_config: JoltOneHotConfig,
+    trusted_advice_commitment_present: bool,
+    untrusted_advice_commitment_present: bool,
+    zk: bool,
+) -> Result<CheckedInputs, VerifierError>
+where
+    PCS: CommitmentScheme,
+    VC: VectorCommitment<Field = PCS::Field>,
+{
+    let memory_layout = preprocessing.program.memory_layout();
+    if &public_io.memory_layout != memory_layout {
+        return Err(VerifierError::MemoryLayoutMismatch);
+    }
+    validate_ram_remap_base(memory_layout)?;
+
+    if num::u64_from_usize(public_io.inputs.len()) > memory_layout.max_input_size {
+        return Err(VerifierError::InputTooLarge {
+            got: public_io.inputs.len(),
+            // The failed comparison bounds the maximum below a usize length.
+            max: usize::try_from(memory_layout.max_input_size).unwrap_or(usize::MAX),
+        });
+    }
+
+    if num::u64_from_usize(public_io.outputs.len()) > memory_layout.max_output_size {
+        return Err(VerifierError::OutputTooLarge {
+            got: public_io.outputs.len(),
+            // The failed comparison bounds the maximum below a usize length.
+            max: usize::try_from(memory_layout.max_output_size).unwrap_or(usize::MAX),
+        });
+    }
+
+    if !trace_length.is_power_of_two()
+        || trace_length > preprocessing.program.max_padded_trace_length()
+    {
+        return Err(VerifierError::InvalidTraceLength {
+            got: trace_length,
+            max: preprocessing.program.max_padded_trace_length(),
+        });
+    }
+
+    let min_ram_k = compute_min_ram_k(
+        preprocessing.program.min_bytecode_address(),
+        preprocessing.program.program_image_len_words(),
+        memory_layout,
+    )
+    .map_err(|error| VerifierError::InvalidMemoryLayout {
+        reason: error.to_string(),
+    })?;
+    let max_ram_k =
+        compute_max_ram_k(memory_layout).map_err(|error| VerifierError::InvalidMemoryLayout {
+            reason: error.to_string(),
+        })?;
+    if !ram_k.is_power_of_two() || ram_k < min_ram_k || ram_k > max_ram_k {
+        return Err(VerifierError::InvalidRamK {
+            got: ram_k,
+            min: min_ram_k,
+            max: max_ram_k,
+        });
+    }
+
+    let vc_capacity = if zk {
+        Some(validate_zk_vector_commitment_setup::<PCS, VC>(
+            preprocessing,
+        )?)
+    } else {
+        None
+    };
+
+    let mut normalized_public_io = public_io.clone();
+    normalized_public_io.outputs.truncate(
+        normalized_public_io
+            .outputs
+            .iter()
+            .rposition(|&byte| byte != 0)
+            .map_or(0, |position| position.saturating_add(1)),
+    );
+
+    let committed_program =
+        preprocessing
+            .program
+            .committed()
+            .map(|committed| {
+                let program_image_start_index = memory_layout
+                    .remapped_word_address(committed.meta.min_bytecode_address)
+                    .map_err(|error| VerifierError::InvalidCommittedProgram {
+                        reason: error.to_string(),
+                    })?;
+                if committed.meta.entry_bytecode_index >= committed.meta.bytecode_len {
+                    return Err(VerifierError::InvalidCommittedProgram {
+                        reason: format!(
+                            "entry bytecode index {} is out of range for bytecode length {}",
+                            committed.meta.entry_bytecode_index, committed.meta.bytecode_len
+                        ),
+                    });
+                }
+                let program_image_start_index = usize::try_from(program_image_start_index)
+                    .map_err(|_| VerifierError::InvalidCommittedProgram {
+                        reason: format!(
+                        "program image start index {program_image_start_index} does not fit usize"
+                    ),
+                    })?;
+                Ok(CommittedProgramSchedule {
+                    bytecode_len: committed.meta.bytecode_len,
+                    bytecode_chunk_count: committed.bytecode_chunk_count(),
+                    program_image_len_words: committed.meta.program_image_len_words,
+                    program_image_start_index,
+                })
+            })
+            .transpose()?;
+    let trusted_advice_size = trusted_advice_commitment_present
+        .then(|| advice_size_to_usize(memory_layout.max_trusted_advice_size, "trusted"))
+        .transpose()?;
+    let untrusted_advice_size = untrusted_advice_commitment_present
+        .then(|| advice_size_to_usize(memory_layout.max_untrusted_advice_size, "untrusted"))
+        .transpose()?;
+    let precommitted = PrecommittedSchedule::new(
+        trace_polynomial_order,
+        num::ilog2(trace_length),
+        one_hot_config.committed_chunk_bits(),
+        trusted_advice_size,
+        untrusted_advice_size,
+        committed_program,
+    )
+    .map_err(|error| VerifierError::InvalidPrecommittedSchedule {
+        reason: error.to_string(),
+    })?;
+
+    Ok(CheckedInputs {
+        public_io: normalized_public_io,
+        zk,
+        trace_length,
+        ram_K: ram_k,
+        entry_address: preprocessing.program.entry_address(),
+        preprocessing_digest: preprocessing.preprocessing_digest,
+        trusted_advice_commitment_present,
+        vc_capacity,
+        precommitted,
+    })
+}
+
+/// Runs the [`verify`] preamble — input validation, proof-consistency and
+/// config checks, then preamble + commitment absorption — and returns the
+/// pre-stage-1 state. [`verify`] delegates to this function, so both paths share
+/// one absorption order and cannot diverge.
+pub fn verify_until_stage1<PCS, VC, T, ZkProof>(
+    preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
+    public_io: &JoltDevice,
+    proof: &JoltProof<PCS, VC, ZkProof>,
+    trusted_advice_commitment: Option<&PCS::Output>,
+) -> Result<PreStage1VerifierState<T>, VerifierError>
+where
+    PCS: CommitmentScheme,
+    PCS::Output: AppendToTranscript,
+    VC: VectorCommitment<Field = PCS::Field>,
+    VC::Output: AppendToTranscript,
+    T: Transcript<Challenge = PCS::Field>,
+{
+    let checked = validate_inputs(
+        preprocessing,
+        public_io,
+        proof,
+        trusted_advice_commitment.is_some(),
+    )?;
+    validate_proof_consistency(proof, checked.zk)?;
+    validate_proof_config(&JoltProtocolConfig::for_zk(checked.zk), proof.protocol)?;
+
+    let mut transcript = T::new(b"Jolt");
+    absorb_preamble(&checked, proof, &mut transcript);
+    absorb_commitments(
+        preprocessing,
+        proof,
+        trusted_advice_commitment,
+        &mut transcript,
+    );
+
+    Ok(PreStage1VerifierState {
+        checked,
+        transcript,
+    })
+}
+
+fn absorb_labeled_bytes<T: Transcript>(transcript: &mut T, label: &'static [u8], bytes: &[u8]) {
+    transcript.append(&LabelWithCount(label, num::u64_from_usize(bytes.len())));
+    transcript.append_bytes(bytes);
+}
+
+fn absorb_labeled_u64<T: Transcript>(transcript: &mut T, label: &'static [u8], value: u64) {
+    transcript.append(&Label(label));
+    transcript.append(&U64Word(value));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::proof::{ClearProofClaims, JoltProofClaims, JoltStageProofs};
+    use common::jolt_device::{JoltDevice, MemoryConfig};
+    use jolt_claims::protocols::jolt::{JoltOneHotConfig, JoltReadWriteConfig};
+    #[cfg(feature = "zk")]
+    use jolt_crypto::PedersenSetup;
+    use jolt_crypto::{Bn254G1, Commitment, Pedersen, VectorCommitmentOpening};
+    use jolt_field::Fr;
+    use jolt_openings::{CommitmentScheme, OpeningsError};
+    use jolt_poly::MultilinearPoly;
+    use jolt_program::preprocess::{
+        BytecodePreprocessing, JoltProgramPreprocessing, RAMPreprocessing,
+    };
+    use jolt_sumcheck::{
+        ClearProof, ClearSumcheckProof, CommittedSumcheckProof, CompressedSumcheckProof,
+    };
+    use jolt_transcript::Transcript;
+    use num_traits::Zero;
+
+    use crate::preprocessing::ProgramPreprocessing;
+
+    #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    struct TestPcs;
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    struct TestCommitment;
+
+    impl Commitment for TestPcs {
+        type Output = TestCommitment;
+    }
+
+    impl CommitmentScheme for TestPcs {
+        type Field = Fr;
+        type Proof = ();
+        type ProverSetup = ();
+        type VerifierSetup = ();
+        type OpeningHint = ();
+        type SetupParams = ();
+
+        fn setup(
+            _params: Self::SetupParams,
+        ) -> Result<(Self::ProverSetup, Self::VerifierSetup), OpeningsError> {
+            Ok(((), ()))
+        }
+
+        fn verifier_setup(_prover_setup: &Self::ProverSetup) -> Self::VerifierSetup {}
+
+        fn commit<P: MultilinearPoly<Self::Field> + ?Sized>(
+            _poly: &P,
+            _setup: &Self::ProverSetup,
+        ) -> Result<(Self::Output, Self::OpeningHint), OpeningsError> {
+            Ok((TestCommitment, ()))
+        }
+
+        fn open<P: MultilinearPoly<Self::Field> + ?Sized>(
+            _poly: &P,
+            _point: &[Self::Field],
+            _eval: Self::Field,
+            _setup: &Self::ProverSetup,
+            _hint: Option<Self::OpeningHint>,
+            _transcript: &mut impl Transcript<Challenge = Self::Field>,
+        ) -> Result<Self::Proof, OpeningsError> {
+            Ok(())
+        }
+
+        fn verify(
+            _commitment: &Self::Output,
+            _point: &[Self::Field],
+            _eval: Self::Field,
+            _proof: &Self::Proof,
+            _setup: &Self::VerifierSetup,
+            _transcript: &mut impl Transcript<Challenge = Self::Field>,
+        ) -> Result<(), OpeningsError> {
+            Ok(())
+        }
+    }
+
+    impl jolt_transcript::AppendToTranscript for TestCommitment {
+        fn append_to_transcript<T: Transcript>(&self, _transcript: &mut T) {}
+    }
+
+    type TestProof = JoltProof<TestPcs, Pedersen<Bn254G1>>;
+    type TestClaims = JoltProofClaims<Fr, jolt_blindfold::BlindFoldProof<Fr, Bn254G1>>;
+
+    #[test]
+    fn proof_wrapper_uses_modular_trait_bounds() {
+        fn assert_proof_traits<T>()
+        where
+            T: Clone
+                + std::fmt::Debug
+                + PartialEq
+                + Eq
+                + Send
+                + Sync
+                + 'static
+                + serde::Serialize
+                + serde::de::DeserializeOwned,
+        {
+        }
+
+        assert_proof_traits::<TestProof>();
+    }
+
+    #[test]
+    fn accepts_standard_proof_consistency() {
+        let proof = proof_with_zk(false, clear_claims());
+
+        assert!(validate_proof_consistency(&proof, false).is_ok());
+    }
+
+    /// A zk proof cannot exist on the akita build (`zk` and `akita` are
+    /// mutually exclusive), so the accept case is base-only; the reject cases
+    /// below run on both builds.
+    #[cfg(not(feature = "akita"))]
+    #[test]
+    fn accepts_zk_proof_consistency() {
+        let proof = proof_with_zk(true, zk_claims());
+
+        assert!(validate_proof_consistency(&proof, true).is_ok());
+    }
+
+    #[test]
+    fn rejects_wrong_stage_representation() {
+        let mut proof = proof_with_zk(false, clear_claims());
+        proof.stages.stage5_sumcheck_proof =
+            SumcheckProof::Committed(CommittedSumcheckProof::default());
+
+        assert!(matches!(
+            validate_proof_consistency(&proof, false),
+            Err(VerifierError::ExpectedClearProof {
+                field: "stage5_sumcheck_proof",
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_wrong_verifier_zk_flag() {
+        let proof = proof_with_zk(false, clear_claims());
+
+        assert!(matches!(
+            validate_proof_consistency(&proof, true),
+            Err(VerifierError::ExpectedCommittedProof {
+                field: "stage1_uni_skip_first_round_proof",
+            })
+        ));
+    }
+
+    #[test]
+    fn checks_payload_for_selected_zk_flag() {
+        assert!(matches!(
+            validate_proof_consistency(&proof_with_zk(false, zk_claims()), false),
+            Err(VerifierError::UnexpectedBlindFoldProof)
+        ));
+        assert!(matches!(
+            validate_proof_consistency(&proof_with_zk(true, clear_claims()), true),
+            Err(VerifierError::UnexpectedOpeningClaims)
+        ));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn validate_inputs_normalizes_public_output() {
+        let preprocessing = test_preprocessing();
+        let mut public_io = JoltDevice {
+            memory_layout: preprocessing.program.memory_layout().clone(),
+            inputs: vec![1, 2],
+            outputs: vec![3, 0, 0],
+            ..JoltDevice::default()
+        };
+        let proof = proof_with_zk(false, clear_claims());
+
+        let checked = validate_inputs(&preprocessing, &public_io, &proof, false).unwrap();
+
+        assert_eq!(checked.public_io.inputs, vec![1, 2]);
+        assert_eq!(checked.public_io.outputs, vec![3]);
+        assert_eq!(checked.trace_length, proof.trace_length);
+        assert_eq!(checked.ram_K, proof.ram_K);
+
+        public_io.outputs = vec![0, 0];
+        let checked = validate_inputs(&preprocessing, &public_io, &proof, false).unwrap();
+        assert!(checked.public_io.outputs.is_empty());
+    }
+
+    #[test]
+    fn validate_inputs_rejects_public_io_layout_mismatch() {
+        let preprocessing = test_preprocessing();
+        let public_io = JoltDevice::default();
+        let proof = proof_with_zk(false, clear_claims());
+
+        assert!(matches!(
+            validate_inputs(&preprocessing, &public_io, &proof, false),
+            Err(VerifierError::MemoryLayoutMismatch)
+        ));
+    }
+
+    #[test]
+    fn validate_inputs_rejects_zero_based_ram_remap() {
+        let mut memory_layout = test_memory_layout();
+        // A layout whose remap is zero-based: `unmap(0) = lowest_address = 0`
+        // would make the RAF identity blind to digit zero.
+        memory_layout.trusted_advice_start = 0;
+        memory_layout.untrusted_advice_start = 0;
+        let preprocessing = test_preprocessing_with_layout(memory_layout);
+        let public_io = JoltDevice {
+            memory_layout: preprocessing.program.memory_layout().clone(),
+            ..JoltDevice::default()
+        };
+        let proof = proof_with_zk(false, clear_claims());
+
+        assert!(matches!(
+            validate_inputs(&preprocessing, &public_io, &proof, false),
+            Err(VerifierError::InvalidMemoryLayout { reason })
+                if reason.contains("lowest remapped RAM address")
+        ));
+    }
+
+    #[test]
+    fn validate_inputs_rejects_ram_domain_below_layout_minimum() {
+        let preprocessing = test_preprocessing();
+        let public_io = JoltDevice {
+            memory_layout: preprocessing.program.memory_layout().clone(),
+            ..JoltDevice::default()
+        };
+        let mut proof = proof_with_zk(false, clear_claims());
+        proof.ram_K = 2;
+
+        assert!(matches!(
+            validate_inputs(&preprocessing, &public_io, &proof, false),
+            Err(VerifierError::InvalidRamK { got: 2, min: 4, .. })
+        ));
+    }
+
+    #[test]
+    fn validate_inputs_rejects_ram_domain_above_layout_maximum() {
+        let preprocessing = test_preprocessing();
+        let public_io = JoltDevice {
+            memory_layout: preprocessing.program.memory_layout().clone(),
+            ..JoltDevice::default()
+        };
+        let mut proof = proof_with_zk(false, clear_claims());
+        proof.ram_K = 1 << 20;
+
+        assert!(matches!(
+            validate_inputs(&preprocessing, &public_io, &proof, false),
+            Err(VerifierError::InvalidRamK {
+                got,
+                min: 4,
+                max,
+            }) if got == 1 << 20 && max < got
+        ));
+    }
+
+    #[cfg(feature = "zk")]
+    #[test]
+    fn validate_inputs_rejects_missing_zk_vector_commitment_setup() {
+        let mut preprocessing = test_preprocessing();
+        preprocessing.vc_setup = None;
+        let public_io = JoltDevice {
+            memory_layout: preprocessing.program.memory_layout().clone(),
+            ..JoltDevice::default()
+        };
+        let proof = proof_with_zk(true, zk_claims());
+
+        assert!(matches!(
+            validate_inputs(&preprocessing, &public_io, &proof, false),
+            Err(VerifierError::MissingVectorCommitmentSetup)
+        ));
+    }
+
+    #[cfg(feature = "zk")]
+    #[test]
+    fn validate_inputs_rejects_small_zk_vector_commitment_setup() {
+        let mut preprocessing = test_preprocessing();
+        preprocessing.vc_setup = Some(PedersenSetup::new(
+            vec![Bn254G1::default()],
+            Bn254G1::default(),
+        ));
+        let public_io = JoltDevice {
+            memory_layout: preprocessing.program.memory_layout().clone(),
+            ..JoltDevice::default()
+        };
+        let proof = proof_with_zk(true, zk_claims());
+
+        assert!(matches!(
+            validate_inputs(&preprocessing, &public_io, &proof, false),
+            Err(VerifierError::InvalidVectorCommitmentCapacity { got: 1, .. })
+        ));
+    }
+
+    fn proof_with_zk(is_zk: bool, claims: TestClaims) -> TestProof {
+        JoltProof {
+            protocol: crate::config::JoltProtocolConfig::for_zk(claims.is_zk()),
+            #[cfg(not(feature = "akita"))]
+            commitments: test_commitments(),
+            #[cfg(feature = "akita")]
+            commitments: TestCommitment,
+            stages: stage_proofs(is_zk),
+            #[cfg(not(feature = "akita"))]
+            joint_opening_proof: (),
+            #[cfg(feature = "akita")]
+            joint_opening_proof: crate::proof::AkitaJointOpeningProof::new((), Vec::new()),
+            untrusted_advice_commitment: None,
+            claims,
+            trace_length: 1,
+            ram_K: 4,
+            rw_config: JoltReadWriteConfig {
+                ram_rw_phase1_num_rounds: 0,
+                ram_rw_phase2_num_rounds: 0,
+                registers_rw_phase1_num_rounds: 0,
+                registers_rw_phase2_num_rounds: 0,
+            },
+            one_hot_config: JoltOneHotConfig {
+                log_k_chunk: 0,
+                lookups_ra_virtual_log_k_chunk: 0,
+            },
+            trace_polynomial_order: crate::proof::TracePolynomialOrder::CycleMajor,
+        }
+    }
+
+    #[cfg(not(feature = "akita"))]
+    fn test_commitments() -> crate::proof::JoltCommitments<TestCommitment> {
+        crate::proof::JoltCommitments::new(
+            TestCommitment,
+            TestCommitment,
+            Vec::<TestCommitment>::new(),
+            Vec::<TestCommitment>::new(),
+            Vec::<TestCommitment>::new(),
+        )
+    }
+
+    fn clear_claims() -> TestClaims {
+        let zero = Fr::zero();
+
+        JoltProofClaims::Clear(ClearProofClaims {
+            stage1: stage1::outputs::Stage1OutputClaims {
+                uniskip_output_claim: zero,
+                outer: empty_spartan_outer_claims(),
+            },
+            #[cfg(feature = "akita")]
+            reconstruction: crate::stages::stage8::reconstruction::ReconstructionOutputClaims {
+                untrusted_advice: None,
+                trusted_advice: None,
+                bytecode: None,
+                program_image: None,
+            },
+            stage2: stage2::outputs::Stage2OutputClaims {
+                product_uniskip_output_claim: zero,
+                batch_outputs: stage2::outputs::Stage2BatchOutputClaims {
+                    ram_read_write: stage2::outputs::RamReadWriteOutputClaims {
+                        val: zero,
+                        ra: zero,
+                        inc: zero,
+                    },
+                    product_remainder: stage2::outputs::ProductRemainderOutputClaims {
+                        left_instruction_input: zero,
+                        right_instruction_input: zero,
+                        jump_flag: zero,
+                        write_lookup_output_to_rd: zero,
+                        lookup_output: zero,
+                        branch_flag: zero,
+                        next_is_noop: zero,
+                        virtual_instruction: zero,
+                    },
+                    instruction_claim_reduction:
+                        stage2::outputs::InstructionClaimReductionOutputClaims {
+                            lookup_output: zero,
+                            left_lookup_operand: zero,
+                            right_lookup_operand: zero,
+                            left_instruction_input: zero,
+                            right_instruction_input: zero,
+                        },
+                    ram_raf_evaluation: stage2::outputs::RamRafEvaluationOutputClaims {
+                        ram_ra: zero,
+                    },
+                    ram_output_check: stage2::outputs::RamOutputCheckOutputClaims {
+                        val_final: zero,
+                    },
+                },
+            },
+            stage3: stage3::outputs::Stage3OutputClaims {
+                shift: stage3::outputs::SpartanShiftOutputClaims {
+                    unexpanded_pc: zero,
+                    pc: zero,
+                    is_virtual: zero,
+                    is_first_in_sequence: zero,
+                    is_noop: zero,
+                },
+                instruction_input: stage3::outputs::InstructionInputOutputClaims {
+                    left_operand_is_rs1: zero,
+                    rs1_value: zero,
+                    left_operand_is_pc: zero,
+                    unexpanded_pc: zero,
+                    right_operand_is_rs2: zero,
+                    rs2_value: zero,
+                    right_operand_is_imm: zero,
+                    imm: zero,
+                },
+                registers_claim_reduction: stage3::outputs::RegistersClaimReductionOutputClaims {
+                    rd_write_value: zero,
+                    rs1_value: zero,
+                    rs2_value: zero,
+                },
+            },
+            stage4: stage4::outputs::Stage4OutputClaims {
+                registers_read_write: stage4::RegistersReadWriteOutputClaims {
+                    registers_val: zero,
+                    rs1_ra: zero,
+                    rs2_ra: zero,
+                    rd_wa: zero,
+                    rd_inc: zero,
+                },
+                ram_val_check: stage4::RamValCheckOutputClaims {
+                    untrusted_advice: None,
+                    trusted_advice: None,
+                    program_image: None,
+                    ram_ra: zero,
+                    ram_inc: zero,
+                },
+            },
+            stage5: stage5::outputs::Stage5OutputClaims {
+                instruction_read_raf: stage5::InstructionReadRafOutputClaims {
+                    lookup_table_flags: Vec::new(),
+                    instruction_ra: Vec::new(),
+                    instruction_raf_flag: zero,
+                },
+                ram_ra_claim_reduction: stage5::RamRaClaimReductionOutputClaims { ram_ra: zero },
+                registers_val_evaluation: stage5::RegistersValEvaluationOutputClaims {
+                    rd_inc: zero,
+                    rd_wa: zero,
+                },
+            },
+            stage6a: stage6a::outputs::Stage6aOutputClaims {
+                bytecode_read_raf: stage6a::outputs::BytecodeReadRafAddressPhaseOutputClaims {
+                    intermediate: zero,
+                    val_stages: Vec::new(),
+                },
+                booleanity: stage6a::outputs::BooleanityAddressPhaseOutputClaims {
+                    intermediate: zero,
+                },
+            },
+            stage6b: stage6b::outputs::Stage6bOutputClaims {
+                #[cfg(not(feature = "akita"))]
+                bytecode_read_raf: stage6b::outputs::BytecodeReadRafOutputClaims {
+                    bytecode_ra: Vec::new(),
+                },
+                #[cfg(feature = "akita")]
+                bytecode_read_raf:
+                    stage6b::bytecode_read_raf::LatticeBytecodeReadRafOutputClaims {
+                        bytecode_ra: Vec::new(),
+                        fused_inc: zero,
+                    },
+                #[cfg(not(feature = "akita"))]
+                booleanity: stage6b::outputs::BooleanityOutputClaims {
+                    instruction_ra: Vec::new(),
+                    bytecode_ra: Vec::new(),
+                    ram_ra: Vec::new(),
+                },
+                #[cfg(feature = "akita")]
+                booleanity:
+                    jolt_claims::protocols::jolt::lattice::relations::booleanity::LatticeBooleanityOutputClaims {
+                        instruction_ra: Vec::new(),
+                        bytecode_ra: Vec::new(),
+                        ram_ra: Vec::new(),
+                        balanced_inc_digits: Vec::new(),
+                        balanced_inc_carry: zero,
+                    },
+                ram_hamming_booleanity: stage6b::outputs::RamHammingBooleanityOutputClaims {
+                    ram_hamming_weight: zero,
+                },
+                ram_ra_virtualization: stage6b::outputs::RamRaVirtualizationOutputClaims {
+                    ram_ra: Vec::new(),
+                },
+                instruction_ra_virtualization:
+                    stage6b::outputs::InstructionRaVirtualizationOutputClaims {
+                        committed_instruction_ra: Vec::new(),
+                    },
+                #[cfg(not(feature = "akita"))]
+                inc_claim_reduction: stage6b::outputs::IncClaimReductionOutputClaims {
+                    ram_inc: zero,
+                    rd_inc: zero,
+                },
+                trusted_advice: None,
+                untrusted_advice: None,
+                bytecode_reduction: None,
+                program_image_reduction: None,
+            },
+            stage7: stage7::outputs::Stage7OutputClaims {
+                hamming_weight_claim_reduction:
+                    stage7::hamming_weight_claim_reduction::HammingWeightClaimReductionOutputClaims {
+                        instruction_ra: Vec::new(),
+                        bytecode_ra: Vec::new(),
+                        ram_ra: Vec::new(),
+                        #[cfg(feature = "akita")]
+                        balanced_inc_digits: Vec::new(),
+                        #[cfg(feature = "akita")]
+                        balanced_inc_carry: zero,
+                    },
+                trusted_advice: None,
+                untrusted_advice: None,
+                bytecode_address_phase: None,
+                program_image_address_phase: None,
+            },
+        })
+    }
+
+    fn empty_spartan_outer_claims() -> stage1::outputs::Stage1BatchOutputClaims<Fr> {
+        let zero = Fr::zero();
+
+        stage1::outputs::Stage1BatchOutputClaims {
+            outer_remainder: stage1::OuterRemainderOutputClaims {
+                left_instruction_input: zero,
+                right_instruction_input: zero,
+                product: zero,
+                should_branch: zero,
+                pc: zero,
+                unexpanded_pc: zero,
+                imm: zero,
+                ram_address: zero,
+                rs1_value: zero,
+                rs2_value: zero,
+                rd_write_value: zero,
+                ram_read_value: zero,
+                ram_write_value: zero,
+                left_lookup_operand: zero,
+                right_lookup_operand: zero,
+                next_unexpanded_pc: zero,
+                next_pc: zero,
+                next_is_virtual: zero,
+                next_is_first_in_sequence: zero,
+                lookup_output: zero,
+                should_jump: zero,
+                add_operands: zero,
+                subtract_operands: zero,
+                multiply_operands: zero,
+                load: zero,
+                store: zero,
+                jump: zero,
+                write_lookup_output_to_rd: zero,
+                virtual_instruction: zero,
+                assert: zero,
+                do_not_update_unexpanded_pc: zero,
+                advice: zero,
+                is_compressed: zero,
+                is_first_in_sequence: zero,
+                is_last_in_sequence: zero,
+            },
+        }
+    }
+
+    fn zk_claims() -> TestClaims {
+        JoltProofClaims::Zk {
+            blindfold_proof: empty_blindfold_proof(),
+        }
+    }
+
+    fn empty_blindfold_proof() -> jolt_blindfold::BlindFoldProof<Fr, Bn254G1> {
+        jolt_blindfold::BlindFoldProof {
+            auxiliary_row_commitments: Vec::new(),
+            random_round_commitments: Vec::new(),
+            random_output_claim_row_commitments: Vec::new(),
+            random_auxiliary_row_commitments: Vec::new(),
+            random_error_row_commitments: Vec::new(),
+            random_eval_commitments: Vec::new(),
+            random_u: Fr::zero(),
+            cross_term_error_row_commitments: Vec::new(),
+            outer_sumcheck: CompressedSumcheckProof::default(),
+            az_rx: Fr::zero(),
+            bz_rx: Fr::zero(),
+            cz_rx: Fr::zero(),
+            inner_sumcheck: CompressedSumcheckProof::default(),
+            witness_opening: VectorCommitmentOpening {
+                combined_vector: Vec::new(),
+                combined_blinding: Fr::zero(),
+            },
+            error_opening: VectorCommitmentOpening {
+                combined_vector: Vec::new(),
+                combined_blinding: Fr::zero(),
+            },
+            folded_eval_outputs: Vec::new(),
+            folded_eval_blindings: Vec::new(),
+            folded_eval_output_openings: Vec::new(),
+        }
+    }
+
+    fn stage_proofs(is_zk: bool) -> JoltStageProofs<Fr, Pedersen<Bn254G1>> {
+        JoltStageProofs {
+            stage1_uni_skip_first_round_proof: uniskip_proof(is_zk),
+            stage1_sumcheck_proof: sumcheck_proof(is_zk),
+            stage2_uni_skip_first_round_proof: uniskip_proof(is_zk),
+            stage2_sumcheck_proof: sumcheck_proof(is_zk),
+            stage3_sumcheck_proof: sumcheck_proof(is_zk),
+            stage4_sumcheck_proof: sumcheck_proof(is_zk),
+            stage5_sumcheck_proof: sumcheck_proof(is_zk),
+            stage6a_sumcheck_proof: sumcheck_proof(is_zk),
+            stage6b_sumcheck_proof: sumcheck_proof(is_zk),
+            stage7_sumcheck_proof: sumcheck_proof(is_zk),
+            #[cfg(feature = "akita")]
+            reconstruction_sumcheck_proof: None,
+        }
+    }
+
+    fn uniskip_proof(is_zk: bool) -> SumcheckProof<Fr, Bn254G1> {
+        if is_zk {
+            SumcheckProof::Committed(CommittedSumcheckProof::default())
+        } else {
+            SumcheckProof::Clear(ClearProof::Full(ClearSumcheckProof::default()))
+        }
+    }
+
+    fn sumcheck_proof(is_zk: bool) -> SumcheckProof<Fr, Bn254G1> {
+        if is_zk {
+            SumcheckProof::Committed(CommittedSumcheckProof::default())
+        } else {
+            SumcheckProof::Clear(ClearProof::Compressed(CompressedSumcheckProof::default()))
+        }
+    }
+
+    fn test_memory_layout() -> common::jolt_device::MemoryLayout {
+        common::jolt_device::MemoryLayout::new(&MemoryConfig {
+            program_size: Some(1024),
+            max_trusted_advice_size: 0,
+            max_untrusted_advice_size: 0,
+            max_input_size: 8,
+            max_output_size: 8,
+            stack_size: 8,
+            heap_size: 8,
+        })
+    }
+
+    fn test_preprocessing() -> JoltVerifierPreprocessing<TestPcs, Pedersen<Bn254G1>> {
+        test_preprocessing_with_layout(test_memory_layout())
+    }
+
+    fn test_preprocessing_with_layout(
+        memory_layout: common::jolt_device::MemoryLayout,
+    ) -> JoltVerifierPreprocessing<TestPcs, Pedersen<Bn254G1>> {
+        #[cfg(feature = "zk")]
+        let vc_setup = Some(PedersenSetup::new(
+            vec![Bn254G1::default(); common::constants::MAX_BLINDFOLD_GENERATORS],
+            Bn254G1::default(),
+        ));
+        #[cfg(not(feature = "zk"))]
+        let vc_setup = None;
+        JoltVerifierPreprocessing::new(
+            ProgramPreprocessing::Full(Arc::new(JoltProgramPreprocessing {
+                bytecode: BytecodePreprocessing::default(),
+                ram: RAMPreprocessing::default(),
+                memory_layout,
+                max_padded_trace_length: 16,
+            })),
+            [7; 32],
+            (),
+            vc_setup,
+        )
+    }
+}

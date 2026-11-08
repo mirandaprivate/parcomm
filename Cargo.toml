@@ -7,12 +7,13 @@ members = [
     "poly-commit",
 ]
 resolver = "2"
+exclude = ["third_party/jolt", "third_party/arkworks", "third_party/spongefish", "qafold/f65521", "qafold/koalabear"]
 
 [patch.crates-io]
-ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-bn254 = { path = "third_party/arkworks/curves/bn254" }
+ark-ff = { path = "third_party/arkworks/ff" }
 ark-ec = { path = "vendor/ark-ec" }
-ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-serialize = { path = "third_party/arkworks/serialize" }
 
 [patch."https://github.com/a16z/arkworks-algebra"]
 ark-ec = { path = "vendor/ark-ec" }

@@ -1,0 +1,32 @@
+[package]
+name = "jolt-program"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Program image, bytecode expansion, and preprocessing pipeline for Jolt"
+repository = "https://github.com/a16z/jolt"
+keywords = ["SNARK", "zkvm", "risc-v"]
+categories = ["cryptography"]
+
+[lints]
+workspace = true
+
+[features]
+default = ["std", "serialization"]
+serialization = ["dep:ark-serialize", "dep:serde", "jolt-riscv/serialization"]
+std = ["common/std"]
+image = ["dep:object"]
+field-inline = ["jolt-riscv/field-inline"]
+
+[dependencies]
+ark-serialize = { workspace = true, optional = true }
+common = { workspace = true, default-features = false }
+jolt-riscv = { workspace = true, default-features = false }
+object = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["rc"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
+serde_json = { workspace = true, features = ["std"] }
+sha2.workspace = true

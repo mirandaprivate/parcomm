@@ -1,0 +1,23 @@
+[patch."https://github.com/mirandaprivate/jolt"]
+jolt-crypto = { path = "third_party/jolt/crates/jolt-crypto" }
+jolt-blindfold = { path = "third_party/jolt/crates/jolt-blindfold" }
+jolt-claims = { path = "third_party/jolt/crates/jolt-claims" }
+jolt-dory = { path = "third_party/jolt/crates/jolt-dory" }
+jolt-field = { path = "third_party/jolt/crates/jolt-field" }
+jolt-openings = { path = "third_party/jolt/crates/jolt-openings" }
+jolt-poly = { path = "third_party/jolt/crates/jolt-poly" }
+jolt-sumcheck = { path = "third_party/jolt/crates/jolt-sumcheck" }
+jolt-transcript = { path = "third_party/jolt/crates/jolt-transcript" }
+
+[patch."https://github.com/a16z/arkworks-algebra"]
+ark-bn254 = { path = "third_party/arkworks/curves/bn254" }
+ark-ff = { path = "third_party/arkworks/ff" }
+ark-ff-asm = { path = "third_party/arkworks/ff-asm" }
+ark-ff-macros = { path = "third_party/arkworks/ff-macros" }
+ark-poly = { path = "third_party/arkworks/poly" }
+ark-serialize = { path = "third_party/arkworks/serialize" }
+ark-serialize-derive = { path = "third_party/arkworks/serialize-derive" }
+jolt-optimizations = { path = "third_party/arkworks/jolt-optimizations" }
+
+[patch."https://github.com/arkworks-rs/spongefish"]
+spongefish = { path = "third_party/spongefish/spongefish" }

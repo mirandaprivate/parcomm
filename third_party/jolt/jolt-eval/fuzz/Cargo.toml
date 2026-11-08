@@ -1,0 +1,73 @@
+[package]
+name = "jolt-eval-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[workspace]
+
+[patch.crates-io]
+ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
+
+[package.metadata]
+cargo-fuzz = true
+
+[package.metadata.cargo-machete]
+ignored = ["libfuzzer-sys"]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+jolt-eval = { path = ".." }
+
+[[bin]]
+name = "field_mul_scalar"
+path = "fuzz_targets/field_mul_scalar.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "split_eq_bind_high_low"
+path = "fuzz_targets/split_eq_bind_high_low.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "split_eq_bind_low_high"
+path = "fuzz_targets/split_eq_bind_low_high.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tracer_backend_equivalence"
+path = "fuzz_targets/tracer_backend_equivalence.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transcript_consistency_blake2b"
+path = "fuzz_targets/transcript_consistency_blake2b.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transcript_consistency_keccak"
+path = "fuzz_targets/transcript_consistency_keccak.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transcript_consistency_poseidon"
+path = "fuzz_targets/transcript_consistency_poseidon.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,103 @@
+warning: unused import: `crate::ShortFieldElement`
+ --> vendor/qafold/src/full_extension_multiply.rs:7:5
+  |
+7 | use crate::ShortFieldElement;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+  --> vendor/qafold/src/full_extension_multiply.rs:78:5
+   |
+78 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+   --> vendor/qafold/src/full_extension_multiply.rs:123:5
+    |
+123 |     unsafe {
+    |     ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> vendor/qafold/src/full_extension_multiply.rs:228:5
+    |
+228 |     unsafe {
+    |     ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> vendor/qafold/src/full_extension_multiply.rs:273:5
+    |
+273 |     unsafe {
+    |     ^^^^^^ unnecessary `unsafe` block
+
+warning: field `words` is never read
+  --> vendor/qafold/src/qafold_short.rs:84:16
+   |
+83 | pub struct PreparedEncodingMultipliers<F> {
+   |            --------------------------- field in this struct
+84 |     pub(crate) words: Vec<u32>,
+   |                ^^^^^
+   |
+   = note: `PreparedEncodingMultipliers` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `hash_inner_prefixed` is never used
+    --> vendor/qafold/src/qafold_short_pc.rs:2608:4
+     |
+2608 | fn hash_inner_prefixed(
+     |    ^^^^^^^^^^^^^^^^^^^
+
+warning: `mikros-qafold` (lib) generated 7 warnings (run `cargo fix --lib -p mikros-qafold` to apply 1 suggestion)
+   Compiling parcomm-qafold v0.1.0 (/mnt/c/Users/miranda/git/parcomm/artifact/src/qafold/f65521)
+    Finished `release` profile [optimized] target(s) in 56.97s
+     Running unittests src/lib.rs (/tmp/parcomm-artifact-build/f65521/release/deps/parcomm_qafold-933f2efa75811aa1)
+
+running 3 tests
+test protocol::tests::padding_is_a_proved_predicate_not_only_a_local_check ... ok
+test protocol::tests::implicit_suffix_is_checked_by_the_same_relation ... ok
+test eo::cpu_tests::tiled_fold_and_compaction_match_scalar_at_wave_boundaries ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running unittests src/main.rs (/tmp/parcomm-artifact-build/f65521/release/deps/parcomm_qafold-7849efe4087ea479)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cpu_optimization.rs (/tmp/parcomm-artifact-build/f65521/release/deps/cpu_optimization-dd60c2bac8779942)
+
+running 2 tests
+test layout_supports_70b_without_allocating_the_witness ... ok
+test recomputation_preserves_complete_parcomm_proof ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/end_to_end.rs (/tmp/parcomm-artifact-build/f65521/release/deps/end_to_end-9121d00b5dca6327)
+
+running 6 tests
+test real_8b_layout_matches_the_existing_converter_exactly ... ok
+test compact_tbv_matches_dense_query_and_padding_support ... ok
+test malformed_inputs_rejected ... ok
+test heterogeneous_collection_roundtrip_and_adversarial_verification ... ok
+test packing_widths_and_zero_one_query_coordinates ... ok
+test dimensions_above_the_prime_characteristic_are_not_aliased ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/reconstructed.rs (/tmp/parcomm-artifact-build/f65521/release/deps/reconstructed-000048a956781626)
+
+running 2 tests
+test reconstructed_witness_keeps_proof_bytes_and_rejects_wrong_source ... ok
+test recycled_commit_buffers_preserve_roots_and_proof_bytes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Doc-tests parcomm_qafold
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

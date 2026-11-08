@@ -1,0 +1,32 @@
+use serde::{Deserialize, Serialize};
+
+use crate::{declare_riscv_instr, emulator::cpu::Cpu};
+
+use super::{format::format_i::FormatI, RISCVInstruction, RISCVTrace};
+
+const ALL_ONES_64: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+const SIGN_BIT_64: u64 = 0x8000_0000_0000_0000;
+
+declare_riscv_instr!(
+    name = VirtualMovsign,
+    mask = 0,
+    match = 0,
+    format = FormatI,
+    ram = ()
+);
+
+impl VirtualMovsign {
+    fn exec(&self, cpu: &mut Cpu, _: &mut <VirtualMovsign as RISCVInstruction>::RAMAccess) {
+        let val = cpu.x[self.operands.rs1 as usize] as u64;
+        cpu.write_register(
+            self.operands.rd as usize,
+            if val & SIGN_BIT_64 != 0 {
+                ALL_ONES_64 as i64
+            } else {
+                0
+            },
+        );
+    }
+}
+
+impl RISCVTrace for VirtualMovsign {}

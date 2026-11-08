@@ -1,0 +1,9 @@
+{
+  "backend": "qafold",
+  "case": "8B-16bit",
+  "threads": 48,
+  "toolchain": "1.97.1",
+  "runs": 1,
+  "input": "None",
+  "rustflags": "-C target-cpu=native"
+}

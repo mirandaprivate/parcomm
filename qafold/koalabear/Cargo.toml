@@ -1,0 +1,34 @@
+[package]
+name = "parcomm-qafold-koalabear-8b"
+default-run = "parcomm-qafold-koalabear-8b"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[features]
+encoding-profile = ["mikros-qafold/profile-encoding"]
+
+[[example]]
+name = "encoding_bench"
+required-features = ["encoding-profile"]
+
+[dependencies]
+mikros-qafold = { path = "vendor/qafold" }
+blake2 = "0.10"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1.3"
+rand = "0.8.5"
+
+[dev-dependencies]
+rand = "0.8.5"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+[profile.test]
+opt-level = 3

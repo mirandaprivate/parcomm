@@ -1,0 +1,104 @@
+{
+  "origin": "Brakefold local source snapshot",
+  "date": "2026-11-06",
+  "sources": [
+    {
+      "source": "brakefold/src/qafold_short.rs",
+      "sha256": "ad908834527c36914b78cb9487eb9c0d1927b35b01b2a1c8a2def40f9a4e4c9e"
+    },
+    {
+      "source": "brakefold/src/qafold_short_pc.rs",
+      "sha256": "3c36fdd3fdc10884750478109607ed3d6eef61c17754fc1b1b9d46181557bb8c"
+    },
+    {
+      "source": "brakefold/src/qafold_short_setup.rs",
+      "sha256": "165d1dd71c6c2b8a846fc5e608e0601a93c97300485b08f76a0a02efbceddd0e"
+    },
+    {
+      "source": "brakefold/src/qafold_short_decide.rs",
+      "sha256": "92705736187d95d8c3c40ed82536be3d1e71ac9fa49f1aa22661f4d804b15b52"
+    },
+    {
+      "source": "brakefold/src/qafold_short_decide_wire.rs",
+      "sha256": "f3496e5de26e391f37fbe6aa78ce0bd22447b1ce0c4fbfea204268b92f461168"
+    },
+    {
+      "source": "brakefold/src/qafold_short_decide_carry.rs",
+      "sha256": "26e002371c1b3032f04309f0110b28a281aabaded16382058e68f305d68d3237"
+    },
+    {
+      "source": "brakefold/src/qafold_short_decide_protocol.rs",
+      "sha256": "bcad4749a210d1b8061e68fe9ff449b994cb9cb3da0045c60966874b102c58d0"
+    },
+    {
+      "source": "brakefold/src/qafold_short_decide_driver.rs",
+      "sha256": "0e99a245ac51bda8e2d418a1decc006b6ae1832881254cd92e4f8cf48f1923c5"
+    },
+    {
+      "source": "brakefold/src/qafold_short_distance.rs",
+      "sha256": "ead232ae6942331baeef482698fd357fbfe842d4bde9796047dc27836e5d912b"
+    },
+    {
+      "source": "brakefold/src/qafold.rs",
+      "sha256": "f7b578a8942e1ae90c33030429de025fea63b3d633c0f415d9b534adb9cdca2a"
+    },
+    {
+      "source": "brakefold/src/brakefold.rs",
+      "sha256": "4e5fd7106d48136f93e07e5e9ae10781564fd65fa4ca465c5f447ae27b4b88bc"
+    },
+    {
+      "source": "LICENSE_MIT",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "src/brakefold.rs",
+      "sha256": "2324ad58d7e96d15b60718c03ed2c1a79b47115ea8d672bf08f6765e7c539810"
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "312ccb6cf77d2f0b9460168f66b7b1c07268c85eff83549a861b73de747aa2f2"
+    },
+    {
+      "path": "src/qafold.rs",
+      "sha256": "7ed19d380e4e26587c2168deb38948447eae43cb5a07800ad120b32b1d0bad36"
+    },
+    {
+      "path": "src/qafold_short.rs",
+      "sha256": "264f72265c05396cb5d68818bfa0959842b6a5632100f721bb0540754c5c09c5"
+    },
+    {
+      "path": "src/qafold_short_decide.rs",
+      "sha256": "5beb449d69760e0c2671e8a76ba89eaeb1f7077728ef6bdbf5d65c2500ffcfcc"
+    },
+    {
+      "path": "src/qafold_short_decide_carry.rs",
+      "sha256": "befc4ed894edaa0a305e66dd032d38d1214f0fc9f334b3ac51919dede502776d"
+    },
+    {
+      "path": "src/qafold_short_decide_driver.rs",
+      "sha256": "b80d035f93def1899c535bce178a924b2eaa6086ecd1bfb905128739ae46a1cb"
+    },
+    {
+      "path": "src/qafold_short_decide_protocol.rs",
+      "sha256": "edc9fd68b45af3907426a15fe31177d3d9d8f51dfe776db476edbbf316c9f178"
+    },
+    {
+      "path": "src/qafold_short_decide_wire.rs",
+      "sha256": "7981a78aed71196c4bb8a48e331dfefd416773d26409991882364191d8375e52"
+    },
+    {
+      "path": "src/qafold_short_distance.rs",
+      "sha256": "5929bf36d003641bf44813a03cfe89d55a7f27bbfa210613f8658d523dc3dd85"
+    },
+    {
+      "path": "src/qafold_short_pc.rs",
+      "sha256": "875d0abb05d602adc3b0f377076414e87285085697f8d04d8ccb6a88c33d5af3"
+    },
+    {
+      "path": "src/qafold_short_setup.rs",
+      "sha256": "972b1652a4acd6f0c8d42677dbc6b310b281e6a5bf1a80d6fb2b7fae82c13e0c"
+    }
+  ]
+}

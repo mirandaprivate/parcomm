@@ -1,0 +1,84 @@
+warning: function `public_table_digest` is never used
+   --> batch/src/hidden_relation_batch.rs:638:4
+    |
+638 | fn public_table_digest(values: &[ark_bn254::Fr]) -> Result<[u8; 32], HiddenRelationError> {
+    |    ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `bind_hidden_field_vector_statement` is never used
+   --> batch/src/jolt_dory_adapter.rs:642:4
+    |
+642 | fn bind_hidden_field_vector_statement<T: Transcript<Challenge = Fr>>(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `open_hidden_field_vector_zk` is never used
+   --> batch/src/jolt_dory_adapter.rs:665:8
+    |
+665 | pub fn open_hidden_field_vector_zk<T: Transcript<Challenge = Fr>>(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `verify_hidden_field_vector_zk` is never used
+   --> batch/src/jolt_dory_adapter.rs:703:8
+    |
+703 | pub fn verify_hidden_field_vector_zk<T: Transcript<Challenge = Fr>>(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `bool_to_field` is never used
+    --> batch/src/section6_data.rs:1313:15
+     |
+1313 | pub(crate) fn bool_to_field<F: PrimeField>(bit: bool) -> F {
+     |               ^^^^^^^^^^^^^
+
+warning: methods `values` and `committed` are never used
+   --> batch/src/section6_values.rs:179:19
+    |
+178 | impl CommittedSection6ClaimValues {
+    | --------------------------------- methods in this implementation
+179 |     pub(crate) fn values(&self) -> &[ArkFr] {
+    |                   ^^^^^^
+...
+183 |     pub(crate) fn committed(&self) -> &CommittedDoryFieldVector {
+    |                   ^^^^^^^^^
+
+warning: methods `standard_point_ark`, `normalized_witness`, and `committed_values` are never used
+   --> batch/src/section6_values.rs:195:19
+    |
+188 | impl PendingSection6ClaimValueOpening<'_> {
+    | ----------------------------------------- methods in this implementation
+...
+195 |     pub(crate) fn standard_point_ark(&self) -> Vec<ArkFr> {
+    |                   ^^^^^^^^^^^^^^^^^^
+...
+203 |     pub(crate) fn normalized_witness(&self) -> &HiddenScalarWitness {
+    |                   ^^^^^^^^^^^^^^^^^^
+...
+207 |     pub(crate) fn committed_values(&self) -> &CommittedSection6ClaimValues {
+    |                   ^^^^^^^^^^^^^^^^
+
+warning: function `section6_claim_value_standard_point` is never used
+   --> batch/src/section6_values.rs:375:15
+    |
+375 | pub(crate) fn section6_claim_value_standard_point(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `section6_claim_value_logical_len` is never used
+   --> batch/src/section6_values.rs:384:15
+    |
+384 | pub(crate) fn section6_claim_value_logical_len(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `batch` (lib) generated 9 warnings
+   Compiling batch v0.1.0 (/mnt/c/Users/miranda/git/parcomm/artifact/src/jolt/batch)
+    Finished `release` profile [optimized + debuginfo] target(s) in 31.71s
+     Running tests/matrix_collection_e2e.rs (/tmp/parcomm-artifact-build/jolt/release/deps/matrix_collection_e2e-874019df97d20225)
+
+running 5 tests
+test capped_split_stores_a_padded_1023_square_in_sixteen_buckets ... ok
+test capped_split_uses_at_most_sixteen_buckets_per_matrix ... ok
+test heterogeneous_matrix_collection_2pow30_end_to_end ... ignored, requires multi-GiB RAM and a release build
+test heterogeneous_matrix_collection_full_descriptor_is_exact ... ok
+test heterogeneous_matrix_collection_small_end_to_end ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.32s
+

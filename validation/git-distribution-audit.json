@@ -1,0 +1,8 @@
+{
+  "required_release_files_ignored": 0,
+  "historical_experiments_excluded": true,
+  "archive_required": false,
+  "root_smoke_tests_passed": 3,
+  "git_visible_file_count": 16591,
+  "vendor_line_endings_preserved": true
+}

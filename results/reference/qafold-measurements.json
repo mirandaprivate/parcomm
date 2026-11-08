@@ -1,0 +1,314 @@
+[
+  {
+    "label": "8b8-recompute",
+    "runs": 1,
+    "result": {
+      "active_entries": 8053329920,
+      "bucket_count": 489,
+      "cache_mode": "recompute",
+      "claim_generation_seconds": 0.964635687,
+      "commit_seconds": 11.195281037,
+      "field": "F65521/F65521^8",
+      "input_seconds": 47.551010921,
+      "logical_entries": 8589934592,
+      "matrix_count": 291,
+      "opening_with_serialization_seconds": 29.478124242,
+      "proof_blake2s": "[6b, 23, f, a3, 96, 3b, fb, d1, b8, 75, 5d, 3f, ac, d, d0, a6, f7, 63, e7, ad, b9, 81, 1f, ab, a4, b4, d7, d2, 74, 40, b9, 9c]",
+      "proof_bytes": 9287797,
+      "prover_profile": {
+        "conversion_seconds": 0.0029982,
+        "native_openings": 1,
+        "packed_eo_seconds": 7.836100312,
+        "pcs_decide_seconds": 0.518883984,
+        "pcs_native_opening_seconds": 1.178719702,
+        "pcs_open_seconds": 21.064959726,
+        "pcs_projection_seconds": 2.20203207,
+        "pcs_reconstruction_seconds": 0.0,
+        "pcs_sumcheck_seconds": 0.723686816,
+        "terminal_batch_binding_seconds": 12.926063855,
+        "terminal_batch_folding_seconds": 3.502033852
+      },
+      "prover_threads": 48,
+      "public_commitment_json_bytes": 8627,
+      "root_bytes": 256,
+      "scope": "public-metadata ParComm complete flow",
+      "setup_seconds": 4.226452471,
+      "total_prover_seconds": 40.673405279,
+      "verified": true,
+      "verifier_profile": {
+        "authenticated_roots": 8,
+        "conversion_eo_seconds": 0.006825547,
+        "native_openings": 1,
+        "pcs_seconds": 0.080352507
+      },
+      "verifier_threads": 1,
+      "verify_decode_seconds": 0.100166857
+    },
+    "verification": {
+      "profile": {
+        "authenticated_roots": 8,
+        "conversion_eo_seconds": 0.008206542,
+        "native_openings": 1,
+        "pcs_seconds": 0.098699444
+      },
+      "scope": "public-metadata ParComm complete flow",
+      "setup_seconds": 5.511136895,
+      "threads": 1,
+      "verification_with_read_decode_seconds": 0.156747671,
+      "verified": true
+    },
+    "artifact_sha256": {
+      "commitment.json": "04fbc4006fefde1491a6d5c71bd82e0c2119f35560eff7c2c18baed605a7ba07",
+      "claims.json": "a569507df0de7c3a1afc3a863d37cd53fe52a9afe2f07ec48aa48a24c3bdb8e2",
+      "proof.bin": "983abf339923ee91ddd661254ebd91dc2609cbc8b0ef106ce0eb6824aa12f663"
+    },
+    "input_sha256": "5b3bccda178bea933b34100f2112fad6819d281be85cc9a9131728e4d883db5d",
+    "peak_rss_kib": 25073128,
+    "pipeline_wall_seconds": 93.58500814600848
+  },
+  {
+    "label": "8b16-recompute",
+    "runs": 1,
+    "result": {
+      "active_entries": 8053329920,
+      "bucket_count": 489,
+      "cache_mode": "recompute",
+      "claim_generation_seconds": 0.769742233,
+      "commit_seconds": 20.487045756,
+      "field": "KoalaBear/KoalaBear^4",
+      "input_seconds": 81.277562105,
+      "input_stream_blake2s": "65657955844544f92da3325c1685ee9c783be5aa28a5173f4e605ec2eb16ab8d",
+      "logical_entries": 8589934592,
+      "matrix_count": 291,
+      "opening_with_serialization_seconds": 51.928743649,
+      "proof_blake2s": "[c4, 15, 1b, 24, 77, cd, 39, ed, 52, 4f, 3e, d4, 78, b7, cc, d, bb, ea, a1, 5f, df, 3, 65, 3c, 7, e8, b7, 30, e5, 74, be, 27]",
+      "proof_bytes": 10404021,
+      "prover_profile": {
+        "conversion_seconds": 0.003139903,
+        "eo": {
+          "binary_eo_seconds": 4.074422219,
+          "consistency_check_seconds": 0.435126231,
+          "folded_tbv_seconds": 3.463014163,
+          "packed_witness_seconds": 0.583157105,
+          "tbv_cross_terms_seconds": 0.773337736
+        },
+        "native_openings": 1,
+        "packed_eo_seconds": 10.271429168,
+        "pcs_decide_seconds": 0.698722354,
+        "pcs_native_opening_seconds": 2.281322266,
+        "pcs_open_seconds": 40.706096785,
+        "pcs_projection_seconds": 5.452676257,
+        "pcs_reconstruction_seconds": 0.0,
+        "pcs_sumcheck_seconds": 1.2939530989999999,
+        "terminal_batch_binding_seconds": 23.227566953,
+        "terminal_batch_folding_seconds": 7.742845903
+      },
+      "prover_threads": 48,
+      "public_commitment_json_bytes": 8625,
+      "root_bytes": 256,
+      "scope": "public-metadata ParComm complete flow",
+      "setup_seconds": 8.017747152,
+      "total_prover_seconds": 72.415789405,
+      "verified": true,
+      "verifier_profile": {
+        "authenticated_roots": 8,
+        "conversion_eo_seconds": 0.004226709,
+        "native_openings": 1,
+        "pcs_seconds": 0.079734382
+      },
+      "verifier_threads": 1,
+      "verify_decode_seconds": 0.099218544,
+      "workflow_wall_seconds": 162.595045172
+    },
+    "verification": {
+      "profile": {
+        "authenticated_roots": 8,
+        "conversion_eo_seconds": 0.005045433,
+        "native_openings": 1,
+        "pcs_seconds": 0.094486617
+      },
+      "scope": "public-metadata ParComm complete flow",
+      "setup_seconds": 10.448460385,
+      "threads": 1,
+      "verification_with_read_decode_seconds": 0.145789988,
+      "verified": true
+    },
+    "artifact_sha256": {
+      "commitment.json": "2ea47bb9f1ccedb93a2474ebc879691ca7926fc5417ad6af3ec3d4ba18e6fc29",
+      "claims.json": "7d4e2a4d8b3c3d99604e676b1e3b4cf3e1b9ea86e5772afe02f260fea41c3e88",
+      "proof.bin": "7c18b0bbdf9d070a0d2d8a2b5628486a67347749e3371e1b3792f8a52c5ef577"
+    },
+    "input_sha256": "4a402790ceb49665c11d0f1466f0893b3b32d9445740756ee7eaf1a65c8d1c5f",
+    "peak_rss_kib": 39786716,
+    "pipeline_wall_seconds": 162.69911139900796
+  },
+  {
+    "label": "70b8-recompute",
+    "runs": 1,
+    "result": {
+      "active_entries": 70599843840,
+      "bucket_count": 1209,
+      "cache_mode": "recompute",
+      "claim_generation_seconds": 8.716598357,
+      "commit_seconds": 62.925980826,
+      "field": "F65521/F65521^8",
+      "input_seconds": 403.092228882,
+      "logical_entries": 137438953472,
+      "matrix_count": 723,
+      "opening_with_serialization_seconds": 136.611193933,
+      "proof_blake2s": "[23, 82, 7f, 12, 23, 5e, 23, 77, 18, 8c, df, 9, 59, 4f, 22, 58, 58, 13, 37, 82, 97, f1, 33, a6, 8f, b6, ba, 2d, e0, 39, 70, 4d]",
+      "proof_bytes": 81645677,
+      "prover_profile": {
+        "conversion_seconds": 0.008202627,
+        "native_openings": 1,
+        "packed_eo_seconds": 40.642731659,
+        "pcs_decide_seconds": 0.469396586,
+        "pcs_native_opening_seconds": 1.132883608,
+        "pcs_open_seconds": 92.960871678,
+        "pcs_projection_seconds": 5.311585107,
+        "pcs_reconstruction_seconds": 0.0,
+        "pcs_sumcheck_seconds": 0.717808583,
+        "terminal_batch_binding_seconds": 77.089457352,
+        "terminal_batch_folding_seconds": 8.110106109
+      },
+      "prover_threads": 48,
+      "public_commitment_json_bytes": 33544,
+      "root_bytes": 4096,
+      "scope": "public-metadata ParComm complete flow",
+      "setup_seconds": 4.263903183,
+      "total_prover_seconds": 199.537174759,
+      "verified": true,
+      "verifier_profile": {
+        "authenticated_roots": 128,
+        "conversion_eo_seconds": 0.01550259,
+        "native_openings": 1,
+        "pcs_seconds": 0.655279379
+      },
+      "verifier_threads": 1,
+      "verify_decode_seconds": 0.793650831
+    },
+    "verification": {
+      "profile": {
+        "authenticated_roots": 128,
+        "conversion_eo_seconds": 0.011010496,
+        "native_openings": 1,
+        "pcs_seconds": 0.644443974
+      },
+      "scope": "public-metadata ParComm complete flow",
+      "setup_seconds": 5.480282336,
+      "threads": 1,
+      "verification_with_read_decode_seconds": 0.864905095,
+      "verified": true
+    },
+    "artifact_sha256": {
+      "commitment.json": "9959f1a8962e56251211cfd0db4aab6d6c7a0ac33037147f93088e59e99f0ee8",
+      "claims.json": "967207df0b71727b1ff4264939a55281a7a0a2527af58b9faad738173850228f",
+      "proof.bin": "5c1bae573584d83ed8d5a02315b7110ca28595874cc1bb4e08802c0c28a6d89a"
+    },
+    "input_sha256": "1831cb4b5de22794fb7a98f0de0a54fc303738d572ca17934bc695cdee4bc6f8",
+    "peak_rss_kib": 136484996,
+    "pipeline_wall_seconds": 616.6364408399677
+  },
+  {
+    "runs": 1,
+    "result": {
+      "active_entries": 70599843840,
+      "bucket_count": 1209,
+      "cache_mode": "recompute",
+      "claim_generation_seconds": 7.863939134,
+      "commit_seconds": 129.668610406,
+      "field": "KoalaBear/KoalaBear^4",
+      "input_seconds": 807.956596936,
+      "input_stream_blake2s": "6803d4e3499adf50c04f429d02b31a8810c4e8b9a2e64034eeece741beb0f0bc",
+      "logical_entries": 137438953472,
+      "matrix_count": 723,
+      "opening_with_serialization_seconds": 222.050927917,
+      "proof_blake2s": "[54, de, 3a, e6, a4, 95, ca, 94, 65, e4, d6, b8, 70, ab, d2, ae, 1f, bb, 3f, 1d, 5b, e5, 4f, d9, f2, 6e, 6e, 98, ca, c2, 60, 7c]",
+      "proof_bytes": 85993261,
+      "prover_profile": {
+        "conversion_seconds": 0.005482441,
+        "eo": {
+          "binary_eo_seconds": 15.772114179999999,
+          "consistency_check_seconds": 1.709387275,
+          "folded_tbv_seconds": 13.892249296,
+          "packed_witness_seconds": 9.978213065,
+          "tbv_cross_terms_seconds": 4.087453957
+        },
+        "native_openings": 1,
+        "packed_eo_seconds": 48.082967911,
+        "pcs_decide_seconds": 0.71287991,
+        "pcs_native_opening_seconds": 2.116563764,
+        "pcs_open_seconds": 167.708910745,
+        "pcs_projection_seconds": 13.202637151,
+        "pcs_reconstruction_seconds": 0.0,
+        "pcs_sumcheck_seconds": 1.388758904,
+        "terminal_batch_binding_seconds": 127.46701375,
+        "terminal_batch_folding_seconds": 22.659933557
+      },
+      "prover_threads": 48,
+      "public_commitment_json_bytes": 33893,
+      "root_bytes": 4096,
+      "scope": "public-metadata ParComm complete flow",
+      "setup_seconds": 8.044517395,
+      "total_prover_seconds": 351.719538323,
+      "verified": true,
+      "verifier_profile": {
+        "authenticated_roots": 128,
+        "conversion_eo_seconds": 0.010950742,
+        "native_openings": 1,
+        "pcs_seconds": 0.642226285
+      },
+      "verifier_threads": 1,
+      "verify_decode_seconds": 0.798805395,
+      "workflow_wall_seconds": 1176.4299482
+    },
+    "verification": {
+      "profile": {
+        "authenticated_roots": 128,
+        "conversion_eo_seconds": 0.007715591,
+        "native_openings": 1,
+        "pcs_seconds": 0.622282667
+      },
+      "scope": "public-metadata ParComm complete flow",
+      "setup_seconds": 10.376624583,
+      "threads": 1,
+      "verification_with_read_decode_seconds": 0.828312468,
+      "verified": true
+    },
+    "peak_rss_kib": 205989772,
+    "pipeline_wall_seconds": 1176.6520685730502,
+    "artifacts_sha256": {
+      "commitment.json": "5313e58d9eca3c7f47c6a53c15562d1181b8baaebe6b9a085fc7e96aff07bcbd",
+      "claims.json": "48dfcfc6e58ed3d4da599665e7d44bd15f1bc885fcf5afeed10c157e9a6c4913",
+      "proof.bin": "866bf4709a4f47f04fa5984770e3cb37e3bb55aa5de7112422a0b4223faa846d"
+    },
+    "input": {
+      "bytes": 141199687680,
+      "sha256": "0aa5428f88d876241ce08db0a16c5a1d7a395cf6fde2a563052dc02a9ad6c7c3",
+      "pipeline_input_seconds": 816.0064400970004,
+      "includes_prover_setup_and_backpressure": true
+    },
+    "memory_plan": {
+      "active_entries": 70599843840,
+      "logical_entries": 137438953472,
+      "matrix_count": 723,
+      "bucket_count": 1209,
+      "chunk_log": 30,
+      "packed_log": 6,
+      "pcs_roots": 128,
+      "prover_threads": 48,
+      "verifier_threads": 1,
+      "cache_mode": "recompute",
+      "runs": 1,
+      "input_mode": "pipe with SHA256; no compact input file",
+      "compact_bytes": 141199687680,
+      "eo_witness_plus_query_bytes": 68719476736,
+      "temporary_allowance_bytes": 25769803776,
+      "reserve_bytes": 34359738368,
+      "available_before_bytes": 391215071232,
+      "estimated_core_bytes": 209919164416,
+      "required_available_bytes": 270048706560
+    },
+    "label": "70b16-recompute"
+  }
+]

@@ -94,7 +94,6 @@ dependencies = [
 [[package]]
 name = "ark-bn254"
 version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a4518928f1ff7f15875f940d614bb9845e6"
 dependencies = [
  "ark-ec",
  "ark-ff 0.5.0",
@@ -145,7 +144,7 @@ version = "0.5.0"
 dependencies = [
  "ahash",
  "ark-ff 0.5.0",
- "ark-poly 0.5.0 (git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout)",
+ "ark-poly 0.5.0",
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
  "educe",
@@ -174,7 +173,6 @@ dependencies = [
 [[package]]
 name = "ark-ff"
 version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a4518928f1ff7f15875f940d614bb9845e6"
 dependencies = [
  "allocative",
  "ark-ff-asm 0.5.0",
@@ -212,7 +210,6 @@ dependencies = [
 [[package]]
 name = "ark-ff-asm"
 version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a4518928f1ff7f15875f940d614bb9845e6"
 dependencies = [
  "quote",
  "syn 2.0.119",
@@ -231,7 +228,6 @@ dependencies = [
 [[package]]
 name = "ark-ff-macros"
 version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a4518928f1ff7f15875f940d614bb9845e6"
 dependencies = [
  "num-bigint",
  "num-traits",
@@ -274,6 +270,19 @@ dependencies = [
 [[package]]
 name = "ark-poly"
 version = "0.5.0"
+dependencies = [
+ "ahash",
+ "ark-ff 0.5.0",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0",
+ "educe",
+ "fnv",
+ "hashbrown 0.15.4",
+]
+
+[[package]]
+name = "ark-poly"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "579305839da207f02b89cd1679e50e67b4331e2f9294a57693e5051b7703fe27"
 dependencies = [
@@ -285,20 +294,6 @@ dependencies = [
  "fnv",
  "hashbrown 0.15.4",
  "rayon",
-]
-
-[[package]]
-name = "ark-poly"
-version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a4518928f1ff7f15875f940d614bb9845e6"
-dependencies = [
- "ahash",
- "ark-ff 0.5.0",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
- "educe",
- "fnv",
- "hashbrown 0.15.4",
 ]
 
 [[package]]
@@ -333,7 +328,6 @@ dependencies = [
 [[package]]
 name = "ark-serialize"
 version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a4518928f1ff7f15875f940d614bb9845e6"
 dependencies = [
  "ark-serialize-derive 0.5.0",
  "ark-std 0.5.0",
@@ -358,7 +352,6 @@ dependencies = [
 [[package]]
 name = "ark-serialize-derive"
 version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a4518928f1ff7f15875f940d614bb9845e6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1088,7 +1081,6 @@ dependencies = [
 [[package]]
 name = "jolt-blindfold"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "jolt-claims",
  "jolt-crypto",
@@ -1107,7 +1099,6 @@ dependencies = [
 [[package]]
 name = "jolt-claims"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "blake2 0.11.0-rc.6",
  "derive_more",
@@ -1125,7 +1116,6 @@ dependencies = [
 [[package]]
 name = "jolt-claims-derive"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1135,7 +1125,6 @@ dependencies = [
 [[package]]
 name = "jolt-crypto"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -1156,7 +1145,6 @@ dependencies = [
 [[package]]
 name = "jolt-dory"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -1176,7 +1164,6 @@ dependencies = [
 [[package]]
 name = "jolt-field"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "ark-bn254",
  "ark-ff 0.5.0",
@@ -1190,7 +1177,6 @@ dependencies = [
 [[package]]
 name = "jolt-lookup-tables"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "jolt-field",
  "jolt-riscv",
@@ -1201,7 +1187,6 @@ dependencies = [
 [[package]]
 name = "jolt-openings"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "jolt-crypto",
  "jolt-field",
@@ -1215,7 +1200,6 @@ dependencies = [
 [[package]]
 name = "jolt-optimizations"
 version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a4518928f1ff7f15875f940d614bb9845e6"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -1233,7 +1217,6 @@ dependencies = [
 [[package]]
 name = "jolt-poly"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "jolt-field",
  "jolt-utils",
@@ -1248,7 +1231,6 @@ dependencies = [
 [[package]]
 name = "jolt-r1cs"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "jolt-claims",
  "jolt-field",
@@ -1263,7 +1245,6 @@ dependencies = [
 [[package]]
 name = "jolt-riscv"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "ark-serialize 0.5.0",
  "serde",
@@ -1274,7 +1255,6 @@ dependencies = [
 [[package]]
 name = "jolt-sumcheck"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "jolt-crypto",
  "jolt-field",
@@ -1283,6 +1263,7 @@ dependencies = [
  "jolt-r1cs",
  "jolt-transcript",
  "rand_core 0.6.4",
+ "rayon",
  "serde",
  "thiserror 2.0.20",
  "tracing",
@@ -1291,7 +1272,6 @@ dependencies = [
 [[package]]
 name = "jolt-transcript"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "ark-bn254",
  "ark-ff 0.5.0",
@@ -1306,7 +1286,6 @@ dependencies = [
 [[package]]
 name = "jolt-utils"
 version = "0.1.0"
-source = "git+https://github.com/mirandaprivate/jolt?rev=53d5a1eab2897d0eea90cbe12b517af8d3e833a5#53d5a1eab2897d0eea90cbe12b517af8d3e833a5"
 dependencies = [
  "num-traits",
 ]
@@ -2037,7 +2016,6 @@ dependencies = [
 [[package]]
 name = "spongefish"
 version = "0.7.0"
-source = "git+https://github.com/arkworks-rs/spongefish?rev=d2d190b1329d35ac9577438d05aed4f17a57b9f9#d2d190b1329d35ac9577438d05aed4f17a57b9f9"
 dependencies = [
  "ark-ff 0.6.0",
  "ark-serialize 0.6.0",

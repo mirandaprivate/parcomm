@@ -1,0 +1,2126 @@
+#![allow(clippy::upper_case_acronyms)]
+
+// Opcode constants
+pub const CUSTOM_OPCODE: u8 = 0x5B; // Custom instructions (virtual sequences, advice, etc.)
+pub const INLINE_OPCODE: u8 = 0x2B; // Inline instructions
+
+// funct3 values for CUSTOM_OPCODE (0x5B)
+pub const FUNCT3_VIRTUAL_R: u8 = 0b000; // funct3 for format R virtual instructions
+pub const FUNCT3_VIRTUAL_ASSERT_EQ: u8 = 0b001;
+pub const FUNCT3_VIRTUAL_HOST_IO: u8 = 0b010;
+
+// funct7 values for format R virtual instructions (funct3 = 0b000)
+pub const FUNCT7_ADVICE_LB: u32 = 0x00; // Load byte from advice tape
+pub const FUNCT7_ADVICE_LH: u32 = 0x01; // Load halfword from advice tape
+pub const FUNCT7_ADVICE_LW: u32 = 0x02; // Load word from advice tape
+pub const FUNCT7_ADVICE_LD: u32 = 0x03; // Load doubleword from advice tape
+pub const FUNCT7_ADVICE_LEN: u32 = 0x04; // Get remaining bytes in advice tape
+pub const FUNCT7_VIRTUAL_REV8W: u32 = 0x05; // Reverse bytes in a word
+
+use add::ADD;
+use addi::ADDI;
+use addiw::ADDIW;
+use addw::ADDW;
+use advice_lb::AdviceLB;
+use advice_ld::AdviceLD;
+use advice_lh::AdviceLH;
+use advice_lw::AdviceLW;
+use amoaddd::AMOADDD;
+use amoaddw::AMOADDW;
+use amoandd::AMOANDD;
+use amoandw::AMOANDW;
+use amomaxd::AMOMAXD;
+use amomaxud::AMOMAXUD;
+use amomaxuw::AMOMAXUW;
+use amomaxw::AMOMAXW;
+use amomind::AMOMIND;
+use amominud::AMOMINUD;
+use amominuw::AMOMINUW;
+use amominw::AMOMINW;
+use amoord::AMOORD;
+use amoorw::AMOORW;
+use amoswapd::AMOSWAPD;
+use amoswapw::AMOSWAPW;
+use amoxord::AMOXORD;
+use amoxorw::AMOXORW;
+use and::AND;
+use andi::ANDI;
+use andn::ANDN;
+use ark_serialize::{
+    CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
+};
+use auipc::AUIPC;
+use beq::BEQ;
+use bge::BGE;
+use bgeu::BGEU;
+use blt::BLT;
+use bltu::BLTU;
+use bne::BNE;
+use csrrs::CSRRS;
+use csrrw::CSRRW;
+use div::DIV;
+use divu::DIVU;
+use divuw::DIVUW;
+use divw::DIVW;
+use ebreak::EBREAK;
+use ecall::ECALL;
+use fence::FENCE;
+#[cfg(feature = "field-inline")]
+use field_inline::{
+    FIELD_ADD, FIELD_ASSERT_EQ, FIELD_INV, FIELD_LOAD_FROM_X, FIELD_LOAD_IMM, FIELD_MUL,
+    FIELD_STORE_TO_X, FIELD_SUB,
+};
+use jal::JAL;
+use jalr::JALR;
+use lb::LB;
+use lbu::LBU;
+use ld::LD;
+use lh::LH;
+use lhu::LHU;
+use lrd::LRD;
+use lrw::LRW;
+use lui::LUI;
+use lw::LW;
+use lwu::LWU;
+use mret::MRET;
+use mul::MUL;
+use mulh::MULH;
+use mulhsu::MULHSU;
+use mulhu::MULHU;
+use mulw::MULW;
+use or::OR;
+use ori::ORI;
+use rem::REM;
+use remu::REMU;
+use remuw::REMUW;
+use remw::REMW;
+use sb::SB;
+use scd::SCD;
+use scw::SCW;
+use sd::SD;
+use serde::{Deserialize, Serialize};
+use sh::SH;
+use sll::SLL;
+use slli::SLLI;
+use slliw::SLLIW;
+use sllw::SLLW;
+use slt::SLT;
+use slti::SLTI;
+use sltiu::SLTIU;
+use sltu::SLTU;
+use sra::SRA;
+use srai::SRAI;
+use sraiw::SRAIW;
+use sraw::SRAW;
+use srl::SRL;
+use srli::SRLI;
+use srliw::SRLIW;
+use srlw::SRLW;
+use strum_macros::{EnumCount as EnumCountMacro, EnumIter, IntoStaticStr};
+use sub::SUB;
+use subw::SUBW;
+use sw::SW;
+use virtual_host_io::VirtualHostIO;
+use xor::XOR;
+use xori::XORI;
+
+use virtual_advice::VirtualAdvice;
+use virtual_advice_len::VirtualAdviceLen;
+use virtual_advice_load::VirtualAdviceLoad;
+use virtual_assert_eq::VirtualAssertEQ;
+use virtual_assert_halfword_alignment::VirtualAssertHalfwordAlignment;
+use virtual_assert_lte::VirtualAssertLTE;
+use virtual_assert_mulu_no_overflow::VirtualAssertMulUNoOverflow;
+use virtual_assert_valid_div0::VirtualAssertValidDiv0;
+use virtual_assert_valid_unsigned_remainder::VirtualAssertValidUnsignedRemainder;
+use virtual_assert_word_alignment::VirtualAssertWordAlignment;
+use virtual_change_divisor::VirtualChangeDivisor;
+use virtual_change_divisor_w::VirtualChangeDivisorW;
+use virtual_movsign::VirtualMovsign;
+use virtual_muli::VirtualMULI;
+use virtual_muliw::VirtualMULIW;
+use virtual_pow2::VirtualPow2;
+use virtual_pow2_w::VirtualPow2W;
+use virtual_pow2i::VirtualPow2I;
+use virtual_pow2i_w::VirtualPow2IW;
+use virtual_rev8w::VirtualRev8W;
+use virtual_rotri::VirtualROTRI;
+use virtual_rotriw::VirtualROTRIW;
+use virtual_shift_right_bitmask::VirtualShiftRightBitmask;
+use virtual_shift_right_bitmaski::VirtualShiftRightBitmaskI;
+use virtual_sign_extend_word::VirtualSignExtendWord;
+use virtual_sra::VirtualSRA;
+use virtual_srai::VirtualSRAI;
+use virtual_srl::VirtualSRL;
+use virtual_srli::VirtualSRLI;
+use virtual_xor_rot::{VirtualXORROT16, VirtualXORROT24, VirtualXORROT32, VirtualXORROT63};
+use virtual_xor_rotw::{VirtualXORROTW12, VirtualXORROTW16, VirtualXORROTW7, VirtualXORROTW8};
+use virtual_zero_extend_word::VirtualZeroExtendWord;
+
+use self::inline::INLINE;
+
+use crate::emulator::cpu::Cpu;
+use crate::utils::virtual_registers::{is_supported_csr, VirtualRegisterAllocator};
+use derive_more::From;
+use format::{InstructionFormat, InstructionRegisterState, NormalizedOperands};
+pub use jolt_riscv::JoltInstructionRow;
+use jolt_riscv::{JoltInstructionKind, SourceInlineKey, SourceInstructionKind, RV64IMAC_JOLT};
+pub use jolt_riscv::{SourceInstruction, SourceInstructionRow};
+
+pub mod format;
+
+pub use crate::utils::instruction_macros;
+
+/// Trace a multi-row instruction through its per-PC cached inline sequence.
+pub(crate) fn trace_inline_sequence(
+    source: &Instruction,
+    cpu: &mut Cpu,
+    trace: Option<&mut Vec<Cycle>>,
+) {
+    let mut trace = trace;
+    cpu.with_cached_inline_sequence(source, |cpu, rows| {
+        for instr in rows {
+            instr.trace(cpu, trace.as_deref_mut());
+        }
+    });
+}
+
+/// Like [`trace_inline_sequence`], but patches `values` into the sequence's
+/// `VirtualAdvice` rows (in order) before tracing them. The advice is written
+/// to per-execution copies of the rows; the cached template is not mutated.
+pub(crate) fn trace_inline_sequence_with_advice(
+    source: &Instruction,
+    cpu: &mut Cpu,
+    values: &[u64],
+    trace: Option<&mut Vec<Cycle>>,
+) {
+    let mut trace = trace;
+    cpu.with_cached_inline_sequence(source, |cpu, rows| {
+        let mut filled = 0;
+        for instr in rows {
+            let mut instr = *instr;
+            if let Instruction::VirtualAdvice(advice) = &mut instr {
+                let Some(value) = values.get(filled) else {
+                    panic!("inline sequence did not contain enough virtual advice instructions");
+                };
+                advice.advice = *value;
+                filled += 1;
+            }
+            instr.trace(cpu, trace.as_deref_mut());
+        }
+        if filled != 0 && filled != values.len() {
+            panic!("inline sequence did not contain enough virtual advice instructions");
+        }
+    });
+}
+
+pub mod add;
+pub mod addi;
+pub mod addiw;
+pub mod addw;
+pub mod advice_lb;
+pub mod advice_ld;
+pub mod advice_lh;
+pub mod advice_lw;
+pub mod amoaddd;
+pub mod amoaddw;
+pub mod amoandd;
+pub mod amoandw;
+pub mod amomaxd;
+pub mod amomaxud;
+pub mod amomaxuw;
+pub mod amomaxw;
+pub mod amomind;
+pub mod amominud;
+pub mod amominuw;
+pub mod amominw;
+pub mod amoord;
+pub mod amoorw;
+pub mod amoswapd;
+pub mod amoswapw;
+pub mod amoxord;
+pub mod amoxorw;
+pub mod and;
+pub mod andi;
+pub mod andn;
+pub mod auipc;
+pub mod beq;
+pub mod bge;
+pub mod bgeu;
+pub mod blt;
+pub mod bltu;
+pub mod bne;
+pub mod csrrs;
+pub mod csrrw;
+pub mod div;
+pub mod divu;
+pub mod divuw;
+pub mod divw;
+pub mod ebreak;
+pub mod ecall;
+pub mod fence;
+#[cfg(feature = "field-inline")]
+pub mod field_inline;
+pub mod inline;
+pub mod jal;
+pub mod jalr;
+pub mod lb;
+pub mod lbu;
+pub mod ld;
+pub mod lh;
+pub mod lhu;
+pub mod lrd;
+pub mod lrw;
+pub mod lui;
+pub mod lw;
+pub mod lwu;
+pub mod mret;
+pub mod mul;
+pub mod mulh;
+pub mod mulhsu;
+pub mod mulhu;
+pub mod mulw;
+pub mod or;
+pub mod ori;
+pub mod rem;
+pub mod remu;
+pub mod remuw;
+pub mod remw;
+pub mod sb;
+pub mod scd;
+pub mod scw;
+pub mod sd;
+pub mod sh;
+pub mod sll;
+pub mod slli;
+pub mod slliw;
+pub mod sllw;
+pub mod slt;
+pub mod slti;
+pub mod sltiu;
+pub mod sltu;
+pub mod sra;
+pub mod srai;
+pub mod sraiw;
+pub mod sraw;
+pub mod srl;
+pub mod srli;
+pub mod srliw;
+pub mod srlw;
+pub mod sub;
+pub mod subw;
+pub mod sw;
+pub mod virtual_advice;
+pub mod virtual_advice_len;
+pub mod virtual_advice_load;
+pub mod virtual_assert_eq;
+pub mod virtual_assert_halfword_alignment;
+pub mod virtual_assert_lte;
+pub mod virtual_assert_mulu_no_overflow;
+pub mod virtual_assert_valid_div0;
+pub mod virtual_assert_valid_unsigned_remainder;
+pub mod virtual_assert_word_alignment;
+pub mod virtual_change_divisor;
+pub mod virtual_change_divisor_w;
+pub mod virtual_host_io;
+pub mod virtual_movsign;
+pub mod virtual_muli;
+pub mod virtual_muliw;
+pub mod virtual_pow2;
+pub mod virtual_pow2_w;
+pub mod virtual_pow2i;
+pub mod virtual_pow2i_w;
+pub mod virtual_rev8w;
+pub mod virtual_rotri;
+pub mod virtual_rotriw;
+pub mod virtual_shift_right_bitmask;
+pub mod virtual_shift_right_bitmaski;
+pub mod virtual_sign_extend_word;
+pub mod virtual_sra;
+pub mod virtual_srai;
+pub mod virtual_srl;
+pub mod virtual_srli;
+pub mod virtual_xor_rot;
+pub mod virtual_xor_rotw;
+pub mod virtual_zero_extend_word;
+pub mod xor;
+pub mod xori;
+
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test;
+
+#[derive(Default, Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RAMRead {
+    pub address: u64,
+    pub value: u64,
+}
+
+#[derive(Default, Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RAMWrite {
+    pub address: u64,
+    pub pre_value: u64,
+    pub post_value: u64,
+}
+
+pub enum RAMAccess {
+    Read(RAMRead),
+    Write(RAMWrite),
+    NoOp,
+}
+
+impl RAMAccess {
+    pub fn address(&self) -> usize {
+        match self {
+            RAMAccess::Read(read) => read.address as usize,
+            RAMAccess::Write(write) => write.address as usize,
+            RAMAccess::NoOp => 0,
+        }
+    }
+}
+
+impl From<RAMRead> for RAMAccess {
+    fn from(read: RAMRead) -> Self {
+        Self::Read(read)
+    }
+}
+
+impl From<RAMWrite> for RAMAccess {
+    fn from(write: RAMWrite) -> Self {
+        Self::Write(write)
+    }
+}
+
+impl From<()> for RAMAccess {
+    fn from(_: ()) -> Self {
+        Self::NoOp
+    }
+}
+
+pub trait RISCVInstruction: std::fmt::Debug + Sized + Copy + Into<Instruction> {
+    const MASK: u32;
+    const MATCH: u32;
+
+    type Format: InstructionFormat;
+    type RAMAccess: Default + Into<RAMAccess> + Copy + std::fmt::Debug;
+
+    fn operands(&self) -> &Self::Format;
+    fn source_kind(&self) -> SourceInstructionKind;
+    fn new(word: u32, address: u64, validate: bool, compressed: bool) -> Self;
+    #[cfg(any(feature = "test-utils", test))]
+    fn random(rng: &mut rand::rngs::StdRng) -> Self {
+        use rand::RngCore;
+        Self::new(rng.next_u32(), rng.next_u64(), false, false)
+    }
+
+    fn execute(&self, cpu: &mut Cpu, ram_access: &mut Self::RAMAccess);
+
+    fn has_side_effects(&self) -> bool {
+        self.source_kind().has_side_effects()
+    }
+}
+
+pub trait RISCVTrace: RISCVInstruction
+where
+    RISCVCycle<Self>: Into<Cycle>,
+{
+    fn trace(&self, cpu: &mut Cpu, trace: Option<&mut Vec<Cycle>>) {
+        let mut cycle: RISCVCycle<Self> = RISCVCycle {
+            instruction: *self,
+            register_state: Default::default(),
+            ram_access: Default::default(),
+        };
+        self.operands()
+            .capture_pre_execution_state(&mut cycle.register_state, cpu);
+        self.execute(cpu, &mut cycle.ram_access);
+        self.operands()
+            .capture_post_execution_state(&mut cycle.register_state, cpu);
+        match trace {
+            Some(trace_vec) => trace_vec.push(cycle.into()),
+            // This is the single point every emitted row passes through, so
+            // counting row-suppressed executions here makes `trace_len`
+            // row-uniform across trace and execute modes (two-pass parallel
+            // tracing cuts chunks by row count during the execute pass).
+            None => cpu.trace_len += 1,
+        }
+    }
+}
+
+macro_rules! define_rv64imac_enums {
+    (
+        instructions: [$($(#[$meta:meta])* $instr:ident => $marker:ident => $canonical_name:expr),* $(,)?]
+    ) => {
+        #[derive(Debug, IntoStaticStr, From, Clone, Copy, Serialize, Deserialize, EnumIter, PartialEq)]
+        pub enum Instruction {
+            /// No-operation instruction (address)
+            NoOp,
+            UNIMPL,
+            $(
+                $(#[$meta])*
+                $instr($instr),
+            )*
+            /// Inline instruction from external crates
+            INLINE(INLINE),
+        }
+
+        #[derive(
+            From, Debug, Copy, Clone, Serialize, Deserialize, IntoStaticStr, EnumIter, EnumCountMacro, PartialEq
+        )]
+        pub enum Cycle {
+            /// No-operation cycle (address)
+            NoOp,
+            $(
+                $(#[$meta])*
+                $instr(RISCVCycle<$instr>),
+            )*
+            INLINE(RISCVCycle<INLINE>),
+        }
+
+        impl Cycle {
+            pub fn ram_access(&self) -> RAMAccess {
+                match self {
+                    Cycle::NoOp => RAMAccess::NoOp,
+                    $(
+                        $(#[$meta])*
+                        Cycle::$instr(cycle) => cycle.ram_access.into(),
+                    )*
+                    Cycle::INLINE(cycle) => cycle.ram_access.into(),
+                }
+            }
+
+            pub fn rs1_read(&self) -> Option<(u8, u64)> {
+                match self {
+                    Cycle::NoOp => None,
+                    $(
+                        $(#[$meta])*
+                        Cycle::$instr(cycle) => {
+                            if let Some(rs1_val) = cycle.register_state.rs1_value() {
+                                Some((
+                                    NormalizedOperands::from(cycle.instruction.operands).rs1.unwrap(),
+                                    rs1_val,
+                                ))
+                            } else {
+                                None
+                            }
+                        },
+                    )*
+                    Cycle::INLINE(cycle) => {
+                        if let Some(rs1_val) = cycle.register_state.rs1_value() {
+                            Some((
+                                cycle.instruction.operands.rs1,
+                                rs1_val,
+                            ))
+                        } else {
+                            None
+                        }
+                    },
+                }
+            }
+
+            pub fn rs2_read(&self) -> Option<(u8, u64)> {
+                match self {
+                    Cycle::NoOp => None,
+                    $(
+                        $(#[$meta])*
+                        Cycle::$instr(cycle) => {
+                            if let Some(rs2_val) = cycle.register_state.rs2_value() {
+                                Some((
+                                    NormalizedOperands::from(cycle.instruction.operands).rs2.unwrap(),
+                                    rs2_val,
+                                ))
+                            } else {
+                                None
+                            }
+                        },
+                    )*
+                    Cycle::INLINE(cycle) => {
+                        if let Some(rs2_val) = cycle.register_state.rs2_value() {
+                            Some((
+                                cycle.instruction.operands.rs2,
+                                rs2_val,
+                            ))
+                        } else {
+                            None
+                        }
+                    },
+                }
+            }
+
+            pub fn rd_write(&self) -> Option<(u8, u64, u64)> {
+                match self {
+                    Cycle::NoOp => None,
+                    $(
+                        $(#[$meta])*
+                        Cycle::$instr(cycle) => {
+                            if let Some((rd_pre_val, rd_post_val)) = cycle.register_state.rd_values() {
+                                Some((
+                                    NormalizedOperands::from(cycle.instruction.operands).rd.unwrap(),
+                                    rd_pre_val,
+                                    rd_post_val,
+                                ))
+                            } else {
+                                None
+                            }
+                        },
+                    )*
+                    Cycle::INLINE(cycle) => {
+                        if let Some((rd_pre_val, rd_post_val)) = cycle.register_state.rd_values() {
+                            Some((
+                                cycle.instruction.operands.rs3,
+                                rd_pre_val,
+                                rd_post_val,
+                            ))
+                        } else {
+                            None
+                        }
+                    },
+                }
+            }
+
+            pub fn instruction(&self) -> Instruction {
+                match self {
+                    Cycle::NoOp => Instruction::NoOp,
+                    $(
+                        $(#[$meta])*
+                        Cycle::$instr(cycle) => cycle.instruction.into(),
+                    )*
+                    Cycle::INLINE(cycle) => cycle.instruction.into(),
+                }
+            }
+
+            #[cfg(feature = "field-inline")]
+            pub fn field_inline_trace(&self) -> Option<jolt_program::field_inline::FieldInlineTraceData> {
+                match self {
+                    Cycle::FIELD_ADD(cycle) => cycle.ram_access.trace,
+                    Cycle::FIELD_SUB(cycle) => cycle.ram_access.trace,
+                    Cycle::FIELD_MUL(cycle) => cycle.ram_access.trace,
+                    Cycle::FIELD_INV(cycle) => cycle.ram_access.trace,
+                    Cycle::FIELD_ASSERT_EQ(cycle) => cycle.ram_access.trace,
+                    Cycle::FIELD_LOAD_FROM_X(cycle) => cycle.ram_access.trace,
+                    Cycle::FIELD_STORE_TO_X(cycle) => cycle.ram_access.trace,
+                    Cycle::FIELD_LOAD_IMM(cycle) => cycle.ram_access.trace,
+                    _ => None,
+                }
+            }
+
+            /// Returns a freshly randomized cycle of the same variant.
+            /// Used by jolt-prover-legacy fuzz tests that need to iterate all
+            /// instruction variants via `Cycle::iter()`.
+            #[cfg(any(feature = "test-utils", test))]
+            pub fn random(&self, rng: &mut rand::rngs::StdRng) -> Self {
+                match self {
+                    Cycle::NoOp => Cycle::NoOp,
+                    $(
+                        $(#[$meta])*
+                        Cycle::$instr(cycle) => Cycle::$instr(cycle.random(rng)),
+                    )*
+                    Cycle::INLINE(cycle) => Cycle::INLINE(cycle.random(rng)),
+                }
+            }
+        }
+
+        impl Instruction {
+            /// Whether tracing rewrites this instruction through its inline
+            /// sequence so the constraint system never sees rd=x0.
+            #[inline]
+            fn takes_rd0_expansion(&self) -> bool {
+                self.normalized_rd() == Some(0)
+                    && !matches!(
+                        self,
+                        Instruction::SCW(_)
+                            | Instruction::SCD(_)
+                            | Instruction::LRW(_)
+                            | Instruction::LRD(_)
+                            | Instruction::INLINE(_)
+                    )
+                    && !self.is_field_inline()
+            }
+
+            pub fn trace(&self, cpu: &mut Cpu, trace: Option<&mut Vec<Cycle>>) {
+                if self.takes_rd0_expansion() {
+                    let mut trace = trace;
+                    cpu.with_cached_inline_sequence(self, |cpu, rows| {
+                        for instr in rows {
+                            instr.trace_raw(cpu, trace.as_deref_mut());
+                        }
+                    });
+                    return;
+                }
+                match self {
+                    Instruction::NoOp => panic!("Unsupported instruction: {:?}", self),
+                    Instruction::UNIMPL => panic!("Unsupported instruction: {:?}", self),
+                    $(
+                        $(#[$meta])*
+                        Instruction::$instr(instr) => instr.trace(cpu, trace),
+                    )*
+                    Instruction::INLINE(instr) => instr.trace(cpu, trace),
+                }
+            }
+
+            fn trace_raw(&self, cpu: &mut Cpu, trace: Option<&mut Vec<Cycle>>) {
+                match self {
+                    Instruction::NoOp => panic!("Unsupported instruction: {:?}", self),
+                    Instruction::UNIMPL => panic!("Unsupported instruction: {:?}", self),
+                    $(
+                        $(#[$meta])*
+                        Instruction::$instr(instr) => instr.trace(cpu, trace),
+                    )*
+                    Instruction::INLINE(instr) => instr.trace(cpu, trace),
+                }
+            }
+
+            /// Applies this instruction's state effects without emitting rows.
+            ///
+            /// Mirror of `trace(cpu, None)`: execute mode must leave the CPU
+            /// bit-identical to trace mode at every tick boundary, because
+            /// two-pass parallel tracing replays chunks from execute-mode
+            /// state. Instructions whose trace path walks a virtual-instruction
+            /// expansion (CSR mirrors in vr34–39, ecall/mret trap sequences,
+            /// advice-fed div/rem, vr40+ temp writes, rd=x0 rewrites) walk the
+            /// same cached expansion here with no sink; dispatching per arm as
+            /// `trace(…, None)` lets non-expanding instructions inline down to
+            /// their raw `execute`.
+            pub fn execute(&self, cpu: &mut Cpu) {
+                if self.takes_rd0_expansion() {
+                    cpu.with_cached_inline_sequence(self, |cpu, rows| {
+                        for instr in rows {
+                            instr.trace_raw(cpu, None);
+                        }
+                    });
+                    return;
+                }
+                match self {
+                    Instruction::NoOp => panic!("Unsupported instruction: {:?}", self),
+                    Instruction::UNIMPL => panic!("Unsupported instruction: {:?}", self),
+                    $(
+                        $(#[$meta])*
+                        Instruction::$instr(instr) => instr.trace(cpu, None),
+                    )*
+                    Instruction::INLINE(instr) => instr.trace(cpu, None),
+                }
+            }
+
+            pub fn try_jolt_instruction_row(&self) -> Result<JoltInstructionRow, SourceInstructionKind> {
+                match self {
+                    Instruction::NoOp => Ok(Default::default()),
+                    Instruction::UNIMPL => Err(SourceInstructionKind::Unimpl),
+                    $(
+                        $(#[$meta])*
+                        Instruction::$instr(instr) => {
+                            let source_kind =
+                                jolt_riscv::SourceInstruction::$marker(
+                                    jolt_riscv::instructions::$marker(())
+                                );
+                            let Some(instruction_kind) = source_kind.jolt_kind() else {
+                                return Err(source_kind);
+                            };
+                            Ok(JoltInstructionRow {
+                                instruction_kind,
+                                address: instr.address as usize,
+                                operands: instr.operands.into(),
+                                virtual_sequence_remaining: instr.virtual_sequence_remaining,
+                                is_first_in_sequence: instr.is_first_in_sequence,
+                                is_compressed: instr.is_compressed,
+                            })
+                        },
+                    )*
+                    Instruction::INLINE(_) => Err(SourceInstructionKind::Inline),
+                }
+            }
+
+            pub fn source_instruction(&self) -> SourceInstruction {
+                if let Instruction::INLINE(inline) = self {
+                    return SourceInstruction::new(
+                        SourceInstructionKind::Inline,
+                        SourceInstructionRow {
+                            address: inline.address as usize,
+                            operands: inline.operands.into(),
+                            inline: Some(SourceInlineKey {
+                                opcode: inline.opcode as u8,
+                                funct3: inline.funct3 as u8,
+                                funct7: inline.funct7 as u8,
+                            }),
+                            is_compressed: inline.is_compressed,
+                        },
+                    );
+                }
+                match self {
+                    Instruction::NoOp => SourceInstruction::new(
+                        SourceInstructionKind::NoOp,
+                        SourceInstructionRow::default(),
+                    ),
+                    Instruction::UNIMPL => SourceInstruction::new(
+                        SourceInstructionKind::Unimpl,
+                        SourceInstructionRow::default(),
+                    ),
+                    $(
+                        $(#[$meta])*
+                        Instruction::$instr(instr) => SourceInstruction::new(
+                            jolt_riscv::SourceInstruction::$marker(
+                                jolt_riscv::instructions::$marker(())
+                            ),
+                            SourceInstructionRow {
+                                address: instr.address as usize,
+                                operands: instr.operands.into(),
+                                inline: None,
+                                is_compressed: instr.is_compressed,
+                            },
+                        ),
+                    )*
+                    Instruction::INLINE(_) => unreachable!("inline source returned above"),
+                }
+            }
+
+            pub fn has_side_effects(&self) -> bool {
+                match self {
+                    Instruction::NoOp => false,
+                    Instruction::UNIMPL => false,
+                    $(
+                        $(#[$meta])*
+                        Instruction::$instr(instr) => instr.has_side_effects(),
+                    )*
+                    Instruction::INLINE(instr) => instr.has_side_effects(),
+                }
+            }
+
+            /// The normalized rd operand, without constructing a full
+            /// `SourceInstruction`. Matches `source_instruction().row().operands.rd`
+            /// (same `From<Format> for NormalizedOperands` conversions).
+            #[inline]
+            fn normalized_rd(&self) -> Option<u8> {
+                match self {
+                    Instruction::NoOp => None,
+                    Instruction::UNIMPL => None,
+                    $(
+                        $(#[$meta])*
+                        Instruction::$instr(instr) => NormalizedOperands::from(instr.operands).rd,
+                    )*
+                    Instruction::INLINE(inline) => NormalizedOperands::from(inline.operands).rd,
+                }
+            }
+
+            /// The memory address this instruction was decoded from.
+            pub fn address(&self) -> u64 {
+                match self {
+                    Instruction::NoOp => 0,
+                    Instruction::UNIMPL => 0,
+                    $(
+                        $(#[$meta])*
+                        Instruction::$instr(instr) => instr.address,
+                    )*
+                    Instruction::INLINE(instr) => instr.address,
+                }
+            }
+
+            fn is_field_inline(&self) -> bool {
+                is_field_inline_instruction(self)
+            }
+
+            pub fn inline_sequence(&self, allocator: &VirtualRegisterAllocator) -> Vec<Instruction> {
+                if let Instruction::INLINE(inline) = self {
+                    return inline.inline_sequence(allocator);
+                }
+                if self.is_field_inline() {
+                    return vec![self.clone()];
+                }
+                let mut expansion_allocator = jolt_program::expand::ExpansionAllocator::new();
+                jolt_program::expand::expand_instruction(
+                    &self.source_instruction(),
+                    &mut expansion_allocator,
+                    RV64IMAC_JOLT,
+                )
+                .expect("jolt-program bytecode expansion failed")
+                .into_iter()
+                .map(JoltInstructionRow::from)
+                .map(|instruction| {
+                    Instruction::try_from_jolt_instruction_row(instruction)
+                        .expect("jolt-program expansion produced an instruction unknown to tracer")
+                })
+                .collect()
+            }
+
+            pub fn try_from_jolt_instruction_row(instruction: JoltInstructionRow) -> Result<Self, &'static str> {
+                instruction_from_final_jolt_row(instruction)
+            }
+
+            pub fn try_from_source_instruction(instruction: SourceInstruction) -> Result<Self, &'static str> {
+                let kind = instruction.kind();
+                let row = instruction.into_row();
+                if kind == SourceInstructionKind::Inline {
+                    let inline = row
+                        .inline
+                        .ok_or("missing inline source metadata")?;
+                    return Ok(INLINE {
+                        opcode: inline.opcode as u32,
+                        funct3: inline.funct3 as u32,
+                        funct7: inline.funct7 as u32,
+                        address: row.address as u64,
+                        operands: row.operands.into(),
+                        virtual_sequence_remaining: None,
+                        is_first_in_sequence: false,
+                        is_compressed: row.is_compressed,
+                    }
+                    .into());
+                }
+                match kind {
+                    jolt_riscv::SourceInstruction::Noop(_) => Ok(Instruction::NoOp),
+                    jolt_riscv::SourceInstruction::Unimplemented(_) => Ok(Instruction::UNIMPL),
+                    $(
+                        $(#[$meta])*
+                        jolt_riscv::SourceInstruction::$marker(_) => Ok(
+                            <$instr as From<SourceInstructionRow>>::from(row).into()
+                        ),
+                    )*
+                    jolt_riscv::SourceInstruction::InlineDispatch(_) => {
+                        unreachable!("inline source returned above")
+                    },
+                }
+            }
+
+            pub fn set_virtual_sequence_remaining(&mut self, remaining: Option<u16>) {
+                match self {
+                    Instruction::NoOp => (),
+                    Instruction::UNIMPL => (),
+                    $(
+                        $(#[$meta])*
+                        Instruction::$instr(instr) => {instr.virtual_sequence_remaining = remaining;}
+                    )*
+                    Instruction::INLINE(instr) => {instr.virtual_sequence_remaining = remaining;}
+                }
+            }
+
+            pub fn set_is_first_in_sequence(&mut self, is_first: bool) {
+                match self {
+                    Instruction::NoOp => (),
+                    Instruction::UNIMPL => (),
+                    $(
+                        $(#[$meta])*
+                        Instruction::$instr(instr) => {instr.is_first_in_sequence = is_first;}
+                    )*
+                    Instruction::INLINE(instr) => {instr.is_first_in_sequence = is_first;}
+                }
+            }
+
+            pub fn set_is_compressed(&mut self, is_compressed: bool) {
+                match self {
+                    Instruction::NoOp => (),
+                    Instruction::UNIMPL => (),
+                    $(
+                        $(#[$meta])*
+                        Instruction::$instr(instr) => {instr.is_compressed = is_compressed;}
+                    )*
+                    Instruction::INLINE(instr) => {instr.is_compressed = is_compressed;}
+                }
+            }
+
+            pub fn virtual_sequence_remaining(&self) -> Option<u16> {
+                match self {
+                    Instruction::NoOp | Instruction::UNIMPL => None,
+                    $(
+                        $(#[$meta])*
+                        Instruction::$instr(instr) => instr.virtual_sequence_remaining,
+                    )*
+                    Instruction::INLINE(instr) => instr.virtual_sequence_remaining,
+                }
+            }
+        }
+
+    };
+}
+
+jolt_riscv::for_each_instruction_kind!(define_rv64imac_enums);
+
+#[cfg(feature = "field-inline")]
+fn is_field_inline_instruction(instruction: &Instruction) -> bool {
+    matches!(
+        instruction,
+        Instruction::FIELD_ADD(_)
+            | Instruction::FIELD_SUB(_)
+            | Instruction::FIELD_MUL(_)
+            | Instruction::FIELD_INV(_)
+            | Instruction::FIELD_ASSERT_EQ(_)
+            | Instruction::FIELD_LOAD_FROM_X(_)
+            | Instruction::FIELD_STORE_TO_X(_)
+            | Instruction::FIELD_LOAD_IMM(_)
+    )
+}
+
+#[cfg(not(feature = "field-inline"))]
+fn is_field_inline_instruction(_instruction: &Instruction) -> bool {
+    false
+}
+
+macro_rules! define_final_jolt_row_conversion {
+    (
+        instructions: [$($(#[$meta:meta])* $instr:ident => $marker:ident => ($tag:expr, $canonical_name:expr)),* $(,)?]
+    ) => {
+        fn instruction_from_final_jolt_row(
+            instruction: JoltInstructionRow,
+        ) -> Result<Instruction, &'static str> {
+            match instruction.instruction_kind {
+                JoltInstructionKind::NoOp => Ok(Instruction::NoOp),
+                $(
+                    $(#[$meta])*
+                    jolt_riscv::JoltInstruction::$marker(_) => {
+                        Ok(<$instr as From<JoltInstructionRow>>::from(instruction).into())
+                    }
+                )*
+            }
+        }
+    };
+}
+
+jolt_riscv::for_each_jolt_instruction_kind!(define_final_jolt_row_conversion);
+
+macro_rules! impl_final_jolt_row_data {
+    (
+        instructions: [$($(#[$meta:meta])* $instr:ident => $marker:ident => ($tag:expr, $canonical_name:expr)),* $(,)?]
+    ) => {
+        $(
+            $(#[$meta])*
+            impl jolt_riscv::JoltInstructionRowData for $instr {}
+
+            $(#[$meta])*
+            impl_final_jolt_row_data!(@from_row $instr);
+
+            $(#[$meta])*
+            impl From<$instr> for JoltInstructionRow {
+                fn from(instr: $instr) -> JoltInstructionRow {
+                    JoltInstructionRow {
+                        instruction_kind: jolt_riscv::JoltInstruction::$marker(
+                            jolt_riscv::instructions::$marker(())
+                        ),
+                        address: instr.address as usize,
+                        operands: instr.operands.into(),
+                        is_compressed: instr.is_compressed,
+                        virtual_sequence_remaining: instr.virtual_sequence_remaining,
+                        is_first_in_sequence: instr.is_first_in_sequence,
+                    }
+                }
+            }
+        )*
+    };
+
+    (@from_row VirtualAdvice) => {};
+
+    (@from_row $instr:ident) => {
+        impl From<JoltInstructionRow> for $instr {
+            fn from(row: JoltInstructionRow) -> Self {
+                Self {
+                    address: row.address as u64,
+                    operands: row.operands.into(),
+                    virtual_sequence_remaining: row.virtual_sequence_remaining,
+                    is_first_in_sequence: row.is_first_in_sequence,
+                    is_compressed: row.is_compressed,
+                }
+            }
+        }
+    };
+}
+
+jolt_riscv::for_each_jolt_instruction_kind!(impl_final_jolt_row_data);
+
+impl CanonicalSerialize for Instruction {
+    fn serialize_with_mode<W: ark_serialize::Write>(
+        &self,
+        mut writer: W,
+        _compress: Compress,
+    ) -> Result<(), SerializationError> {
+        let bytes = serde_json::to_vec(self).map_err(|_| SerializationError::InvalidData)?;
+        let len: u64 = bytes.len() as u64;
+        len.serialize_with_mode(&mut writer, _compress)?;
+        writer
+            .write_all(&bytes)
+            .map_err(|_| SerializationError::InvalidData)?;
+        Ok(())
+    }
+
+    fn serialized_size(&self, _compress: Compress) -> usize {
+        let bytes = serde_json::to_vec(self).expect("serialization failed");
+        bytes.len() + 8 // 8 bytes for length
+    }
+}
+
+impl CanonicalDeserialize for Instruction {
+    fn deserialize_with_mode<R: ark_serialize::Read>(
+        mut reader: R,
+        compress: Compress,
+        validate: Validate,
+    ) -> Result<Self, SerializationError> {
+        let len = u64::deserialize_with_mode(&mut reader, compress, validate)?;
+        let mut bytes = vec![0u8; len as usize];
+        reader
+            .read_exact(&mut bytes)
+            .map_err(|_| SerializationError::InvalidData)?;
+        serde_json::from_slice(&bytes).map_err(|e| {
+            println!("Deserialization error: {e}");
+            SerializationError::InvalidData
+        })
+    }
+}
+
+impl Valid for Instruction {
+    fn check(&self) -> Result<(), SerializationError> {
+        Ok(())
+    }
+}
+
+impl Instruction {
+    pub fn is_real(&self) -> bool {
+        // ignore no-op
+        if matches!(self, Instruction::NoOp) {
+            return false;
+        }
+
+        match self.virtual_sequence_remaining() {
+            None => true,     // ordinary instruction
+            Some(0) => true,  // "anchor" of a inline sequence
+            Some(_) => false, // helper within the sequence
+        }
+    }
+
+    pub fn decode(instr: u32, address: u64, compressed: bool) -> Result<Self, &'static str> {
+        let opcode = instr & 0x7f;
+        match opcode {
+            0b0110111 => {
+                // LUI: U-type => [imm(31:12), rd, opcode]
+                Ok(LUI::new(instr, address, true, compressed).into())
+            }
+            0b0010111 => {
+                // AUIPC: U-type => [imm(31:12), rd, opcode]
+                Ok(AUIPC::new(instr, address, true, compressed).into())
+            }
+            0b1101111 => {
+                // JAL: UJ-type instruction.
+                Ok(JAL::new(instr, address, true, compressed).into())
+            }
+            0b1100111 => {
+                // JALR: I-type, where funct3 must be 0.
+                let funct3 = (instr >> 12) & 0x7;
+                if funct3 != 0 {
+                    return Err("Invalid funct3 for JALR");
+                }
+                Ok(JALR::new(instr, address, true, compressed).into())
+            }
+            0b1100011 => {
+                // Branch instructions (SB-type): BEQ, BNE, BLT, BGE, BLTU, BGEU.
+                match (instr >> 12) & 0x7 {
+                    0b000 => Ok(BEQ::new(instr, address, true, compressed).into()),
+                    0b001 => Ok(BNE::new(instr, address, true, compressed).into()),
+                    0b100 => Ok(BLT::new(instr, address, true, compressed).into()),
+                    0b101 => Ok(BGE::new(instr, address, true, compressed).into()),
+                    0b110 => Ok(BLTU::new(instr, address, true, compressed).into()),
+                    0b111 => Ok(BGEU::new(instr, address, true, compressed).into()),
+                    _ => Err("Invalid branch funct3"),
+                }
+            }
+            0b0000011 => {
+                // Load instructions (I-type): LB, LH, LW, LBU, LHU, LD, LWU.
+                match (instr >> 12) & 0x7 {
+                    0b000 => Ok(LB::new(instr, address, true, compressed).into()),
+                    0b001 => Ok(LH::new(instr, address, true, compressed).into()),
+                    0b010 => Ok(LW::new(instr, address, true, compressed).into()),
+                    0b011 => Ok(LD::new(instr, address, true, compressed).into()),
+                    0b100 => Ok(LBU::new(instr, address, true, compressed).into()),
+                    0b101 => Ok(LHU::new(instr, address, true, compressed).into()),
+                    0b110 => Ok(LWU::new(instr, address, true, compressed).into()),
+                    _ => Err("Invalid load funct3"),
+                }
+            }
+            0b0100011 => {
+                // Store instructions (S-type): SB, SH, SW.
+                match (instr >> 12) & 0x7 {
+                    0b000 => Ok(SB::new(instr, address, true, compressed).into()),
+                    0b001 => Ok(SH::new(instr, address, true, compressed).into()),
+                    0b010 => Ok(SW::new(instr, address, true, compressed).into()),
+                    0b011 => Ok(SD::new(instr, address, true, compressed).into()),
+                    _ => Err("Invalid store funct3"),
+                }
+            }
+            0b0010011 => {
+                // I-type arithmetic instructions: ADDI, SLTI, SLTIU, XORI, ORI, ANDI,
+                // and also shift-immediate instructions SLLI, SRLI, SRAI.
+                let funct3 = (instr >> 12) & 0x7;
+                let funct6 = (instr >> 26) & 0x3f;
+                if funct3 == 0b001 {
+                    // SLLI uses shamt and expects funct6 == 0.
+                    if funct6 == 0 {
+                        Ok(SLLI::new(instr, address, true, compressed).into())
+                    } else {
+                        Err("Invalid funct7 for SLLI")
+                    }
+                } else if funct3 == 0b101 {
+                    if funct6 == 0b000000 {
+                        Ok(SRLI::new(instr, address, true, compressed).into())
+                    } else if funct6 == 0b010000 {
+                        Ok(SRAI::new(instr, address, true, compressed).into())
+                    } else {
+                        Err("Invalid ALU shift funct7")
+                    }
+                } else {
+                    match funct3 {
+                        0b000 => Ok(ADDI::new(instr, address, true, compressed).into()),
+                        0b010 => Ok(SLTI::new(instr, address, true, compressed).into()),
+                        0b011 => Ok(SLTIU::new(instr, address, true, compressed).into()),
+                        0b100 => Ok(XORI::new(instr, address, true, compressed).into()),
+                        0b110 => Ok(ORI::new(instr, address, true, compressed).into()),
+                        0b111 => Ok(ANDI::new(instr, address, true, compressed).into()),
+                        _ => Err("Invalid I-type ALU funct3"),
+                    }
+                }
+            }
+            0b0011011 => {
+                // RV64I I-type arithmetic instructions.
+                let funct3 = (instr >> 12) & 0x7;
+                let funct7 = (instr >> 25) & 0x7f;
+                match (funct3, funct7) {
+                    (0b000, _) => Ok(ADDIW::new(instr, address, true, compressed).into()),
+                    (0b001, 0b0000000) => Ok(SLLIW::new(instr, address, true, compressed).into()),
+                    (0b101, 0b0000000) => Ok(SRLIW::new(instr, address, true, compressed).into()),
+                    (0b101, 0b0100000) => Ok(SRAIW::new(instr, address, true, compressed).into()),
+                    _ => Err("Invalid RV64I I-type arithmetic instruction"),
+                }
+            }
+            0b0110011 => {
+                // R-type arithmetic instructions.
+                let funct3 = (instr >> 12) & 0x7;
+                let funct7 = (instr >> 25) & 0x7f;
+                match (funct3, funct7) {
+                    (0b000, 0b0000000) => Ok(ADD::new(instr, address, true, compressed).into()),
+                    (0b000, 0b0100000) => Ok(SUB::new(instr, address, true, compressed).into()),
+                    (0b001, 0b0000000) => Ok(SLL::new(instr, address, true, compressed).into()),
+                    (0b010, 0b0000000) => Ok(SLT::new(instr, address, true, compressed).into()),
+                    (0b011, 0b0000000) => Ok(SLTU::new(instr, address, true, compressed).into()),
+                    (0b100, 0b0000000) => Ok(XOR::new(instr, address, true, compressed).into()),
+                    (0b101, 0b0000000) => Ok(SRL::new(instr, address, true, compressed).into()),
+                    (0b101, 0b0100000) => Ok(SRA::new(instr, address, true, compressed).into()),
+                    (0b110, 0b0000000) => Ok(OR::new(instr, address, true, compressed).into()),
+                    (0b111, 0b0000000) => Ok(AND::new(instr, address, true, compressed).into()),
+
+                    // M extension
+                    (0b000, 0b0000001) => Ok(MUL::new(instr, address, true, compressed).into()),
+                    (0b001, 0b0000001) => Ok(MULH::new(instr, address, true, compressed).into()),
+                    (0b010, 0b0000001) => Ok(MULHSU::new(instr, address, true, compressed).into()),
+                    (0b011, 0b0000001) => Ok(MULHU::new(instr, address, true, compressed).into()),
+                    (0b100, 0b0000001) => Ok(DIV::new(instr, address, true, compressed).into()),
+                    (0b101, 0b0000001) => Ok(DIVU::new(instr, address, true, compressed).into()),
+                    (0b110, 0b0000001) => Ok(REM::new(instr, address, true, compressed).into()),
+                    (0b111, 0b0000001) => Ok(REMU::new(instr, address, true, compressed).into()),
+                    _ => Err("Invalid R-type arithmetic instruction"),
+                }
+            }
+            0b0111011 => {
+                // RV64I R-type arithmetic instructions.
+                let funct3 = (instr >> 12) & 0x7;
+                let funct7 = (instr >> 25) & 0x7f;
+                match (funct3, funct7) {
+                    (0b000, 0b0000000) => Ok(ADDW::new(instr, address, true, compressed).into()),
+                    (0b000, 0b0100000) => Ok(SUBW::new(instr, address, true, compressed).into()),
+                    (0b001, 0b0000000) => Ok(SLLW::new(instr, address, true, compressed).into()),
+                    (0b100, 0b0000001) => Ok(DIVW::new(instr, address, true, compressed).into()),
+                    (0b101, 0b0000000) => Ok(SRLW::new(instr, address, true, compressed).into()),
+                    (0b101, 0b0100000) => Ok(SRAW::new(instr, address, true, compressed).into()),
+                    (0b000, 0b0000001) => Ok(MULW::new(instr, address, true, compressed).into()),
+                    (0b101, 0b0000001) => Ok(DIVUW::new(instr, address, true, compressed).into()),
+                    (0b110, 0b0000001) => Ok(REMW::new(instr, address, true, compressed).into()),
+                    (0b111, 0b0000001) => Ok(REMUW::new(instr, address, true, compressed).into()),
+                    _ => Err("Invalid RV64I R-type arithmetic instruction"),
+                }
+            }
+            0b0001111 => {
+                // FENCE: I-type; the immediate encodes "pred" and "succ" flags.
+                Ok(FENCE::new(instr, address, true, compressed).into())
+            }
+            0b0101111 => {
+                // Atomic Memory Operations (A-extension): LR, SC, AMOSWAP, AMOADD, etc.
+                // Only check funct3 (width) and funct5 (operation type)
+                // bits [26:25] are aq/rl flags which can vary
+                let funct3 = (instr >> 12) & 0x7;
+                let funct5 = (instr >> 27) & 0x1f;
+
+                match (funct3, funct5) {
+                    // LR (Load Reserved)
+                    (0b010, 0b00010) => Ok(LRW::new(instr, address, true, compressed).into()),
+                    (0b011, 0b00010) => Ok(LRD::new(instr, address, true, compressed).into()),
+
+                    // SC (Store Conditional)
+                    (0b010, 0b00011) => Ok(SCW::new(instr, address, true, compressed).into()),
+                    (0b011, 0b00011) => Ok(SCD::new(instr, address, true, compressed).into()),
+
+                    // AMOSWAP
+                    (0b010, 0b00001) => Ok(AMOSWAPW::new(instr, address, true, compressed).into()),
+                    (0b011, 0b00001) => Ok(AMOSWAPD::new(instr, address, true, compressed).into()),
+
+                    // AMOADD
+                    (0b010, 0b00000) => Ok(AMOADDW::new(instr, address, true, compressed).into()),
+                    (0b011, 0b00000) => Ok(AMOADDD::new(instr, address, true, compressed).into()),
+
+                    // AMOAND
+                    (0b010, 0b01100) => Ok(AMOANDW::new(instr, address, true, compressed).into()),
+                    (0b011, 0b01100) => Ok(AMOANDD::new(instr, address, true, compressed).into()),
+
+                    // AMOOR
+                    (0b010, 0b01000) => Ok(AMOORW::new(instr, address, true, compressed).into()),
+                    (0b011, 0b01000) => Ok(AMOORD::new(instr, address, true, compressed).into()),
+
+                    // AMOXOR
+                    (0b010, 0b00100) => Ok(AMOXORW::new(instr, address, true, compressed).into()),
+                    (0b011, 0b00100) => Ok(AMOXORD::new(instr, address, true, compressed).into()),
+
+                    // AMOMIN
+                    (0b010, 0b10000) => Ok(AMOMINW::new(instr, address, true, compressed).into()),
+                    (0b011, 0b10000) => Ok(AMOMIND::new(instr, address, true, compressed).into()),
+
+                    // AMOMAX
+                    (0b010, 0b10100) => Ok(AMOMAXW::new(instr, address, true, compressed).into()),
+                    (0b011, 0b10100) => Ok(AMOMAXD::new(instr, address, true, compressed).into()),
+
+                    // AMOMINU
+                    (0b010, 0b11000) => Ok(AMOMINUW::new(instr, address, true, compressed).into()),
+                    (0b011, 0b11000) => Ok(AMOMINUD::new(instr, address, true, compressed).into()),
+
+                    // AMOMAXU
+                    (0b010, 0b11100) => Ok(AMOMAXUW::new(instr, address, true, compressed).into()),
+                    (0b011, 0b11100) => Ok(AMOMAXUD::new(instr, address, true, compressed).into()),
+
+                    _ => {
+                        eprintln!("Invalid atomic memory operation: instr=0x{instr:08x} funct3={funct3:03b} funct5={funct5:05b}");
+                        Err("Invalid atomic memory operation")
+                    }
+                }
+            }
+            0b1110011 => {
+                // SYSTEM instructions: ECALL, EBREAK, MRET, CSRs
+                let funct3 = (instr >> 12) & 0x7;
+                let funct7 = (instr >> 25) & 0x7f;
+                let rs2 = (instr >> 20) & 0x1f;
+
+                match (funct3, funct7, rs2) {
+                    // ECALL: funct3=0, funct7=0, rs2=0 (instr = 0x00000073)
+                    (0, 0, 0) if instr == 0x00000073 => {
+                        Ok(ECALL::new(instr, address, true, compressed).into())
+                    }
+                    // EBREAK: funct3=0, rs2=1 (instr = 0x00100073)
+                    (0, 0, 1) if instr == 0x00100073 => {
+                        Ok(EBREAK::new(instr, address, true, compressed).into())
+                    }
+                    // MRET: funct3=0, funct7=0x18, rs2=2 (instr = 0x30200073)
+                    (0, 0x18, 2) if instr == 0x30200073 => {
+                        Ok(MRET::new(instr, address, true, compressed).into())
+                    }
+                    // CSRRW: funct3=1. Reject unsupported CSRs at decode time
+                    // so the trace path never reaches an unmodelled CSR — the
+                    // inline_sequence path would otherwise panic the prover.
+                    (1, _, _) => {
+                        let csr_addr = ((instr >> 20) & 0xFFF) as u16;
+                        if !is_supported_csr(csr_addr) {
+                            return Err("Unsupported CSR in CSRRW");
+                        }
+                        Ok(CSRRW::new(instr, address, true, compressed).into())
+                    }
+                    // CSRRS: funct3=2. Same rationale as CSRRW above.
+                    (2, _, _) => {
+                        let csr_addr = ((instr >> 20) & 0xFFF) as u16;
+                        if !is_supported_csr(csr_addr) {
+                            return Err("Unsupported CSR in CSRRS");
+                        }
+                        Ok(CSRRS::new(instr, address, true, compressed).into())
+                    }
+                    _ => Err("Unsupported SYSTEM instruction"),
+                }
+            }
+            // 0x0B is reserved for inlines supported by Jolt in jolt-inlines crate.
+            // In attempt to standardize this space for precompiles and inlines,
+            // each new type of operation should be placed under different funct7,
+            // while funct3 should hold all necessary instructions for that operation.
+            // funct7:
+            // - 0x00: SHA256
+            // - 0x01: Keccak256
+            0b0001011 => Ok(INLINE::new(instr, address, false, compressed).into()),
+            // 0x2B is reserved for external inlines
+            0b0101011 => Ok(INLINE::new(instr, address, false, compressed).into()),
+            // 0x5B is reserved for custom/virtual instructions.
+            0b1011011 => {
+                let funct3 = ((instr >> 12) & 0x7) as u8;
+                if funct3 == FUNCT3_VIRTUAL_R {
+                    let funct7 = (instr >> 25) & 0x7f;
+                    match funct7 {
+                        FUNCT7_ADVICE_LB => {
+                            Ok(AdviceLB::new(instr, address, true, compressed).into())
+                        }
+                        FUNCT7_ADVICE_LH => {
+                            Ok(AdviceLH::new(instr, address, true, compressed).into())
+                        }
+                        FUNCT7_ADVICE_LW => {
+                            Ok(AdviceLW::new(instr, address, true, compressed).into())
+                        }
+                        FUNCT7_ADVICE_LD => {
+                            Ok(AdviceLD::new(instr, address, true, compressed).into())
+                        }
+                        FUNCT7_ADVICE_LEN => {
+                            Ok(VirtualAdviceLen::new(instr, address, true, compressed).into())
+                        }
+                        FUNCT7_VIRTUAL_REV8W => {
+                            Ok(VirtualRev8W::new(instr, address, true, compressed).into())
+                        }
+                        _ => Err("Invalid funct7 for virtual R-type instruction"),
+                    }
+                } else if funct3 == FUNCT3_VIRTUAL_ASSERT_EQ {
+                    Ok(VirtualAssertEQ::new(instr, address, true, compressed).into())
+                } else if funct3 == FUNCT3_VIRTUAL_HOST_IO {
+                    Ok(VirtualHostIO::new(instr, address, true, compressed).into())
+                } else {
+                    Err("Invalid custom/virtual instruction")
+                }
+            }
+            #[cfg(feature = "field-inline")]
+            opcode if opcode == u32::from(jolt_riscv::FIELD_INLINE_OPCODE) => {
+                match jolt_riscv::FieldInlineOp::from_funct3(((instr >> 12) & 0x7) as u8) {
+                    Some(jolt_riscv::FieldInlineOp::Add) => {
+                        Ok(FIELD_ADD::new(instr, address, true, compressed).into())
+                    }
+                    Some(jolt_riscv::FieldInlineOp::Sub) => {
+                        Ok(FIELD_SUB::new(instr, address, true, compressed).into())
+                    }
+                    Some(jolt_riscv::FieldInlineOp::Mul) => {
+                        Ok(FIELD_MUL::new(instr, address, true, compressed).into())
+                    }
+                    Some(jolt_riscv::FieldInlineOp::Inv) => {
+                        Ok(FIELD_INV::new(instr, address, true, compressed).into())
+                    }
+                    Some(jolt_riscv::FieldInlineOp::AssertEq) => {
+                        Ok(FIELD_ASSERT_EQ::new(instr, address, true, compressed).into())
+                    }
+                    Some(jolt_riscv::FieldInlineOp::LoadFromX) => {
+                        Ok(FIELD_LOAD_FROM_X::new(instr, address, true, compressed).into())
+                    }
+                    Some(jolt_riscv::FieldInlineOp::StoreToX) => {
+                        Ok(FIELD_STORE_TO_X::new(instr, address, true, compressed).into())
+                    }
+                    Some(jolt_riscv::FieldInlineOp::LoadImm) => {
+                        Ok(FIELD_LOAD_IMM::new(instr, address, true, compressed).into())
+                    }
+                    None => Err("Invalid field-inline instruction"),
+                }
+            }
+            _ => Err("Unknown opcode"),
+        }
+    }
+}
+
+// @TODO: Optimize
+pub fn uncompress_instruction(halfword: u32) -> u32 {
+    let op = halfword & 0x3; // [1:0]
+    let funct3 = (halfword >> 13) & 0x7; // [15:13]
+
+    match op {
+        0 => match funct3 {
+            0 => {
+                // C.ADDI4SPN
+                // addi rd+8, x2, nzuimm
+                let rd = (halfword >> 2) & 0x7; // [4:2]
+                let nzuimm = ((halfword >> 7) & 0x30) | // nzuimm[5:4] <= [12:11]
+                        ((halfword >> 1) & 0x3c0) | // nzuimm{9:6] <= [10:7]
+                        ((halfword >> 4) & 0x4) | // nzuimm[2] <= [6]
+                        ((halfword >> 2) & 0x8); // nzuimm[3] <= [5]
+                                                 // nzuimm == 0 is reserved instruction
+                if nzuimm != 0 {
+                    return (nzuimm << 20) | (2 << 15) | ((rd + 8) << 7) | 0x13;
+                }
+            }
+            1 => {
+                // @TODO: Support C.LQ for 128-bit
+                // C.FLD for 32, 64-bit
+                // fld rd+8, offset(rs1+8)
+                let rd = (halfword >> 2) & 0x7; // [4:2]
+                let rs1 = (halfword >> 7) & 0x7; // [9:7]
+                let offset = ((halfword >> 7) & 0x38) | // offset[5:3] <= [12:10]
+                        ((halfword << 1) & 0xc0); // offset[7:6] <= [6:5]
+                return (offset << 20) | ((rs1 + 8) << 15) | (3 << 12) | ((rd + 8) << 7) | 0x7;
+            }
+            2 => {
+                // C.LW
+                // lw rd+8, offset(rs1+8)
+                let rs1 = (halfword >> 7) & 0x7; // [9:7]
+                let rd = (halfword >> 2) & 0x7; // [4:2]
+                let offset = ((halfword >> 7) & 0x38) | // offset[5:3] <= [12:10]
+                        ((halfword >> 4) & 0x4) | // offset[2] <= [6]
+                        ((halfword << 1) & 0x40); // offset[6] <= [5]
+                return (offset << 20) | ((rs1 + 8) << 15) | (2 << 12) | ((rd + 8) << 7) | 0x3;
+            }
+            3 => {
+                // C.LD
+                // ld rd+8, offset(rs1+8)
+                let rs1 = (halfword >> 7) & 0x7; // [9:7]
+                let rd = (halfword >> 2) & 0x7; // [4:2]
+                let offset = ((halfword >> 7) & 0x38) | // offset[5:3] <= [12:10]
+                        ((halfword << 1) & 0xc0); // offset[7:6] <= [6:5]
+                return (offset << 20) | ((rs1 + 8) << 15) | (3 << 12) | ((rd + 8) << 7) | 0x3;
+            }
+            4 => {
+                // Reserved
+            }
+            5 => {
+                // C.FSD
+                // fsd rs2+8, offset(rs1+8)
+                let rs1 = (halfword >> 7) & 0x7; // [9:7]
+                let rs2 = (halfword >> 2) & 0x7; // [4:2]
+                let offset = ((halfword >> 7) & 0x38) | // uimm[5:3] <= [12:10]
+                        ((halfword << 1) & 0xc0); // uimm[7:6] <= [6:5]
+                let imm11_5 = (offset >> 5) & 0x7f;
+                let imm4_0 = offset & 0x1f;
+                return (imm11_5 << 25)
+                    | ((rs2 + 8) << 20)
+                    | ((rs1 + 8) << 15)
+                    | (3 << 12)
+                    | (imm4_0 << 7)
+                    | 0x27;
+            }
+            6 => {
+                // C.SW
+                // sw rs2+8, offset(rs1+8)
+                let rs1 = (halfword >> 7) & 0x7; // [9:7]
+                let rs2 = (halfword >> 2) & 0x7; // [4:2]
+                let offset = ((halfword >> 7) & 0x38) | // offset[5:3] <= [12:10]
+                        ((halfword << 1) & 0x40) | // offset[6] <= [5]
+                        ((halfword >> 4) & 0x4); // offset[2] <= [6]
+                let imm11_5 = (offset >> 5) & 0x7f;
+                let imm4_0 = offset & 0x1f;
+                return (imm11_5 << 25)
+                    | ((rs2 + 8) << 20)
+                    | ((rs1 + 8) << 15)
+                    | (2 << 12)
+                    | (imm4_0 << 7)
+                    | 0x23;
+            }
+            7 => {
+                // C.SD
+                // sd rs2+8, offset(rs1+8)
+                let rs1 = (halfword >> 7) & 0x7; // [9:7]
+                let rs2 = (halfword >> 2) & 0x7; // [4:2]
+                let offset = ((halfword >> 7) & 0x38) | // uimm[5:3] <= [12:10]
+                        ((halfword << 1) & 0xc0); // uimm[7:6] <= [6:5]
+                let imm11_5 = (offset >> 5) & 0x7f;
+                let imm4_0 = offset & 0x1f;
+                return (imm11_5 << 25)
+                    | ((rs2 + 8) << 20)
+                    | ((rs1 + 8) << 15)
+                    | (3 << 12)
+                    | (imm4_0 << 7)
+                    | 0x23;
+            }
+            _ => {} // Not happens
+        },
+        1 => {
+            match funct3 {
+                0 => {
+                    // C.ADDI
+                    let r = (halfword >> 7) & 0x1f; // [11:7]
+                    let imm = match halfword & 0x1000 {
+                            0x1000 => 0xffffffc0,
+                            _ => 0
+                        } | // imm[31:6] <= [12]
+                        ((halfword >> 7) & 0x20) | // imm[5] <= [12]
+                        ((halfword >> 2) & 0x1f); // imm[4:0] <= [6:2]
+
+                    match (r, imm) {
+                        (0, 0) => {
+                            // NOP
+                            return 0x13;
+                        }
+                        (0, _) => {
+                            // HINT
+                            return 0x13;
+                        }
+                        (_, 0) => {
+                            // HINT
+                            return 0x13;
+                        }
+                        (_, _) => {
+                            return (imm << 20) | (r << 15) | (r << 7) | 0x13;
+                        }
+                    }
+                }
+                1 => {
+                    // C.ADDIW
+                    let r = (halfword >> 7) & 0x1f;
+                    let imm = match halfword & 0x1000 {
+                            0x1000 => 0xffffffc0,
+                            _ => 0
+                        } | // imm[31:6] <= [12]
+                        ((halfword >> 7) & 0x20) | // imm[5] <= [12]
+                        ((halfword >> 2) & 0x1f); // imm[4:0] <= [6:2]
+                    if r == 0 {
+                        // Reserved
+                    } else if imm == 0 {
+                        // sext.w rd
+                        return (r << 15) | (r << 7) | 0x1b;
+                    } else {
+                        // addiw r, r, imm
+                        return (imm << 20) | (r << 15) | (r << 7) | 0x1b;
+                    }
+                }
+                2 => {
+                    // C.LI
+                    let r = (halfword >> 7) & 0x1f;
+                    let imm = match halfword & 0x1000 {
+                            0x1000 => 0xffffffc0,
+                            _ => 0
+                        } | // imm[31:6] <= [12]
+                        ((halfword >> 7) & 0x20) | // imm[5] <= [12]
+                        ((halfword >> 2) & 0x1f); // imm[4:0] <= [6:2]
+                    if r != 0 {
+                        // addi rd, x0, imm
+                        return (imm << 20) | (r << 7) | 0x13;
+                    } else {
+                        // HINT
+                        return 0x13;
+                    }
+                }
+                3 => {
+                    let r = (halfword >> 7) & 0x1f; // [11:7]
+                    if r == 2 {
+                        // C.ADDI16SP
+                        // addi r, r, nzimm
+                        let imm = match halfword & 0x1000 {
+                                0x1000 => 0xfffffc00,
+                                _ => 0
+                            } | // imm[31:10] <= [12]
+                            ((halfword >> 3) & 0x200) | // imm[9] <= [12]
+                            ((halfword >> 2) & 0x10) | // imm[4] <= [6]
+                            ((halfword << 1) & 0x40) | // imm[6] <= [5]
+                            ((halfword << 4) & 0x180) | // imm[8:7] <= [4:3]
+                            ((halfword << 3) & 0x20); // imm[5] <= [2]
+                        if imm != 0 {
+                            return (imm << 20) | (r << 15) | (r << 7) | 0x13;
+                        }
+                        // imm == 0 is for reserved instruction
+                    }
+                    if r != 0 && r != 2 {
+                        // C.LUI
+                        // lui r, nzimm
+                        let nzimm = match halfword & 0x1000 {
+                                0x1000 => 0xfffc0000,
+                                _ => 0
+                            } | // nzimm[31:18] <= [12]
+                            ((halfword << 5) & 0x20000) | // nzimm[17] <= [12]
+                            ((halfword << 10) & 0x1f000); // nzimm[16:12] <= [6:2]
+                        if nzimm != 0 {
+                            return nzimm | (r << 7) | 0x37;
+                        }
+                        // nzimm == 0 is for reserved instruction
+                    }
+                    if r == 0 {
+                        // NOP
+                        return 0x13;
+                    }
+                }
+                4 => {
+                    let funct2 = (halfword >> 10) & 0x3; // [11:10]
+                    match funct2 {
+                        0 => {
+                            // C.SRLI
+                            // c.srli rs1+8, rs1+8, shamt
+                            let shamt = ((halfword >> 7) & 0x20) | // shamt[5] <= [12]
+                                    ((halfword >> 2) & 0x1f); // shamt[4:0] <= [6:2]
+                            let rs1 = (halfword >> 7) & 0x7; // [9:7]
+                            return (shamt << 20)
+                                | ((rs1 + 8) << 15)
+                                | (5 << 12)
+                                | ((rs1 + 8) << 7)
+                                | 0x13;
+                        }
+                        1 => {
+                            // C.SRAI
+                            // srai rs1+8, rs1+8, shamt
+                            let shamt = ((halfword >> 7) & 0x20) | // shamt[5] <= [12]
+                                    ((halfword >> 2) & 0x1f); // shamt[4:0] <= [6:2]
+                            let rs1 = (halfword >> 7) & 0x7; // [9:7]
+                            return (0x20 << 25)
+                                | (shamt << 20)
+                                | ((rs1 + 8) << 15)
+                                | (5 << 12)
+                                | ((rs1 + 8) << 7)
+                                | 0x13;
+                        }
+                        2 => {
+                            // C.ANDI
+                            // andi, r+8, r+8, imm
+                            let r = (halfword >> 7) & 0x7; // [9:7]
+                            let imm = match halfword & 0x1000 {
+                                    0x1000 => 0xffffffc0,
+                                    _ => 0
+                                } | // imm[31:6] <= [12]
+                                ((halfword >> 7) & 0x20) | // imm[5] <= [12]
+                                ((halfword >> 2) & 0x1f); // imm[4:0] <= [6:2]
+                            return (imm << 20)
+                                | ((r + 8) << 15)
+                                | (7 << 12)
+                                | ((r + 8) << 7)
+                                | 0x13;
+                        }
+                        3 => {
+                            let funct1 = (halfword >> 12) & 1; // [12]
+                            let funct2_2 = (halfword >> 5) & 0x3; // [6:5]
+                            let rs1 = (halfword >> 7) & 0x7;
+                            let rs2 = (halfword >> 2) & 0x7;
+                            match funct1 {
+                                0 => match funct2_2 {
+                                    0 => {
+                                        // C.SUB
+                                        // sub rs1+8, rs1+8, rs2+8
+                                        return (0x20 << 25)
+                                            | ((rs2 + 8) << 20)
+                                            | ((rs1 + 8) << 15)
+                                            | ((rs1 + 8) << 7)
+                                            | 0x33;
+                                    }
+                                    1 => {
+                                        // C.XOR
+                                        // xor rs1+8, rs1+8, rs2+8
+                                        return ((rs2 + 8) << 20)
+                                            | ((rs1 + 8) << 15)
+                                            | (4 << 12)
+                                            | ((rs1 + 8) << 7)
+                                            | 0x33;
+                                    }
+                                    2 => {
+                                        // C.OR
+                                        // or rs1+8, rs1+8, rs2+8
+                                        return ((rs2 + 8) << 20)
+                                            | ((rs1 + 8) << 15)
+                                            | (6 << 12)
+                                            | ((rs1 + 8) << 7)
+                                            | 0x33;
+                                    }
+                                    3 => {
+                                        // C.AND
+                                        // and rs1+8, rs1+8, rs2+8
+                                        return ((rs2 + 8) << 20)
+                                            | ((rs1 + 8) << 15)
+                                            | (7 << 12)
+                                            | ((rs1 + 8) << 7)
+                                            | 0x33;
+                                    }
+                                    _ => {} // Not happens
+                                },
+                                1 => match funct2_2 {
+                                    0 => {
+                                        // C.SUBW
+                                        // subw r1+8, r1+8, r2+8
+                                        return (0x20 << 25)
+                                            | ((rs2 + 8) << 20)
+                                            | ((rs1 + 8) << 15)
+                                            | ((rs1 + 8) << 7)
+                                            | 0x3b;
+                                    }
+                                    1 => {
+                                        // C.ADDW
+                                        // addw r1+8, r1+8, r2+8
+                                        return ((rs2 + 8) << 20)
+                                            | ((rs1 + 8) << 15)
+                                            | ((rs1 + 8) << 7)
+                                            | 0x3b;
+                                    }
+                                    2 => {
+                                        // Reserved
+                                    }
+                                    3 => {
+                                        // Reserved
+                                    }
+                                    _ => {} // Not happens
+                                },
+                                _ => {} // No happens
+                            };
+                        }
+                        _ => {} // not happens
+                    };
+                }
+                5 => {
+                    // C.J
+                    // jal x0, imm
+                    let offset = match halfword & 0x1000 {
+                                0x1000 => 0xfffff000,
+                                _ => 0
+                            } | // offset[31:12] <= [12]
+                            ((halfword >> 1) & 0x800) | // offset[11] <= [12]
+                            ((halfword >> 7) & 0x10) | // offset[4] <= [11]
+                            ((halfword >> 1) & 0x300) | // offset[9:8] <= [10:9]
+                            ((halfword << 2) & 0x400) | // offset[10] <= [8]
+                            ((halfword >> 1) & 0x40) | // offset[6] <= [7]
+                            ((halfword << 1) & 0x80) | // offset[7] <= [6]
+                            ((halfword >> 2) & 0xe) | // offset[3:1] <= [5:3]
+                            ((halfword << 3) & 0x20); // offset[5] <= [2]
+                    let imm = ((offset >> 1) & 0x80000) | // imm[19] <= offset[20]
+                            ((offset << 8) & 0x7fe00) | // imm[18:9] <= offset[10:1]
+                            ((offset >> 3) & 0x100) | // imm[8] <= offset[11]
+                            ((offset >> 12) & 0xff); // imm[7:0] <= offset[19:12]
+                    return (imm << 12) | 0x6f;
+                }
+                6 => {
+                    // C.BEQZ
+                    // beq r+8, x0, offset
+                    let r = (halfword >> 7) & 0x7;
+                    let offset = match halfword & 0x1000 {
+                                0x1000 => 0xfffffe00,
+                                _ => 0
+                            } | // offset[31:9] <= [12]
+                            ((halfword >> 4) & 0x100) | // offset[8] <= [12]
+                            ((halfword >> 7) & 0x18) | // offset[4:3] <= [11:10]
+                            ((halfword << 1) & 0xc0) | // offset[7:6] <= [6:5]
+                            ((halfword >> 2) & 0x6) | // offset[2:1] <= [4:3]
+                            ((halfword << 3) & 0x20); // offset[5] <= [2]
+                    let imm2 = ((offset >> 6) & 0x40) | // imm2[6] <= [12]
+                            ((offset >> 5) & 0x3f); // imm2[5:0] <= [10:5]
+                    let imm1 = (offset & 0x1e) | // imm1[4:1] <= [4:1]
+                            ((offset >> 11) & 0x1); // imm1[0] <= [11]
+                    return (imm2 << 25) | ((r + 8) << 20) | (imm1 << 7) | 0x63;
+                }
+                7 => {
+                    // C.BNEZ
+                    // bne r+8, x0, offset
+                    let r = (halfword >> 7) & 0x7;
+                    let offset = match halfword & 0x1000 {
+                                0x1000 => 0xfffffe00,
+                                _ => 0
+                            } | // offset[31:9] <= [12]
+                            ((halfword >> 4) & 0x100) | // offset[8] <= [12]
+                            ((halfword >> 7) & 0x18) | // offset[4:3] <= [11:10]
+                            ((halfword << 1) & 0xc0) | // offset[7:6] <= [6:5]
+                            ((halfword >> 2) & 0x6) | // offset[2:1] <= [4:3]
+                            ((halfword << 3) & 0x20); // offset[5] <= [2]
+                    let imm2 = ((offset >> 6) & 0x40) | // imm2[6] <= [12]
+                            ((offset >> 5) & 0x3f); // imm2[5:0] <= [10:5]
+                    let imm1 = (offset & 0x1e) | // imm1[4:1] <= [4:1]
+                            ((offset >> 11) & 0x1); // imm1[0] <= [11]
+                    return (imm2 << 25) | ((r + 8) << 20) | (1 << 12) | (imm1 << 7) | 0x63;
+                }
+                _ => {} // No happens
+            };
+        }
+        2 => {
+            match funct3 {
+                0 => {
+                    // C.SLLI
+                    // slli r, r, shamt
+                    let r = (halfword >> 7) & 0x1f;
+                    let shamt = ((halfword >> 7) & 0x20) | // imm[5] <= [12]
+                            ((halfword >> 2) & 0x1f); // imm[4:0] <= [6:2]
+                    return (shamt << 20) | (r << 15) | (1 << 12) | (r << 7) | 0x13;
+                }
+                1 => {
+                    // C.FLDSP
+                    // fld rd, offset(x2)
+                    let rd = (halfword >> 7) & 0x1f;
+                    let offset = ((halfword >> 7) & 0x20) | // offset[5] <= [12]
+                            ((halfword >> 2) & 0x18) | // offset[4:3] <= [6:5]
+                            ((halfword << 4) & 0x1c0); // offset[8:6] <= [4:2]
+                    if rd != 0 {
+                        return (offset << 20) | (2 << 15) | (3 << 12) | (rd << 7) | 0x7;
+                    }
+                    // rd == 0 is reserved instruction
+                }
+                2 => {
+                    // C.LWSP
+                    // lw r, offset(x2)
+                    let r = (halfword >> 7) & 0x1f;
+                    let offset = ((halfword >> 7) & 0x20) | // offset[5] <= [12]
+                            ((halfword >> 2) & 0x1c) | // offset[4:2] <= [6:4]
+                            ((halfword << 4) & 0xc0); // offset[7:6] <= [3:2]
+                    if r != 0 {
+                        return (offset << 20) | (2 << 15) | (2 << 12) | (r << 7) | 0x3;
+                    }
+                    // r == 0 is reserved instruction
+                }
+                3 => {
+                    // C.LDSP
+                    // ld rd, offset(x2)
+                    let rd = (halfword >> 7) & 0x1f;
+                    let offset = ((halfword >> 7) & 0x20) | // offset[5] <= [12]
+                            ((halfword >> 2) & 0x18) | // offset[4:3] <= [6:5]
+                            ((halfword << 4) & 0x1c0); // offset[8:6] <= [4:2]
+                    if rd != 0 {
+                        return (offset << 20) | (2 << 15) | (3 << 12) | (rd << 7) | 0x3;
+                    }
+                    // rd == 0 is reserved instruction
+                }
+                4 => {
+                    let funct1 = (halfword >> 12) & 1; // [12]
+                    let rs1 = (halfword >> 7) & 0x1f; // [11:7]
+                    let rs2 = (halfword >> 2) & 0x1f; // [6:2]
+                    match funct1 {
+                        0 => {
+                            // C.MV
+                            match (rs1, rs2) {
+                                (0, 0) => {
+                                    // Reserved
+                                }
+                                (r, 0) if r != 0 => {
+                                    // C.JR: jalr x0, 0(rs1)
+                                    return (rs1 << 15) | 0x67;
+                                }
+                                (0, r2) if r2 != 0 => {
+                                    // HINT
+                                    return 0x13;
+                                }
+                                (rd, rs2) => {
+                                    // add rd, x0, rs2
+                                    return (rs2 << 20) | (rd << 7) | 0x33;
+                                }
+                            }
+                        }
+                        1 => {
+                            // C.ADD
+                            match (rs1, rs2) {
+                                (0, 0) => {
+                                    // C.EBREAK
+                                    // ebreak
+                                    return 0x00100073;
+                                }
+                                (rs1, 0) if rs1 != 0 => {
+                                    // C.JALR
+                                    // jalr x1, 0(rs1)
+                                    return (rs1 << 15) | (1 << 7) | 0x67;
+                                }
+                                (0, rs2) if rs2 != 0 => {
+                                    // HINT
+                                    return 0x13;
+                                }
+                                (rs1, rs2) => {
+                                    // C.ADD
+                                    // add rs1, rs1, rs2
+                                    return (rs2 << 20) | (rs1 << 15) | (rs1 << 7) | 0x33;
+                                }
+                            }
+                        }
+                        _ => {} // Not happens
+                    };
+                }
+                5 => {
+                    // @TODO: Implement
+                    // C.FSDSP
+                    // fsd rs2, offset(x2)
+                    let rs2 = (halfword >> 2) & 0x1f; // [6:2]
+                    let offset = ((halfword >> 7) & 0x38) | // offset[5:3] <= [12:10]
+                            ((halfword >> 1) & 0x1c0); // offset[8:6] <= [9:7]
+                    let imm11_5 = (offset >> 5) & 0x3f;
+                    let imm4_0 = offset & 0x1f;
+                    return (imm11_5 << 25)
+                        | (rs2 << 20)
+                        | (2 << 15)
+                        | (3 << 12)
+                        | (imm4_0 << 7)
+                        | 0x27;
+                }
+                6 => {
+                    // C.SWSP
+                    // sw rs2, offset(x2)
+                    let rs2 = (halfword >> 2) & 0x1f; // [6:2]
+                    let offset = ((halfword >> 7) & 0x3c) | // offset[5:2] <= [12:9]
+                            ((halfword >> 1) & 0xc0); // offset[7:6] <= [8:7]
+                    let imm11_5 = (offset >> 5) & 0x3f;
+                    let imm4_0 = offset & 0x1f;
+                    return (imm11_5 << 25)
+                        | (rs2 << 20)
+                        | (2 << 15)
+                        | (2 << 12)
+                        | (imm4_0 << 7)
+                        | 0x23;
+                }
+                7 => {
+                    // C.SDSP
+                    // sd rs, offset(x2)
+                    let rs2 = (halfword >> 2) & 0x1f; // [6:2]
+                    let offset = ((halfword >> 7) & 0x38) | // offset[5:3] <= [12:10]
+                            ((halfword >> 1) & 0x1c0); // offset[8:6] <= [9:7]
+                    let imm11_5 = (offset >> 5) & 0x3f;
+                    let imm4_0 = offset & 0x1f;
+                    return (imm11_5 << 25)
+                        | (rs2 << 20)
+                        | (2 << 15)
+                        | (3 << 12)
+                        | (imm4_0 << 7)
+                        | 0x23;
+                }
+                _ => {} // Not happens
+            };
+        }
+        _ => {} // Not happens
+    };
+    0xffffffff // Return invalid value
+}
+
+#[derive(Default, Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RISCVCycle<T: RISCVInstruction> {
+    pub instruction: T,
+    pub register_state: <T::Format as InstructionFormat>::RegisterState,
+    pub ram_access: T::RAMAccess,
+}
+
+impl<T: RISCVInstruction> RISCVCycle<T> {
+    #[cfg(any(feature = "test-utils", test))]
+    pub fn random(&self, rng: &mut rand::rngs::StdRng) -> Self {
+        let instruction = T::random(rng);
+        let concrete: Instruction = instruction.into();
+        let source_instruction = concrete.source_instruction();
+        let register_state =
+            <<T::Format as InstructionFormat>::RegisterState as InstructionRegisterState>::random(
+                rng,
+                &source_instruction.row().operands,
+            );
+        Self {
+            instruction,
+            ram_access: Default::default(),
+            register_state,
+        }
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "field-inline")]
+    use crate::emulator::default_terminal::DefaultTerminal;
+    #[cfg(feature = "field-inline")]
+    use jolt_program::field_inline::{FieldEncodedValue, FieldInlineBridge};
+    #[cfg(feature = "field-inline")]
+    use jolt_riscv::{FieldInlineOp, FIELD_INLINE_OPCODE};
+
+    #[cfg(feature = "field-inline")]
+    fn field_inline_word(op: FieldInlineOp, rd: u8, rs1: u8, rs2_or_imm: u16) -> u32 {
+        u32::from(FIELD_INLINE_OPCODE)
+            | (u32::from(rd) << 7)
+            | (u32::from(op.funct3()) << 12)
+            | (u32::from(rs1) << 15)
+            | (u32::from(rs2_or_imm) << 20)
+    }
+
+    #[cfg(feature = "field-inline")]
+    fn trace_one(cpu: &mut Cpu, word: u32) -> Cycle {
+        let instruction = Instruction::decode(word, 0x8000_0000, false).unwrap();
+        let mut trace = Vec::new();
+        instruction.trace(cpu, Some(&mut trace));
+        assert_eq!(trace.len(), 1);
+        trace.remove(0)
+    }
+
+    #[cfg(not(feature = "field-inline"))]
+    #[test]
+    fn field_inline_opcode_is_unknown_without_feature() {
+        let word = 0x7b | (2 << 12) | (1 << 7) | (2 << 15) | (3 << 20);
+        assert!(Instruction::decode(word, 0x8000_0000, false).is_err());
+    }
+
+    #[cfg(feature = "field-inline")]
+    #[test]
+    fn field_inline_trace_separates_fr_rows_from_x_register_bridges() {
+        let mut cpu = Cpu::new(Box::new(DefaultTerminal::default()));
+        cpu.write_register(5, 7);
+
+        let load_cycle = trace_one(
+            &mut cpu,
+            field_inline_word(FieldInlineOp::LoadFromX, 1, 5, 0),
+        );
+        assert_eq!(load_cycle.rs1_read(), Some((5, 7)));
+        assert_eq!(load_cycle.rd_write(), None);
+        let load_trace = load_cycle.field_inline_trace().unwrap();
+        assert_eq!(load_trace.op, Some(FieldInlineOp::LoadFromX));
+        assert_eq!(
+            load_trace.bridge,
+            Some(FieldInlineBridge::LoadFromX {
+                x_register: 5,
+                x_value: 7,
+                field_value: FieldEncodedValue::from_u64(7),
+            })
+        );
+
+        let imm_cycle = trace_one(&mut cpu, field_inline_word(FieldInlineOp::LoadImm, 2, 0, 3));
+        assert_eq!(imm_cycle.rs1_read(), None);
+        assert_eq!(imm_cycle.rs2_read(), None);
+        assert_eq!(imm_cycle.rd_write(), None);
+        assert_eq!(
+            imm_cycle
+                .field_inline_trace()
+                .unwrap()
+                .rd
+                .unwrap()
+                .post_value,
+            FieldEncodedValue::from_u64(3)
+        );
+
+        let mul_cycle = trace_one(&mut cpu, field_inline_word(FieldInlineOp::Mul, 3, 1, 2));
+        assert_eq!(mul_cycle.rs1_read(), None);
+        assert_eq!(mul_cycle.rs2_read(), None);
+        assert_eq!(mul_cycle.rd_write(), None);
+        let mul_trace = mul_cycle.field_inline_trace().unwrap();
+        assert_eq!(mul_trace.op, Some(FieldInlineOp::Mul));
+        assert_eq!(mul_trace.rs1.unwrap().value, FieldEncodedValue::from_u64(7));
+        assert_eq!(mul_trace.rs2.unwrap().value, FieldEncodedValue::from_u64(3));
+        assert_eq!(
+            mul_trace.rd.unwrap().post_value,
+            FieldEncodedValue::from_u64(21)
+        );
+        assert_eq!(mul_trace.product, Some(FieldEncodedValue::from_u64(21)));
+
+        let store_cycle = trace_one(
+            &mut cpu,
+            field_inline_word(FieldInlineOp::StoreToX, 10, 3, 0),
+        );
+        assert_eq!(store_cycle.rs1_read(), None);
+        assert_eq!(store_cycle.rd_write(), Some((10, 0, 21)));
+        let store_trace = store_cycle.field_inline_trace().unwrap();
+        assert_eq!(
+            store_trace.bridge,
+            Some(FieldInlineBridge::StoreToX {
+                field_register: 3,
+                field_value: FieldEncodedValue::from_u64(21),
+                x_register: 10,
+                x_value: 21,
+            })
+        );
+        assert_eq!(cpu.read_register(10), 21);
+    }
+
+    #[test]
+    fn source_only_tracer_conversion_does_not_fabricate_final_kind() {
+        let source = SourceInstruction::new(
+            SourceInstructionKind::MULH,
+            SourceInstructionRow {
+                address: 0x1234,
+                operands: NormalizedOperands {
+                    rd: Some(7),
+                    rs1: Some(5),
+                    rs2: Some(6),
+                    imm: 0,
+                },
+                inline: None,
+                is_compressed: true,
+            },
+        );
+
+        let instruction = Instruction::try_from_source_instruction(source).unwrap();
+        assert!(instruction.try_jolt_instruction_row().is_err());
+        let Instruction::MULH(mulh) = instruction else {
+            panic!("expected MULH tracer instruction");
+        };
+        assert_eq!(mulh.address, 0x1234);
+        assert_eq!(mulh.virtual_sequence_remaining, None);
+        assert!(!mulh.is_first_in_sequence);
+        assert!(mulh.is_compressed);
+    }
+
+    #[test]
+    // Check that the size of Cycle is as expected.
+    fn rv64imac_cycle_size() {
+        let size = size_of::<Cycle>();
+        #[cfg(not(feature = "field-inline"))]
+        let expected = 96;
+        #[cfg(feature = "field-inline")]
+        let expected = 368;
+        assert_eq!(
+            size, expected,
+            "Cycle size should be {expected} bytes, but is {size} bytes"
+        );
+    }
+}

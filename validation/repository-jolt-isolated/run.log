@@ -1,0 +1,369 @@
+warning: function `public_table_digest` is never used
+   --> batch/src/hidden_relation_batch.rs:638:4
+    |
+638 | fn public_table_digest(values: &[ark_bn254::Fr]) -> Result<[u8; 32], HiddenRelationError> {
+    |    ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `bind_hidden_field_vector_statement` is never used
+   --> batch/src/jolt_dory_adapter.rs:642:4
+    |
+642 | fn bind_hidden_field_vector_statement<T: Transcript<Challenge = Fr>>(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `open_hidden_field_vector_zk` is never used
+   --> batch/src/jolt_dory_adapter.rs:665:8
+    |
+665 | pub fn open_hidden_field_vector_zk<T: Transcript<Challenge = Fr>>(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `verify_hidden_field_vector_zk` is never used
+   --> batch/src/jolt_dory_adapter.rs:703:8
+    |
+703 | pub fn verify_hidden_field_vector_zk<T: Transcript<Challenge = Fr>>(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `bool_to_field` is never used
+    --> batch/src/section6_data.rs:1313:15
+     |
+1313 | pub(crate) fn bool_to_field<F: PrimeField>(bit: bool) -> F {
+     |               ^^^^^^^^^^^^^
+
+warning: methods `values` and `committed` are never used
+   --> batch/src/section6_values.rs:179:19
+    |
+178 | impl CommittedSection6ClaimValues {
+    | --------------------------------- methods in this implementation
+179 |     pub(crate) fn values(&self) -> &[ArkFr] {
+    |                   ^^^^^^
+...
+183 |     pub(crate) fn committed(&self) -> &CommittedDoryFieldVector {
+    |                   ^^^^^^^^^
+
+warning: methods `standard_point_ark`, `normalized_witness`, and `committed_values` are never used
+   --> batch/src/section6_values.rs:195:19
+    |
+188 | impl PendingSection6ClaimValueOpening<'_> {
+    | ----------------------------------------- methods in this implementation
+...
+195 |     pub(crate) fn standard_point_ark(&self) -> Vec<ArkFr> {
+    |                   ^^^^^^^^^^^^^^^^^^
+...
+203 |     pub(crate) fn normalized_witness(&self) -> &HiddenScalarWitness {
+    |                   ^^^^^^^^^^^^^^^^^^
+...
+207 |     pub(crate) fn committed_values(&self) -> &CommittedSection6ClaimValues {
+    |                   ^^^^^^^^^^^^^^^^
+
+warning: function `section6_claim_value_standard_point` is never used
+   --> batch/src/section6_values.rs:375:15
+    |
+375 | pub(crate) fn section6_claim_value_standard_point(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `section6_claim_value_logical_len` is never used
+   --> batch/src/section6_values.rs:384:15
+    |
+384 | pub(crate) fn section6_claim_value_logical_len(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `batch` (lib) generated 9 warnings
+warning: variants `I8` and `I16` are never constructed
+  --> batch/benches/experiment.rs:77:5
+   |
+76 | pub(crate) enum LoadedInMemoryBva {
+   |                 ----------------- variants in this enum
+77 |     I8(DenseMatrixBva<i8>),
+   |     ^^
+78 |     I16(DenseMatrixBva<i16>),
+   |     ^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `run_from_args_with_in_memory_model` is never used
+   --> batch/benches/experiment.rs:136:15
+    |
+136 | pub(crate) fn run_from_args_with_in_memory_model(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `batch` (bench "experiment") generated 2 warnings
+    Finished `bench` profile [optimized + debuginfo] target(s) in 6.14s
+     Running benches/experiment.rs (/tmp/parcomm-artifact-build/jolt/release/deps/experiment-a7437cad5ef11a5a)
+[stage 1/8] Workload preparation
+descriptor_seconds=0.000051
+peak_rss_after_descriptor_kib=4320
+output_mode=detailed
+experiment=parcomm-cargo-bench
+protocol=section6-capped16-packed-eo-active-prefix-dory
+shape_validity_proof_enabled=true
+backend=jolt-dory-bn254-cpu
+rayon_threads=2
+formal_thread_requirement=64
+seed=4996832045231066452
+bit_width=8
+storage_dtype=i8
+storage_element_bytes=1
+kappa=64
+splitting_budget=4
+family=homogeneous
+matrix_count=2
+matrix_rows=31
+matrix_cols=37
+shape_formula=31x37 repeated
+input_kind=generated_i8
+physical_entries=2294
+active_logical_entries=2368
+logical_entries=4096
+boundary_padding_shortint_entries=74
+final_padding_shortint_entries=1728
+stored_shortint_entries=2368
+stored_shortint_bytes=2368
+bucket_count=24
+required_dory_log=12
+canonical_dory_log=12
+estimated_packed_field_entries=37
+estimated_packed_field_bytes=1184
+estimated_eo_flat_vector_count=2
+estimated_eo_flat_entries_per_vector=37
+estimated_eo_flat_field_entries=74
+estimated_eo_flat_field_bytes=2368
+estimated_witness_plus_packed_bytes=3552
+estimated_witness_plus_eo_flat_bytes=4736
+manifest_seconds=0.000000
+descriptor_seconds=0.000051
+[stage 2/8] Input loading or generation
+generation_seconds=0.000027
+peak_rss_after_generation_kib=4320
+[stage 3/8] Claim construction
+claims_seconds=0.000025
+peak_rss_after_claims_kib=4320
+[stage 4/8] Dory setup
+setup_seconds=0.139035
+peak_rss_after_setup_kib=5536
+[stage 5/8] Shape and dense BVA commitments
+commit_phase_seconds=0.023234
+peak_rss_after_commit_phase_kib=5536
+[stage 6/8] Opening prover
+opening_prove_seconds=1.003346
+peak_rss_after_opening_prove_kib=9132
+[stage 7/8] Proof serialization and decoding
+serialization_seconds=0.100991
+peak_rss_after_serialization_kib=9196
+[stage 8/8] Verification and final validation
+opening_verify_seconds=0.193315
+peak_rss_after_opening_verify_kib=9444
+input_allocation_seconds=0.000000
+input_read_seconds=0.000000
+input_hash_seconds=0.000000
+input_adopt_seconds=0.000000
+input_validation_seconds=0.000000
+input_loader_classified_seconds=0.000000
+input_loader_other_seconds=0.000000
+input_loader_total_seconds=0.000000
+input_generation_other_seconds=0.000027
+claims_seconds=0.000025
+generation_seconds=0.000027
+dory_pcs_setup_seconds=0.139032
+blindfold_setup_seconds=0.000001
+setup_profile_total_seconds=0.139033
+setup_classified_seconds=0.139032
+setup_orchestration_seconds=0.000002
+setup_seconds=0.139035
+shape_commit_seconds=0.012935
+bva_commit_seconds=0.010279
+commit_validity_prove_seconds=0.000000
+commit_phase_seconds=0.023234
+commit_orchestration_seconds=0.000020
+opening_validation_seconds=0.000010
+shape_validity_prepare_seconds=0.024437
+shape_validity_reduction_seconds=0.060912
+validity_prove_seconds=0.085349
+batch_point_seconds=0.000020
+x_commit_seconds=0.006757
+point_witness_seconds=0.000029
+tbv_commit_seconds=0.009626
+point_aux_commit_seconds=0.012783
+keys_commit_seconds=0.006950
+point_prove_seconds=0.161869
+packed_binding_seconds=0.002612
+tbv_reconstruct_seconds=0.000014
+packed_eo_seconds=0.107804
+packed_eo_packed_cross_terms_seconds=0.001183
+packed_eo_first_fold_seconds=0.000188
+packed_eo_reduced_check_seconds=0.000122
+packed_eo_binary_cross_terms_seconds=0.000278
+packed_eo_binary_challenge_seconds=0.004041
+packed_eo_binary_fold_seconds=0.000745
+packed_eo_binary_rounds_seconds=0.005064
+eo_ip_accounted_seconds=0.006556
+eo_ip_other_seconds=0.101248
+virtual_tbv_drop_seconds=0.000006
+bva_open_seconds=0.257236
+bva_open_point_preparation_seconds=0.000000
+bva_open_dense_preparation_seconds=0.000000
+bva_open_transcript_preparation_seconds=0.000002
+bva_open_dory_seconds=0.256376
+bva_open_scalar_binding_seconds=0.000851
+bva_open_profile_other_seconds=0.000001
+bva_open_profile_total_seconds=0.257231
+point_witness_drop_seconds=0.000001
+final_witness_seconds=0.000027
+final_aux_commit_seconds=0.029033
+final_witness_drop_seconds=0.000003
+final_prove_seconds=0.077286
+terminal_claim_collection_seconds=0.019365
+terminal_open_seconds=0.226485
+terminal_preparation_state_setup_seconds=0.014155
+terminal_sumcheck_prove_seconds=0.008877
+terminal_dory_batch_open_seconds=0.182648
+terminal_blindfold_preparation_seconds=0.005573
+terminal_blindfold_prove_seconds=0.015219
+terminal_result_assembly_seconds=0.000000
+terminal_profile_other_seconds=0.000001
+terminal_profile_total_seconds=0.226473
+opening_result_assembly_seconds=0.000004
+point_conversion_seconds=0.198013
+tbv_evaluation_seconds=0.106360
+opening_classified_seconds=1.003268
+opening_orchestration_seconds=0.000078
+opening_prove_seconds=1.003346
+statement_clone_seconds=0.000001
+prover_interphase_seconds=0.003433
+prover_interphase_other_seconds=0.003432
+prover_breakdown_sum_seconds=1.026580
+prover_wall_seconds=1.030013
+prover_wall_breakdown_sum_seconds=1.030013
+terminal_claim_count=25
+commit_statement_size_bytes=1008
+shape_validity_reduction_size_bytes=19353
+opening_proof_size_bytes=125071
+cached_registration_size_bytes=1008
+per_opening_proof_size_bytes=125071
+x_statement_size_bytes=416
+tbv_statement_size_bytes=408
+point_reduction_size_bytes=36042
+point_aux_size_bytes=416
+point_keys_size_bytes=400
+point_identity_size_bytes=0
+joint_lookup_size_bytes=35226
+joint_lookup_aux_size_bytes=3154
+joint_lookup_identity_size_bytes=16544
+joint_lookup_sum_size_bytes=15528
+packed_eo_size_bytes=11928
+packed_eo_scalar_commitment_count=140
+packed_eo_stride_size_bytes=8
+packed_eo_positive_commitments_size_bytes=2528
+packed_eo_negative_commitments_size_bytes=2528
+packed_eo_binary_round_commitments_size_bytes=488
+packed_eo_a_reduced_commitment_size_bytes=40
+packed_eo_b_reduced_commitment_size_bytes=40
+packed_eo_scalar_identity_size_bytes=6296
+final_evaluation_size_bytes=13744
+final_aux_size_bytes=408
+final_identity_size_bytes=13336
+joint_point_final_identity_size_bytes=13336
+final_average_commitment_size_bytes=0
+final_scalar_binding_size_bytes=0
+bva_opening_size_bytes=18874
+bva_dory_proof_size_bytes=18842
+bva_evaluation_binding_size_bytes=32
+terminal_opening_size_bytes=24306
+terminal_sumcheck_size_bytes=536
+terminal_dory_size_bytes=16250
+terminal_transcript_state_size_bytes=32
+terminal_blindfold_size_bytes=7488
+artifact_framing_size_bytes=24
+proof_size_bytes=126103
+proof_sha256=a55b2a5e0bae023919b59efd83b7e07ca404314eb703c147bdfc42e244a2658a
+trailing_bytes_rejected=true
+physical_dory_proof_count=2
+physical_logup_reduction_count=1
+proof_component_sizing_seconds=0.006363
+proof_encode_seconds=0.006632
+proof_hash_seconds=0.000468
+proof_decode_seconds=0.087376
+trailing_decode_check_seconds=0.000152
+serialization_orchestration_seconds=0.000001
+serialization_seconds=0.100991
+validity_verify_seconds=0.014292
+verifier_statement_validation_seconds=0.000010
+verifier_shape_validity_prepare_seconds=0.000026
+verifier_shape_validity_reduction_seconds=0.014266
+verifier_batch_point_seconds=0.000015
+verifier_point_prepare_seconds=0.000045
+verifier_point_verify_seconds=0.024735
+verifier_packed_eo_verify_seconds=0.008216
+verifier_bva_open_verify_seconds=0.061077
+verifier_bva_open_point_preparation_seconds=0.000000
+verifier_bva_open_transcript_preparation_seconds=0.000001
+verifier_bva_open_dory_seconds=0.060515
+verifier_bva_open_scalar_binding_seconds=0.000550
+verifier_bva_open_profile_other_seconds=0.000000
+verifier_bva_open_profile_total_seconds=0.061067
+verifier_final_prepare_seconds=0.000033
+verifier_final_verify_seconds=0.012416
+verifier_terminal_claim_collection_seconds=0.001157
+verifier_terminal_open_verify_seconds=0.071270
+verifier_terminal_preparation_state_setup_seconds=0.000168
+verifier_terminal_sumcheck_seconds=0.000014
+verifier_terminal_dory_batch_seconds=0.062511
+verifier_terminal_blindfold_preparation_seconds=0.002873
+verifier_terminal_blindfold_seconds=0.005695
+verifier_terminal_result_finalization_seconds=0.000000
+verifier_terminal_profile_other_seconds=0.000001
+verifier_terminal_profile_total_seconds=0.071262
+verifier_result_assembly_seconds=0.000000
+verifier_profile_total_seconds=0.193269
+verifier_classified_seconds=0.193268
+verifier_orchestration_seconds=0.000047
+verifier_breakdown_sum_seconds=0.193315
+opening_verify_seconds=0.193315
+total_prover_seconds=1.026580
+total_verifier_seconds=0.193315
+preprocessing_seconds=0.000102
+end_to_end_classified_seconds=1.463457
+experiment_orchestration_seconds=0.021905
+end_to_end_breakdown_sum_seconds=1.485362
+total_seconds=1.485362
+peak_rss_kib=9444
+shape_validity_proof_status=verified
+aggregated_claim_nonzero=true
+decoded_proof_verified=true
+accepted=true
+
+ParComm experiment: VERIFIED
+verified_marker=SECTION6_E2E_VERIFIED
+
+Final results
+| Metric | Value | Breakdown |
+| --- | ---: | --- |
+| Commit time | 0.023 s | BVA commitment 0.010 s; Shape commitment 0.013 s; Other 0.000 s |
+| Commit size | 1008 B (0.98 KiB) | Persistent commit statement |
+| Open time | 1.003 s | Shape validity reduction 0.085 s; BVA open 0.257 s; EO-LiteBullet 0.108 s; Joint lookup + TBV compilation + evaluation proof 0.304 s; Joint terminal open 0.226 s; Other 0.022 s |
+| Proof size | 125071 B (122.14 KiB) | Shape validity reduction 19353 B (18.90 KiB); Joint LogUp 35226 B (34.40 KiB); BVA open 18874 B (18.43 KiB); EO-LiteBullet 11928 B (11.65 KiB); TBV compilation + evaluation proof 15384 B (15.02 KiB); Joint terminal open 24306 B (23.74 KiB) |
+| Verifier time | 0.193 s | Shape validity reduction 0.014 s; BVA open verify 0.061 s; EO-LiteBullet verify 0.008 s; Joint lookup + TBV compilation + evaluation proof verify 0.037 s; Joint terminal open verify 0.071 s; Other 0.001 s |
+| Peak RSS | 0.01 GiB | 9444 KiB |
+	Command being timed: "cargo +nightly-2026-03-21 --config /mnt/c/Users/miranda/git/parcomm/.cargo/jolt-vendor-config.toml --config /mnt/c/Users/miranda/git/parcomm/.cargo/jolt-patch.toml bench --offline --locked --manifest-path /mnt/c/Users/miranda/git/parcomm/Cargo.toml -p batch --bench experiment -- homogeneous --matrix-count 2 --rows 31 --cols 37 --allow-non-64-threads"
+	User time (seconds): 1.79
+	System time (seconds): 0.67
+	Percent of CPU this job got: 31%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:07.75
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 56924
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 13371
+	Voluntary context switches: 50422
+	Involuntary context switches: 25
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

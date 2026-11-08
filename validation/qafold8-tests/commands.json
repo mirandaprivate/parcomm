@@ -1,0 +1,28 @@
+[
+  [
+    "cargo",
+    "+1.97.1",
+    "--config",
+    "/mnt/c/Users/miranda/git/parcomm/artifact/.cargo/qafold-vendor-config.toml",
+    "test",
+    "--release",
+    "--offline",
+    "--locked",
+    "--manifest-path",
+    "/mnt/c/Users/miranda/git/parcomm/artifact/src/qafold/f65521/Cargo.toml"
+  ],
+  [
+    "cargo",
+    "+1.97.1",
+    "--config",
+    "/mnt/c/Users/miranda/git/parcomm/artifact/.cargo/qafold-vendor-config.toml",
+    "test",
+    "--release",
+    "--offline",
+    "--locked",
+    "--manifest-path",
+    "/mnt/c/Users/miranda/git/parcomm/artifact/src/qafold/f65521/vendor/qafold/Cargo.toml",
+    "--features",
+    "profile-encoding"
+  ]
+]

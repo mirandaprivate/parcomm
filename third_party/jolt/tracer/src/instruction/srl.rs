@@ -1,0 +1,33 @@
+use serde::{Deserialize, Serialize};
+
+use crate::{declare_riscv_instr, emulator::cpu::Cpu};
+
+use super::{format::format_r::FormatR, Cycle, Instruction, RISCVInstruction, RISCVTrace};
+
+declare_riscv_instr!(
+    name   = SRL,
+    mask   = 0xfe00707f,
+    match  = 0x00005033,
+    format = FormatR,
+    ram    = ()
+);
+
+impl SRL {
+    fn exec(&self, cpu: &mut Cpu, _: &mut <SRL as RISCVInstruction>::RAMAccess) {
+        let mask = 0x3f;
+        cpu.write_register(
+            self.operands.rd as usize,
+            cpu.sign_extend(
+                cpu.unsigned_data(cpu.x[self.operands.rs1 as usize])
+                    .wrapping_shr(cpu.x[self.operands.rs2 as usize] as u32 & mask)
+                    as i64,
+            ),
+        );
+    }
+}
+
+impl RISCVTrace for SRL {
+    fn trace(&self, cpu: &mut Cpu, trace: Option<&mut Vec<Cycle>>) {
+        super::trace_inline_sequence(&Instruction::from(*self), cpu, trace);
+    }
+}
