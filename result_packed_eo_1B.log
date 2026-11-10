@@ -1,0 +1,1892 @@
+# Implicit-eq EO-LiteBullet, N=2^30
+
+Each configuration once; 64 prover threads, one verifier thread.
+Hidden component only; input PCS commitment/openings excluded. Setup, generation, initial claim and serialization excluded.
+Eq row coefficient generation is included in prover time. Peak RSS is process lifetime VmHWM.
+This structured-eq workload differs from the earlier random dense-b workload.
+
+| a bits | Stride | Prover (s) | Proof (KiB) | Verifier (s) | Peak RSS (GiB) | Main allocations (GiB) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 128 | 1.076025 | 17.9766 | 0.022703 | 0.9950 | 1.0000 |
+| 8 | 64 | 1.148412 | 13.0547 | 0.015207 | 1.9892 | 2.0000 |
+| 16 | 32 | 2.322210 | 10.6328 | 0.012431 | 3.9896 | 4.0000 |
+| 32 | 16 | 3.809437 | 9.4609 | 0.012105 | 7.9850 | 8.0000 |
+| 64 | 8 | 7.500978 | 8.9141 | 0.010949 | 15.9887 | 16.0000 |
+| 128 | 4 | 15.803701 | 8.6797 | 0.010786 | 31.9932 | 32.0000 |
+| full | 2 | 23.671327 | 8.6016 | 0.011000 | 64.0114 | 64.0000 |
+
+Descriptive affine fits over the five 8..128-bit single measurements (not statistical confidence):
+prover_seconds = 0.105604086 + 0.121196442 * width; R^2=0.998020; 128/8 ratio=13.7614.
+peak_rss_gib = -0.012802442 + 0.250038846 * width; R^2=1.000000; 128/8 ratio=16.0835.
+
+All seven serialized proofs accepted. 42 server correctness cases passed.
+Source and binary hashes, machine state, exact commands and all timings follow.
+
+===== configuration.json =====
+{
+  "scope": "hidden EO-LiteBullet reduction with native-width a and implicit MLE eq(point) b; input PCS commitment/openings excluded",
+  "n": 1073741824,
+  "widths": [
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+    254
+  ],
+  "full_bitwidth": "BN254 scalar field, 254 bits",
+  "prover_threads": 64,
+  "verifier_threads": 1,
+  "repetitions": 1,
+  "setup_included": false,
+  "input_generation_included": false,
+  "claim_preparation_included": false,
+  "serialization_included": false,
+  "source_distribution": "seeded pseudorandom signed integer or full-field",
+  "source_layout": "a is dense; b is eq(point,index), point in LSB-first order; no dense b array",
+  "buckets": false,
+  "tensor_optimization": true,
+  "tile_entries": 32768,
+  "nibble_storage": "two signed 4-bit values per byte, offset encoding",
+  "cross_arithmetic": "factorized eq lane projection, signed radix-256 planes, deferred raw Montgomery reduction",
+  "first_fold_and_binary_rounds": "radix-256 first fold with combined reduction; existing binary rounds",
+  "eq_row_generation_included_in_prover": true,
+  "expected_main_live_bytes": "a storage + 64*N/stride; 8..128 bits: N*width/4 bytes",
+  "packing_policy": "adaptive, explicitly retained by user",
+  "proof_encoding": "bincode HiddenPackedEoProof; no outer PCS openings"
+}
+
+===== machine.log =====
+2026-11-11T00:35:54+08:00
+Linux swiftlab 6.8.0-138-generic #138~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 13:43:15 UTC  x86_64 x86_64 x86_64 GNU/Linux
+架构：                                   x86_64
+CPU 运行模式：                           32-bit, 64-bit
+Address sizes:                           46 bits physical, 57 bits virtual
+字节序：                                 Little Endian
+CPU:                                     96
+在线 CPU 列表：                          0-95
+厂商 ID：                                GenuineIntel
+型号名称：                               Intel(R) Xeon(R) Gold 6342 CPU @ 2.80GHz
+CPU 系列：                               6
+型号：                                   106
+每个核的线程数：                         2
+每个座的核数：                           24
+座：                                     2
+步进：                                   6
+CPU 最大 MHz：                           3500.0000
+CPU 最小 MHz：                           800.0000
+BogoMIPS：                               5600.00
+标记：                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf pni pclmulqdq dtes64 ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid dca sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb cat_l3 intel_ppin ssbd mba ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb intel_pt avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local split_lock_detect wbnoinvd dtherm ida arat pln pts vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg tme avx512_vpopcntdq la57 rdpid fsrm md_clear pconfig flush_l1d arch_capabilities
+虚拟化：                                 VT-x
+L1d 缓存：                               2.3 MiB (48 instances)
+L1i 缓存：                               1.5 MiB (48 instances)
+L2 缓存：                                60 MiB (48 instances)
+L3 缓存：                                72 MiB (2 instances)
+NUMA 节点：                              2
+NUMA 节点0 CPU：                         0-23,48-71
+NUMA 节点1 CPU：                         24-47,72-95
+Vulnerability Gather data sampling:      Mitigation; Microcode
+Vulnerability Indirect target selection: Mitigation; Aligned branch/return thunks
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Mitigation; Clear CPU buffers; SMT vulnerable
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Not affected
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI SW loop, KVM SW loop
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+               total        used        free      shared  buff/cache   available
+内存：      377Gi        31Gi        98Gi       186Gi       247Gi       156Gi
+交换：      2.0Gi       1.3Gi       757Mi
+文件系统        大小  已用  可用 已用% 挂载点
+/dev/sdb2       879G  828G  6.3G  100% /
+tmpfs           189G  187G  2.6G   99% /dev/shm
+USER         PID %CPU %MEM COMMAND
+mscong   3392166  584  6.2 prove_inference
+root      660950 15.1  0.0 uhs-cfg
+root      660949  5.2  0.0 uhs-data
+gyt      1304655  3.1  0.0 nvtop
+root      660994  1.8  0.1 uhs-epp
+gyt      3371871  1.4  0.2 node
+gyt      3371860  1.0  0.1 node
+swift      12152  0.8  0.0 firefox
+swift      12316  0.6  0.0 Privileged Cont
+gyt      1021994  0.5  0.0 node
+gyt      1019242  0.4  0.0 node
+rustc 1.96.0-nightly (ac7f9ec7d 2026-03-20)
+binary: rustc
+commit-hash: ac7f9ec7da74d37fd28667c86bf117a39ba5b02a
+commit-date: 2026-03-20
+host: x86_64-unknown-linux-gnu
+release: 1.96.0-nightly
+LLVM version: 22.1.0
+
+===== commands.json =====
+[
+  [
+    "sh",
+    "-c",
+    "date -Is; uname -a; lscpu; free -h; df -h / /dev/shm; ps -eo user,pid,pcpu,pmem,comm --sort=-pcpu | head -12; rustup run nightly-2026-03-21 rustc -Vv"
+  ],
+  [
+    "cargo",
+    "+nightly-2026-03-21",
+    "--config",
+    "/home/mscong1/git/jolt-local.toml",
+    "build",
+    "--release",
+    "--offline",
+    "--locked",
+    "-p",
+    "batch",
+    "--example",
+    "packed_eo_bitwidth_v6"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "4",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "4",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "4",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "4",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "4",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "4",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "8",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "8",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "8",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "8",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "8",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "8",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "16",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "16",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "16",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "16",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "16",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "16",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "32",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "32",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "32",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "32",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "32",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "32",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "64",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "64",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "64",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "64",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "64",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "64",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "128",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "128",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "128",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "128",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "128",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "128",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "full",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "full",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "full",
+    "16",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "full",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "full",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "full",
+    "8",
+    "--smoke"
+  ],
+  [
+    "/usr/bin/time",
+    "-v",
+    "-o",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/results/4-resources.log",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "4",
+    "30"
+  ],
+  [
+    "/usr/bin/time",
+    "-v",
+    "-o",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/results/8-resources.log",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "8",
+    "30"
+  ],
+  [
+    "/usr/bin/time",
+    "-v",
+    "-o",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/results/16-resources.log",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "16",
+    "30"
+  ],
+  [
+    "/usr/bin/time",
+    "-v",
+    "-o",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/results/32-resources.log",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "32",
+    "30"
+  ],
+  [
+    "/usr/bin/time",
+    "-v",
+    "-o",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/results/64-resources.log",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "64",
+    "30"
+  ],
+  [
+    "/usr/bin/time",
+    "-v",
+    "-o",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/results/128-resources.log",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "128",
+    "30"
+  ],
+  [
+    "/usr/bin/time",
+    "-v",
+    "-o",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/results/full-resources.log",
+    "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6",
+    "full",
+    "30"
+  ]
+]
+
+===== binary-sha256.txt =====
+ef1ea705f8147d43e56b86c3ba178d7d5205e11db27e144f5d05c51d9e6ba3cf
+
+===== verification.json =====
+{
+  "server_smokes": 42,
+  "server_large_runs": 7,
+  "large_repetitions_per_width": 1,
+  "source_entries": 133,
+  "source_matches": 131,
+  "expected_manifest_differences": [
+    "Cargo.lock",
+    "Cargo.toml"
+  ],
+  "package_sha256": "bb18ab797dab4ec826cd4e606655aef2ed662248ba934c6f2b0065e37bbbb137",
+  "fits_descriptive_only_single_runs": {
+    "prover_seconds": {
+      "slope": 0.12119644197715052,
+      "intercept": 0.10560408633333473,
+      "r_squared": 0.9980204392583859,
+      "endpoint_ratio": 13.761355744099218
+    },
+    "peak_rss_gib": {
+      "slope": 0.2500388455601478,
+      "intercept": -0.012802441583334101,
+      "r_squared": 0.9999999663388471,
+      "endpoint_ratio": 16.08351055884969
+    }
+  }
+}
+
+===== 128-max-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=max eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=128 basis_bit_width=254 entries=65536 packing_stride=4
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=1048576 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=16 packing_policy=adaptive projection_byte_products=1048576 first_fold_byte_products=1048576 folded_vector_entries=32768 predicted_main_live_bytes=2097152
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005542828 a_generation_seconds=0.005530589 b_generation_seconds=0.000012239
+claim_preparation_seconds=0.001722209
+setup_seconds=0.163370240 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.123389290
+proof_size_bytes=7768 proof_size_kib=7.585937500
+verifier_seconds=0.009002191
+peak_rss_kib=10852 peak_rss_gib=0.010349274
+serialization_seconds=0.001829815 deserialization_seconds=0.001476001
+scalar_commitments=36 proof_sha256=4882a340ece146ed9ab23fbb51dc657997c21d221fce7ac3ea4cbf34d4db2f1b
+cross_terms_seconds=0.010308188 first_fold_seconds=0.016152139 reduced_check_seconds=0.001079441 binary_rounds_seconds=0.035468674
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 128-min-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=min eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=128 basis_bit_width=254 entries=65536 packing_stride=4
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=1048576 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=16 packing_policy=adaptive projection_byte_products=1048576 first_fold_byte_products=1048576 folded_vector_entries=32768 predicted_main_live_bytes=2097152
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005257581 a_generation_seconds=0.005252966 b_generation_seconds=0.000004615
+claim_preparation_seconds=0.000780245
+setup_seconds=0.159592174 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.131360519
+proof_size_bytes=7768 proof_size_kib=7.585937500
+verifier_seconds=0.009059583
+peak_rss_kib=11068 peak_rss_gib=0.010555267
+serialization_seconds=0.002248981 deserialization_seconds=0.001717368
+scalar_commitments=36 proof_sha256=a5c7d2f4ece7393adebef9227790776d1000cc71a08cd1dae0c54569cd1a3c28
+cross_terms_seconds=0.011459939 first_fold_seconds=0.016284274 reduced_check_seconds=0.000979660 binary_rounds_seconds=0.033830406
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 128-point-alternating-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=alternating
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=128 basis_bit_width=254 entries=256 packing_stride=4
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=4096 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=16 packing_policy=adaptive projection_byte_products=4096 first_fold_byte_products=4096 folded_vector_entries=128 predicted_main_live_bytes=8192
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=5fada1d3a9b687b3dd23144fc19a9cce41bf4d9c9c88f25705d52183021aa8ec
+generation_seconds=0.004327168 a_generation_seconds=0.004314112 b_generation_seconds=0.000013056
+claim_preparation_seconds=0.000072183
+setup_seconds=0.167982555 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.039345950
+proof_size_bytes=7128 proof_size_kib=6.960937500
+verifier_seconds=0.007752252
+peak_rss_kib=9696 peak_rss_gib=0.009246826
+serialization_seconds=0.001132127 deserialization_seconds=0.000754838
+scalar_commitments=20 proof_sha256=21d1a6fb6f23ea670057f21b4501fe634b136d7aa23bedd9a77b0888eab2a1bd
+cross_terms_seconds=0.000035312 first_fold_seconds=0.000032323 reduced_check_seconds=0.000411299 binary_rounds_seconds=0.006868782
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 128-point-one-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=one
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=128 basis_bit_width=254 entries=256 packing_stride=4
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=4096 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=16 packing_policy=adaptive projection_byte_products=4096 first_fold_byte_products=4096 folded_vector_entries=128 predicted_main_live_bytes=8192
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=2463879d19f25dcc76e2198c77b833e7b5fafea9690f1114d260de753ae073c6
+generation_seconds=0.004711406 a_generation_seconds=0.004706929 b_generation_seconds=0.000004477
+claim_preparation_seconds=0.000100165
+setup_seconds=0.170350879 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.039243598
+proof_size_bytes=7128 proof_size_kib=6.960937500
+verifier_seconds=0.007879473
+peak_rss_kib=9568 peak_rss_gib=0.009124756
+serialization_seconds=0.000652329 deserialization_seconds=0.000531714
+scalar_commitments=20 proof_sha256=ebbc11aa86ada65d974fa3c83e5069afc23466e6ddd401bb571fc918f5c6c460
+cross_terms_seconds=0.000038883 first_fold_seconds=0.000036994 reduced_check_seconds=0.000460220 binary_rounds_seconds=0.005328965
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 128-point-zero-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=zero
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=128 basis_bit_width=254 entries=256 packing_stride=4
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=4096 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=16 packing_policy=adaptive projection_byte_products=4096 first_fold_byte_products=4096 folded_vector_entries=128 predicted_main_live_bytes=8192
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=f71b30409c352bc1c88ac4cc65349badad1420689a06b378dfd1b44ee88fb632
+generation_seconds=0.005211443 a_generation_seconds=0.005207456 b_generation_seconds=0.000003987
+claim_preparation_seconds=0.000067904
+setup_seconds=0.163626759 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.033837073
+proof_size_bytes=7128 proof_size_kib=6.960937500
+verifier_seconds=0.007992765
+peak_rss_kib=9684 peak_rss_gib=0.009235382
+serialization_seconds=0.000677718 deserialization_seconds=0.000535186
+scalar_commitments=20 proof_sha256=7311d19690597c90f97f330d84afdde101a9fad426590c4b12b0e413d47219c5
+cross_terms_seconds=0.000043588 first_fold_seconds=0.000034409 reduced_check_seconds=0.000468450 binary_rounds_seconds=0.005823141
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 128-resources.log =====
+	Command being timed: "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6 128 30"
+	User time (seconds): 640.77
+	System time (seconds): 38.62
+	Percent of CPU this job got: 3473%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:19.56
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 33547308
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 10582656
+	Voluntary context switches: 12044
+	Involuntary context switches: 1738
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== 128-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=128 basis_bit_width=254 entries=65536 packing_stride=4
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=1048576 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=16 packing_policy=adaptive projection_byte_products=1048576 first_fold_byte_products=1048576 folded_vector_entries=32768 predicted_main_live_bytes=2097152
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005300517 a_generation_seconds=0.005290409 b_generation_seconds=0.000010108
+claim_preparation_seconds=0.000954091
+setup_seconds=0.161874406 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.153022996
+proof_size_bytes=7768 proof_size_kib=7.585937500
+verifier_seconds=0.009277378
+peak_rss_kib=10752 peak_rss_gib=0.010253906
+serialization_seconds=0.002436611 deserialization_seconds=0.001796842
+scalar_commitments=36 proof_sha256=c934cbaa07cc0f62004d08daee90f7ed24acb33016e7619fe78e70e1f5cdbaee
+cross_terms_seconds=0.014025931 first_fold_seconds=0.016680989 reduced_check_seconds=0.001044900 binary_rounds_seconds=0.040071055
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 128.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=128 basis_bit_width=254 entries=1073741824 packing_stride=4
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=17179869184 b_storage_bytes=960 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=16 packing_policy=adaptive projection_byte_products=17179869184 first_fold_byte_products=17179869184 folded_vector_entries=536870912 predicted_main_live_bytes=34359738368
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=d4c0be1bd65142b22ff28ceb41fc81a08a2fca96a67736aa16f7121c0989eaed
+generation_seconds=0.540471270 a_generation_seconds=0.540461020 b_generation_seconds=0.000010250
+claim_preparation_seconds=1.805582982
+setup_seconds=0.154497402 setup_excluded_from_prover_and_verifier=true
+prover_seconds=15.803700871
+proof_size_bytes=8888 proof_size_kib=8.679687500
+verifier_seconds=0.010785886
+peak_rss_kib=33547308 peak_rss_gib=31.993206024
+serialization_seconds=0.001195791 deserialization_seconds=0.000962039
+scalar_commitments=64 proof_sha256=c97bdad9d26ced800ef91f004e058f453343bc136253d2b6025d198ae75cb405
+cross_terms_seconds=5.985719866 first_fold_seconds=6.043848692 reduced_check_seconds=0.369326456 binary_rounds_seconds=2.272381303
+accepted=true
+
+===== 16-max-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=max eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=16 basis_bit_width=254 entries=65536 packing_stride=32
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=131072 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=2 packing_policy=adaptive projection_byte_products=131072 first_fold_byte_products=131072 folded_vector_entries=4096 predicted_main_live_bytes=262144
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005988776 a_generation_seconds=0.005968298 b_generation_seconds=0.000020478
+claim_preparation_seconds=0.001087421
+setup_seconds=0.163983232 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.185048767
+proof_size_bytes=9768 proof_size_kib=9.539062500
+verifier_seconds=0.010580024
+peak_rss_kib=9912 peak_rss_gib=0.009452820
+serialization_seconds=0.003964537 deserialization_seconds=0.003181453
+scalar_commitments=86 proof_sha256=57a640d76e22d7be0bf3247f84b8d05793f941b8a810263dd66b3a66ddcb0416
+cross_terms_seconds=0.001245870 first_fold_seconds=0.001619314 reduced_check_seconds=0.000616758 binary_rounds_seconds=0.023000405
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 16-min-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=min eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=16 basis_bit_width=254 entries=65536 packing_stride=32
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=131072 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=2 packing_policy=adaptive projection_byte_products=131072 first_fold_byte_products=131072 folded_vector_entries=4096 predicted_main_live_bytes=262144
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.004761387 a_generation_seconds=0.004745827 b_generation_seconds=0.000015560
+claim_preparation_seconds=0.001023107
+setup_seconds=0.158090265 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.186550626
+proof_size_bytes=9768 proof_size_kib=9.539062500
+verifier_seconds=0.010599371
+peak_rss_kib=9736 peak_rss_gib=0.009284973
+serialization_seconds=0.004008830 deserialization_seconds=0.003190982
+scalar_commitments=86 proof_sha256=d516ef4115e860d50f59c3dc9521aed9f591e07cda91143941c1989d6261faf9
+cross_terms_seconds=0.001247811 first_fold_seconds=0.001444776 reduced_check_seconds=0.000636445 binary_rounds_seconds=0.022382178
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 16-point-alternating-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=alternating
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=16 basis_bit_width=254 entries=256 packing_stride=32
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=512 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=2 packing_policy=adaptive projection_byte_products=512 first_fold_byte_products=512 folded_vector_entries=16 predicted_main_live_bytes=1024
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=5fada1d3a9b687b3dd23144fc19a9cce41bf4d9c9c88f25705d52183021aa8ec
+generation_seconds=0.004782435 a_generation_seconds=0.004773070 b_generation_seconds=0.000009365
+claim_preparation_seconds=0.000071888
+setup_seconds=0.170012789 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.041774272
+proof_size_bytes=9128 proof_size_kib=8.914062500
+verifier_seconds=0.009680961
+peak_rss_kib=9896 peak_rss_gib=0.009437561
+serialization_seconds=0.001456791 deserialization_seconds=0.001167352
+scalar_commitments=70 proof_sha256=f4377661101b520da918a9c4a125b1256720a0a5608789514f365402737d6f19
+cross_terms_seconds=0.000044791 first_fold_seconds=0.000005373 reduced_check_seconds=0.000095682 binary_rounds_seconds=0.002244004
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 16-point-one-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=one
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=16 basis_bit_width=254 entries=256 packing_stride=32
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=512 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=2 packing_policy=adaptive projection_byte_products=512 first_fold_byte_products=512 folded_vector_entries=16 predicted_main_live_bytes=1024
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=2463879d19f25dcc76e2198c77b833e7b5fafea9690f1114d260de753ae073c6
+generation_seconds=0.004548298 a_generation_seconds=0.004541358 b_generation_seconds=0.000006940
+claim_preparation_seconds=0.000072658
+setup_seconds=0.170623098 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.039553857
+proof_size_bytes=9128 proof_size_kib=8.914062500
+verifier_seconds=0.009657272
+peak_rss_kib=9684 peak_rss_gib=0.009235382
+serialization_seconds=0.001194414 deserialization_seconds=0.000956081
+scalar_commitments=70 proof_sha256=ca67d02124e53ad1c3fe8b273681241d5536756a41b1586c4e64c3e143745ed6
+cross_terms_seconds=0.000038725 first_fold_seconds=0.000004890 reduced_check_seconds=0.000107943 binary_rounds_seconds=0.002212963
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 16-point-zero-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=zero
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=16 basis_bit_width=254 entries=256 packing_stride=32
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=512 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=2 packing_policy=adaptive projection_byte_products=512 first_fold_byte_products=512 folded_vector_entries=16 predicted_main_live_bytes=1024
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=f71b30409c352bc1c88ac4cc65349badad1420689a06b378dfd1b44ee88fb632
+generation_seconds=0.005051703 a_generation_seconds=0.005039272 b_generation_seconds=0.000012431
+claim_preparation_seconds=0.000068310
+setup_seconds=0.169710170 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.040218052
+proof_size_bytes=9128 proof_size_kib=8.914062500
+verifier_seconds=0.009639137
+peak_rss_kib=9620 peak_rss_gib=0.009174347
+serialization_seconds=0.001495285 deserialization_seconds=0.001218623
+scalar_commitments=70 proof_sha256=b1615b90e4ad998a5204b5bf367132b702564d55f42ea50dd05dabe0103786fd
+cross_terms_seconds=0.000044950 first_fold_seconds=0.000005365 reduced_check_seconds=0.000142755 binary_rounds_seconds=0.002531673
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 16-resources.log =====
+	Command being timed: "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6 16 30"
+	User time (seconds): 192.24
+	System time (seconds): 5.20
+	Percent of CPU this job got: 4218%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.68
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 4183356
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 1157013
+	Voluntary context switches: 22721
+	Involuntary context switches: 1898
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== 16-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=16 basis_bit_width=254 entries=65536 packing_stride=32
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=131072 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=2 packing_policy=adaptive projection_byte_products=131072 first_fold_byte_products=131072 folded_vector_entries=4096 predicted_main_live_bytes=262144
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.004943569 a_generation_seconds=0.004931957 b_generation_seconds=0.000011612
+claim_preparation_seconds=0.000846418
+setup_seconds=0.163347326 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.201630223
+proof_size_bytes=9768 proof_size_kib=9.539062500
+verifier_seconds=0.011926919
+peak_rss_kib=9920 peak_rss_gib=0.009460449
+serialization_seconds=0.004336074 deserialization_seconds=0.003185995
+scalar_commitments=86 proof_sha256=edd56caa0e3bdee536217c74c7e6563e4c6a06c9b424114478c09f90be1a5225
+cross_terms_seconds=0.001777817 first_fold_seconds=0.001737065 reduced_check_seconds=0.000690118 binary_rounds_seconds=0.024636561
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 16.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=16 basis_bit_width=254 entries=1073741824 packing_stride=32
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=2147483648 b_storage_bytes=960 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=2 packing_policy=adaptive projection_byte_products=2147483648 first_fold_byte_products=2147483648 folded_vector_entries=67108864 predicted_main_live_bytes=4294967296
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=d4c0be1bd65142b22ff28ceb41fc81a08a2fca96a67736aa16f7121c0989eaed
+generation_seconds=0.095709247 a_generation_seconds=0.095697420 b_generation_seconds=0.000011827
+claim_preparation_seconds=1.900660077
+setup_seconds=0.149135879 setup_excluded_from_prover_and_verifier=true
+prover_seconds=2.322210374
+proof_size_bytes=10888 proof_size_kib=10.632812500
+verifier_seconds=0.012430975
+peak_rss_kib=4183356 peak_rss_gib=3.989559174
+serialization_seconds=0.006136430 deserialization_seconds=0.004510510
+scalar_commitments=114 proof_sha256=7c81d05c5c4cee2789f9fbfecf745a73c1f58fedf9a57477534acaf7e4cb6241
+cross_terms_seconds=0.738618586 first_fold_seconds=0.775269806 reduced_check_seconds=0.045108628 binary_rounds_seconds=0.371996247
+accepted=true
+
+===== 32-max-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=max eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=32 basis_bit_width=254 entries=65536 packing_stride=16
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=262144 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=4 packing_policy=adaptive projection_byte_products=262144 first_fold_byte_products=262144 folded_vector_entries=8192 predicted_main_live_bytes=524288
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005083887 a_generation_seconds=0.005079320 b_generation_seconds=0.000004567
+claim_preparation_seconds=0.001150956
+setup_seconds=0.163133657 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.105111143
+proof_size_bytes=8568 proof_size_kib=8.367187500
+verifier_seconds=0.009382218
+peak_rss_kib=10080 peak_rss_gib=0.009613037
+serialization_seconds=0.001272507 deserialization_seconds=0.001021230
+scalar_commitments=56 proof_sha256=b958fd1f996b080b061da5f429bcbdc3456ac6034d20c1d7c1d31223133cb518
+cross_terms_seconds=0.001424164 first_fold_seconds=0.003713964 reduced_check_seconds=0.000802748 binary_rounds_seconds=0.023459812
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 32-min-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=min eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=32 basis_bit_width=254 entries=65536 packing_stride=16
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=262144 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=4 packing_policy=adaptive projection_byte_products=262144 first_fold_byte_products=262144 folded_vector_entries=8192 predicted_main_live_bytes=524288
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005907440 a_generation_seconds=0.005891074 b_generation_seconds=0.000016366
+claim_preparation_seconds=0.000836613
+setup_seconds=0.162851220 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.134149460
+proof_size_bytes=8568 proof_size_kib=8.367187500
+verifier_seconds=0.009461546
+peak_rss_kib=9996 peak_rss_gib=0.009532928
+serialization_seconds=0.002551391 deserialization_seconds=0.002017089
+scalar_commitments=56 proof_sha256=bc6fda767d1672856380dd1e21cc549761533807581120ba3fe2d20820e2e50c
+cross_terms_seconds=0.001438193 first_fold_seconds=0.003716281 reduced_check_seconds=0.000778365 binary_rounds_seconds=0.025293860
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 32-point-alternating-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=alternating
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=32 basis_bit_width=254 entries=256 packing_stride=16
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=1024 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=4 packing_policy=adaptive projection_byte_products=1024 first_fold_byte_products=1024 folded_vector_entries=32 predicted_main_live_bytes=2048
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=5fada1d3a9b687b3dd23144fc19a9cce41bf4d9c9c88f25705d52183021aa8ec
+generation_seconds=0.004238068 a_generation_seconds=0.004224344 b_generation_seconds=0.000013724
+claim_preparation_seconds=0.000073498
+setup_seconds=0.169503789 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.037617790
+proof_size_bytes=7928 proof_size_kib=7.742187500
+verifier_seconds=0.009112612
+peak_rss_kib=9504 peak_rss_gib=0.009063721
+serialization_seconds=0.000937698 deserialization_seconds=0.000727953
+scalar_commitments=40 proof_sha256=18262635d084dac3a8adc7592fca00cc4407dc08f65cc74d95c850438a867fe5
+cross_terms_seconds=0.000031978 first_fold_seconds=0.000008056 reduced_check_seconds=0.000201408 binary_rounds_seconds=0.003876139
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 32-point-one-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=one
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=32 basis_bit_width=254 entries=256 packing_stride=16
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=1024 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=4 packing_policy=adaptive projection_byte_products=1024 first_fold_byte_products=1024 folded_vector_entries=32 predicted_main_live_bytes=2048
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=2463879d19f25dcc76e2198c77b833e7b5fafea9690f1114d260de753ae073c6
+generation_seconds=0.004550060 a_generation_seconds=0.004537305 b_generation_seconds=0.000012755
+claim_preparation_seconds=0.000071401
+setup_seconds=0.170333772 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.037674770
+proof_size_bytes=7928 proof_size_kib=7.742187500
+verifier_seconds=0.008808418
+peak_rss_kib=9604 peak_rss_gib=0.009159088
+serialization_seconds=0.001076022 deserialization_seconds=0.000872331
+scalar_commitments=40 proof_sha256=d3b8935ac570da28717fc419e8675dbafd40c5a1b04ab155ca5b8a8af561f412
+cross_terms_seconds=0.000023216 first_fold_seconds=0.000009224 reduced_check_seconds=0.000308204 binary_rounds_seconds=0.003529514
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 32-point-zero-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=zero
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=32 basis_bit_width=254 entries=256 packing_stride=16
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=1024 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=4 packing_policy=adaptive projection_byte_products=1024 first_fold_byte_products=1024 folded_vector_entries=32 predicted_main_live_bytes=2048
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=f71b30409c352bc1c88ac4cc65349badad1420689a06b378dfd1b44ee88fb632
+generation_seconds=0.004835842 a_generation_seconds=0.004826678 b_generation_seconds=0.000009164
+claim_preparation_seconds=0.000073508
+setup_seconds=0.170487352 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.035756235
+proof_size_bytes=7928 proof_size_kib=7.742187500
+verifier_seconds=0.008675696
+peak_rss_kib=9700 peak_rss_gib=0.009250641
+serialization_seconds=0.000940410 deserialization_seconds=0.000811920
+scalar_commitments=40 proof_sha256=020f49ae591247128edcbd7a2bf24de8880e46c0912ae5b63f58796b47f71299
+cross_terms_seconds=0.000022941 first_fold_seconds=0.000009287 reduced_check_seconds=0.000249917 binary_rounds_seconds=0.003611829
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 32-resources.log =====
+	Command being timed: "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6 32 30"
+	User time (seconds): 226.48
+	System time (seconds): 10.65
+	Percent of CPU this job got: 3849%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:06.16
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 8372832
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 2486657
+	Voluntary context switches: 12055
+	Involuntary context switches: 603
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== 32-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=32 basis_bit_width=254 entries=65536 packing_stride=16
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=262144 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=4 packing_policy=adaptive projection_byte_products=262144 first_fold_byte_products=262144 folded_vector_entries=8192 predicted_main_live_bytes=524288
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005000445 a_generation_seconds=0.004989522 b_generation_seconds=0.000010923
+claim_preparation_seconds=0.001475976
+setup_seconds=0.162764970 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.127479173
+proof_size_bytes=8568 proof_size_kib=8.367187500
+verifier_seconds=0.010339756
+peak_rss_kib=10048 peak_rss_gib=0.009582520
+serialization_seconds=0.002572161 deserialization_seconds=0.002058378
+scalar_commitments=56 proof_sha256=0e8f4c919dca98d044a97c0375e607e5b9c7356e36dc00d97651b5df1a890519
+cross_terms_seconds=0.002785982 first_fold_seconds=0.003706784 reduced_check_seconds=0.000755167 binary_rounds_seconds=0.024911374
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 32.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=32 basis_bit_width=254 entries=1073741824 packing_stride=16
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=4294967296 b_storage_bytes=960 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=4 packing_policy=adaptive projection_byte_products=4294967296 first_fold_byte_products=4294967296 folded_vector_entries=134217728 predicted_main_live_bytes=8589934592
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=d4c0be1bd65142b22ff28ceb41fc81a08a2fca96a67736aa16f7121c0989eaed
+generation_seconds=0.155389397 a_generation_seconds=0.155365730 b_generation_seconds=0.000023667
+claim_preparation_seconds=1.708881530
+setup_seconds=0.146930617 setup_excluded_from_prover_and_verifier=true
+prover_seconds=3.809436829
+proof_size_bytes=9688 proof_size_kib=9.460937500
+verifier_seconds=0.012105381
+peak_rss_kib=8372832 peak_rss_gib=7.984954834
+serialization_seconds=0.001185599 deserialization_seconds=0.000948355
+scalar_commitments=84 proof_sha256=6802e951a37c97706c1dbd3ae110e37972e0ca03af3d77489127f85dfc118929
+cross_terms_seconds=1.284222836 first_fold_seconds=1.477020895 reduced_check_seconds=0.085695889 binary_rounds_seconds=0.584049262
+accepted=true
+
+===== 4-max-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=max eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=4 basis_bit_width=254 entries=65536 packing_stride=128
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=32768 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=65536 first_fold_byte_products=65536 folded_vector_entries=1024 predicted_main_live_bytes=65536
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.004688298 a_generation_seconds=0.004680482 b_generation_seconds=0.000007816
+claim_preparation_seconds=0.001084201
+setup_seconds=0.164316542 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.691643573
+proof_size_bytes=17288 proof_size_kib=16.882812500
+verifier_seconds=0.019554412
+peak_rss_kib=9912 peak_rss_gib=0.009452820
+serialization_seconds=0.013814509 deserialization_seconds=0.009526793
+scalar_commitments=274 proof_sha256=a0379f7974aa045dc25941a05e94b7071c470528d4487e2272375626ae24183e
+cross_terms_seconds=0.001418686 first_fold_seconds=0.000644469 reduced_check_seconds=0.000566304 binary_rounds_seconds=0.024966933
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 4-min-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=min eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=4 basis_bit_width=254 entries=65536 packing_stride=128
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=32768 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=65536 first_fold_byte_products=65536 folded_vector_entries=1024 predicted_main_live_bytes=65536
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005052038 a_generation_seconds=0.005043386 b_generation_seconds=0.000008652
+claim_preparation_seconds=0.001253747
+setup_seconds=0.170052594 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.688612720
+proof_size_bytes=17288 proof_size_kib=16.882812500
+verifier_seconds=0.019674374
+peak_rss_kib=10108 peak_rss_gib=0.009639740
+serialization_seconds=0.015706942 deserialization_seconds=0.009002573
+scalar_commitments=274 proof_sha256=ce53eb897fe00a68bdafdb61e9318a69c16088bd68260fdb00aa3c659430557a
+cross_terms_seconds=0.001343637 first_fold_seconds=0.000662932 reduced_check_seconds=0.000589967 binary_rounds_seconds=0.024548534
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 4-point-alternating-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=alternating
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=4 basis_bit_width=254 entries=256 packing_stride=128
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=128 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=256 first_fold_byte_products=256 folded_vector_entries=4 predicted_main_live_bytes=256
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=5fada1d3a9b687b3dd23144fc19a9cce41bf4d9c9c88f25705d52183021aa8ec
+generation_seconds=0.004492870 a_generation_seconds=0.004487907 b_generation_seconds=0.000004963
+claim_preparation_seconds=0.000071673
+setup_seconds=0.170121199 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.075549716
+proof_size_bytes=16648 proof_size_kib=16.257812500
+verifier_seconds=0.018198972
+peak_rss_kib=9816 peak_rss_gib=0.009361267
+serialization_seconds=0.003919358 deserialization_seconds=0.003141037
+scalar_commitments=258 proof_sha256=c8db79046f2c78e8ba78a4b8371693db9c7efdf6bd53a6701253461705d266c6
+cross_terms_seconds=0.000505343 first_fold_seconds=0.000005231 reduced_check_seconds=0.000071208 binary_rounds_seconds=0.001229970
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 4-point-one-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=one
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=4 basis_bit_width=254 entries=256 packing_stride=128
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=128 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=256 first_fold_byte_products=256 folded_vector_entries=4 predicted_main_live_bytes=256
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=2463879d19f25dcc76e2198c77b833e7b5fafea9690f1114d260de753ae073c6
+generation_seconds=0.005299070 a_generation_seconds=0.005294329 b_generation_seconds=0.000004741
+claim_preparation_seconds=0.000073286
+setup_seconds=0.172980873 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.080127152
+proof_size_bytes=16648 proof_size_kib=16.257812500
+verifier_seconds=0.018022940
+peak_rss_kib=9816 peak_rss_gib=0.009361267
+serialization_seconds=0.003950864 deserialization_seconds=0.003158266
+scalar_commitments=258 proof_sha256=5630e61e912e13b70782fd8d02abc0e18c3370e18e2e09f9311dfc438a53b058
+cross_terms_seconds=0.000524691 first_fold_seconds=0.000005481 reduced_check_seconds=0.000046706 binary_rounds_seconds=0.000748309
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 4-point-zero-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=zero
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=4 basis_bit_width=254 entries=256 packing_stride=128
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=128 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=256 first_fold_byte_products=256 folded_vector_entries=4 predicted_main_live_bytes=256
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=f71b30409c352bc1c88ac4cc65349badad1420689a06b378dfd1b44ee88fb632
+generation_seconds=0.004684197 a_generation_seconds=0.004675226 b_generation_seconds=0.000008971
+claim_preparation_seconds=0.000073908
+setup_seconds=0.174557829 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.073634039
+proof_size_bytes=16648 proof_size_kib=16.257812500
+verifier_seconds=0.018192256
+peak_rss_kib=10012 peak_rss_gib=0.009548187
+serialization_seconds=0.003817545 deserialization_seconds=0.003049092
+scalar_commitments=258 proof_sha256=8c79f33e0f5ddef5da7139fb84b6e04bb9587035d0da4c245f56f04843b081a6
+cross_terms_seconds=0.000524240 first_fold_seconds=0.000005441 reduced_check_seconds=0.000079130 binary_rounds_seconds=0.000715179
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 4-resources.log =====
+	Command being timed: "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6 4 30"
+	User time (seconds): 159.52
+	System time (seconds): 3.89
+	Percent of CPU this job got: 5042%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:03.24
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 1043304
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 363508
+	Voluntary context switches: 59278
+	Involuntary context switches: 1424
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== 4-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=4 basis_bit_width=254 entries=65536 packing_stride=128
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=32768 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=65536 first_fold_byte_products=65536 folded_vector_entries=1024 predicted_main_live_bytes=65536
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.004280887 a_generation_seconds=0.004262758 b_generation_seconds=0.000018129
+claim_preparation_seconds=0.001171078
+setup_seconds=0.160430254 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.640744130
+proof_size_bytes=17288 proof_size_kib=16.882812500
+verifier_seconds=0.021045466
+peak_rss_kib=9996 peak_rss_gib=0.009532928
+serialization_seconds=0.013920669 deserialization_seconds=0.009588210
+scalar_commitments=274 proof_sha256=1ad5ffe4a3e9875bc2e88b02e37eed64792be264fe981ca42a05389e28bda1bf
+cross_terms_seconds=0.001575921 first_fold_seconds=0.000563019 reduced_check_seconds=0.000514301 binary_rounds_seconds=0.020663514
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 4.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=4 basis_bit_width=254 entries=1073741824 packing_stride=128
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=536870912 b_storage_bytes=960 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=1073741824 first_fold_byte_products=1073741824 folded_vector_entries=16777216 predicted_main_live_bytes=1073741824
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=d4c0be1bd65142b22ff28ceb41fc81a08a2fca96a67736aa16f7121c0989eaed
+generation_seconds=0.040196276 a_generation_seconds=0.040169414 b_generation_seconds=0.000026862
+claim_preparation_seconds=1.866298824
+setup_seconds=0.152635308 setup_excluded_from_prover_and_verifier=true
+prover_seconds=1.076025107
+proof_size_bytes=18408 proof_size_kib=17.976562500
+verifier_seconds=0.022703018
+peak_rss_kib=1043304 peak_rss_gib=0.994972229
+serialization_seconds=0.011498571 deserialization_seconds=0.007665601
+scalar_commitments=302 proof_sha256=8c9d38663e751dd7958615e8b9c1515b55c51aa5e34646c499c8d2488c385f40
+cross_terms_seconds=0.267387076 first_fold_seconds=0.275221474 reduced_check_seconds=0.011104187 binary_rounds_seconds=0.104922279
+accepted=true
+
+===== 64-max-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=max eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=64 basis_bit_width=254 entries=65536 packing_stride=8
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=524288 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=8 packing_policy=adaptive projection_byte_products=524288 first_fold_byte_products=524288 folded_vector_entries=16384 predicted_main_live_bytes=1048576
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005117228 a_generation_seconds=0.005105600 b_generation_seconds=0.000011628
+claim_preparation_seconds=0.000878671
+setup_seconds=0.164030449 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.119797540
+proof_size_bytes=8008 proof_size_kib=7.820312500
+verifier_seconds=0.009338644
+peak_rss_kib=10348 peak_rss_gib=0.009868622
+serialization_seconds=0.002076488 deserialization_seconds=0.001644111
+scalar_commitments=42 proof_sha256=166b7f4cf42a67dad07c8546a631efbbb45c70a804e528b65882fa451353b69d
+cross_terms_seconds=0.004731428 first_fold_seconds=0.005989141 reduced_check_seconds=0.000879873 binary_rounds_seconds=0.029471140
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 64-min-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=min eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=64 basis_bit_width=254 entries=65536 packing_stride=8
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=524288 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=8 packing_policy=adaptive projection_byte_products=524288 first_fold_byte_products=524288 folded_vector_entries=16384 predicted_main_live_bytes=1048576
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005160167 a_generation_seconds=0.005151012 b_generation_seconds=0.000009155
+claim_preparation_seconds=0.001467931
+setup_seconds=0.162015537 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.136632799
+proof_size_bytes=8008 proof_size_kib=7.820312500
+verifier_seconds=0.009547641
+peak_rss_kib=10372 peak_rss_gib=0.009891510
+serialization_seconds=0.002212234 deserialization_seconds=0.001813157
+scalar_commitments=42 proof_sha256=3191e1ed2f8214b625c0d58746174b68d53eeb99a19560169840ad4a4fbdeb68
+cross_terms_seconds=0.006788049 first_fold_seconds=0.012169265 reduced_check_seconds=0.000999324 binary_rounds_seconds=0.031700989
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 64-point-alternating-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=alternating
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=64 basis_bit_width=254 entries=256 packing_stride=8
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=2048 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=8 packing_policy=adaptive projection_byte_products=2048 first_fold_byte_products=2048 folded_vector_entries=64 predicted_main_live_bytes=4096
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=5fada1d3a9b687b3dd23144fc19a9cce41bf4d9c9c88f25705d52183021aa8ec
+generation_seconds=0.005156804 a_generation_seconds=0.005151664 b_generation_seconds=0.000005140
+claim_preparation_seconds=0.000072976
+setup_seconds=0.171718001 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.035849793
+proof_size_bytes=7368 proof_size_kib=7.195312500
+verifier_seconds=0.008184279
+peak_rss_kib=9824 peak_rss_gib=0.009368896
+serialization_seconds=0.000795161 deserialization_seconds=0.000658789
+scalar_commitments=26 proof_sha256=dabd6f8ada3370671a58ee0d28b450bd376239bb8401750821690f31eeb4d7ba
+cross_terms_seconds=0.000025398 first_fold_seconds=0.000014509 reduced_check_seconds=0.000349059 binary_rounds_seconds=0.004323472
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 64-point-one-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=one
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=64 basis_bit_width=254 entries=256 packing_stride=8
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=2048 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=8 packing_policy=adaptive projection_byte_products=2048 first_fold_byte_products=2048 folded_vector_entries=64 predicted_main_live_bytes=4096
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=2463879d19f25dcc76e2198c77b833e7b5fafea9690f1114d260de753ae073c6
+generation_seconds=0.005077514 a_generation_seconds=0.005068501 b_generation_seconds=0.000009013
+claim_preparation_seconds=0.000069517
+setup_seconds=0.170177844 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.034877405
+proof_size_bytes=7368 proof_size_kib=7.195312500
+verifier_seconds=0.008226542
+peak_rss_kib=9592 peak_rss_gib=0.009147644
+serialization_seconds=0.000767036 deserialization_seconds=0.000624153
+scalar_commitments=26 proof_sha256=59a50f60e5587a0f054016c885e37249015f88658580708c774dd68eb0d6a175
+cross_terms_seconds=0.000026171 first_fold_seconds=0.000014632 reduced_check_seconds=0.000486548 binary_rounds_seconds=0.004673963
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 64-point-zero-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=zero
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=64 basis_bit_width=254 entries=256 packing_stride=8
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=2048 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=8 packing_policy=adaptive projection_byte_products=2048 first_fold_byte_products=2048 folded_vector_entries=64 predicted_main_live_bytes=4096
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=f71b30409c352bc1c88ac4cc65349badad1420689a06b378dfd1b44ee88fb632
+generation_seconds=0.004888748 a_generation_seconds=0.004883646 b_generation_seconds=0.000005102
+claim_preparation_seconds=0.000085047
+setup_seconds=0.170410930 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.035378243
+proof_size_bytes=7368 proof_size_kib=7.195312500
+verifier_seconds=0.007966637
+peak_rss_kib=9508 peak_rss_gib=0.009067535
+serialization_seconds=0.000760400 deserialization_seconds=0.000622318
+scalar_commitments=26 proof_sha256=a6b1d7f12e169ca4384e8e25c5118adea584d046d51e6781512e4ff8ca60fb4a
+cross_terms_seconds=0.000025634 first_fold_seconds=0.000014270 reduced_check_seconds=0.000387145 binary_rounds_seconds=0.004812871
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 64-resources.log =====
+	Command being timed: "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6 64 30"
+	User time (seconds): 348.84
+	System time (seconds): 20.43
+	Percent of CPU this job got: 3545%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:10.41
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 16765376
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 5305268
+	Voluntary context switches: 12087
+	Involuntary context switches: 1533
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== 64-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=64 basis_bit_width=254 entries=65536 packing_stride=8
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=524288 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=8 packing_policy=adaptive projection_byte_products=524288 first_fold_byte_products=524288 folded_vector_entries=16384 predicted_main_live_bytes=1048576
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005002171 a_generation_seconds=0.004996614 b_generation_seconds=0.000005557
+claim_preparation_seconds=0.000815359
+setup_seconds=0.162258783 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.114912713
+proof_size_bytes=8008 proof_size_kib=7.820312500
+verifier_seconds=0.009241624
+peak_rss_kib=10396 peak_rss_gib=0.009914398
+serialization_seconds=0.002022871 deserialization_seconds=0.001645915
+scalar_commitments=42 proof_sha256=14177b3c711bb5e69e7804fa269172be7db19b16d992fe034d64daa49c97b479
+cross_terms_seconds=0.003510671 first_fold_seconds=0.006037790 reduced_check_seconds=0.000914931 binary_rounds_seconds=0.028163175
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 64.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=64 basis_bit_width=254 entries=1073741824 packing_stride=8
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=8589934592 b_storage_bytes=960 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=8 packing_policy=adaptive projection_byte_products=8589934592 first_fold_byte_products=8589934592 folded_vector_entries=268435456 predicted_main_live_bytes=17179869184
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=d4c0be1bd65142b22ff28ceb41fc81a08a2fca96a67736aa16f7121c0989eaed
+generation_seconds=0.273150009 a_generation_seconds=0.273128032 b_generation_seconds=0.000021977
+claim_preparation_seconds=1.821581484
+setup_seconds=0.158671578 setup_excluded_from_prover_and_verifier=true
+prover_seconds=7.500978346
+proof_size_bytes=9128 proof_size_kib=8.914062500
+verifier_seconds=0.010949280
+peak_rss_kib=16765376 peak_rss_gib=15.988708496
+serialization_seconds=0.001411413 deserialization_seconds=0.001118076
+scalar_commitments=70 proof_sha256=898e2fe38f174bb25cd1f6a50db494871bf80227109b8a9dbffc89ac2a757270
+cross_terms_seconds=2.903086271 first_fold_seconds=2.668677012 reduced_check_seconds=0.162981280 binary_rounds_seconds=1.111759661
+accepted=true
+
+===== 8-max-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=max eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=8 basis_bit_width=254 entries=65536 packing_stride=64
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=65536 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=65536 first_fold_byte_products=65536 folded_vector_entries=2048 predicted_main_live_bytes=131072
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005109436 a_generation_seconds=0.005102960 b_generation_seconds=0.000006476
+claim_preparation_seconds=0.001010751
+setup_seconds=0.162377894 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.332906008
+proof_size_bytes=12248 proof_size_kib=11.960937500
+verifier_seconds=0.013108950
+peak_rss_kib=9904 peak_rss_gib=0.009445190
+serialization_seconds=0.007717531 deserialization_seconds=0.005684129
+scalar_commitments=148 proof_sha256=07a21bf724d7e1803d8f449ef5ac55ae27cbaea2fba65eae3f6f5fd0dac7289b
+cross_terms_seconds=0.000967028 first_fold_seconds=0.000574165 reduced_check_seconds=0.000642411 binary_rounds_seconds=0.022189099
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 8-min-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=min eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=8 basis_bit_width=254 entries=65536 packing_stride=64
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=65536 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=65536 first_fold_byte_products=65536 folded_vector_entries=2048 predicted_main_live_bytes=131072
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005269916 a_generation_seconds=0.005262336 b_generation_seconds=0.000007580
+claim_preparation_seconds=0.000904504
+setup_seconds=0.161938891 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.308564918
+proof_size_bytes=12248 proof_size_kib=11.960937500
+verifier_seconds=0.013228763
+peak_rss_kib=9768 peak_rss_gib=0.009315491
+serialization_seconds=0.007997948 deserialization_seconds=0.006240931
+scalar_commitments=148 proof_sha256=09a5b7dd2c2049b41cf3ee5bff729c7caa537b59def9688bd2af478b632a67f0
+cross_terms_seconds=0.000945087 first_fold_seconds=0.000590927 reduced_check_seconds=0.000578786 binary_rounds_seconds=0.020550448
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 8-point-alternating-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=alternating
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=8 basis_bit_width=254 entries=256 packing_stride=64
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=256 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=256 first_fold_byte_products=256 folded_vector_entries=8 predicted_main_live_bytes=512
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=5fada1d3a9b687b3dd23144fc19a9cce41bf4d9c9c88f25705d52183021aa8ec
+generation_seconds=0.004545249 a_generation_seconds=0.004539792 b_generation_seconds=0.000005457
+claim_preparation_seconds=0.000084934
+setup_seconds=0.170796457 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.053661435
+proof_size_bytes=11608 proof_size_kib=11.335937500
+verifier_seconds=0.012372975
+peak_rss_kib=9756 peak_rss_gib=0.009304047
+serialization_seconds=0.002485449 deserialization_seconds=0.002006922
+scalar_commitments=132 proof_sha256=b199dea6872dc38ee6a6b4019010eae15e7ad49930e0a611b5e214bdca63a1c6
+cross_terms_seconds=0.000141759 first_fold_seconds=0.000003992 reduced_check_seconds=0.000084279 binary_rounds_seconds=0.001472461
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 8-point-one-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=one
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=8 basis_bit_width=254 entries=256 packing_stride=64
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=256 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=256 first_fold_byte_products=256 folded_vector_entries=8 predicted_main_live_bytes=512
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=2463879d19f25dcc76e2198c77b833e7b5fafea9690f1114d260de753ae073c6
+generation_seconds=0.004614759 a_generation_seconds=0.004610447 b_generation_seconds=0.000004312
+claim_preparation_seconds=0.000067607
+setup_seconds=0.170071853 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.049145052
+proof_size_bytes=11608 proof_size_kib=11.335937500
+verifier_seconds=0.012226299
+peak_rss_kib=9688 peak_rss_gib=0.009239197
+serialization_seconds=0.002236068 deserialization_seconds=0.001772004
+scalar_commitments=132 proof_sha256=d83ea295c022a8390e586570b83b34e806c188a80098ea4720dbc276a5d62f11
+cross_terms_seconds=0.000119676 first_fold_seconds=0.000003725 reduced_check_seconds=0.000115862 binary_rounds_seconds=0.001711480
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 8-point-zero-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=zero
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=8 basis_bit_width=254 entries=256 packing_stride=64
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=256 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=256 first_fold_byte_products=256 folded_vector_entries=8 predicted_main_live_bytes=512
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=f71b30409c352bc1c88ac4cc65349badad1420689a06b378dfd1b44ee88fb632
+generation_seconds=0.005000276 a_generation_seconds=0.004995609 b_generation_seconds=0.000004667
+claim_preparation_seconds=0.000095738
+setup_seconds=0.170773542 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.050155773
+proof_size_bytes=11608 proof_size_kib=11.335937500
+verifier_seconds=0.012370425
+peak_rss_kib=9780 peak_rss_gib=0.009326935
+serialization_seconds=0.002343109 deserialization_seconds=0.001846273
+scalar_commitments=132 proof_sha256=9002f902dba47e5664031b643d14f26f9cda895fa3f7d4323a13b59ceb420505
+cross_terms_seconds=0.000145496 first_fold_seconds=0.000004312 reduced_check_seconds=0.000090840 binary_rounds_seconds=0.001706586
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 8-resources.log =====
+	Command being timed: "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6 8 30"
+	User time (seconds): 156.79
+	System time (seconds): 3.76
+	Percent of CPU this job got: 4784%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:03.35
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2085820
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 690584
+	Voluntary context switches: 32712
+	Involuntary context switches: 2137
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== 8-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=8 basis_bit_width=254 entries=65536 packing_stride=64
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=65536 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=65536 first_fold_byte_products=65536 folded_vector_entries=2048 predicted_main_live_bytes=131072
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.005093492 a_generation_seconds=0.005088500 b_generation_seconds=0.000004992
+claim_preparation_seconds=0.000958705
+setup_seconds=0.162510365 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.331657255
+proof_size_bytes=12248 proof_size_kib=11.960937500
+verifier_seconds=0.013370494
+peak_rss_kib=9928 peak_rss_gib=0.009468079
+serialization_seconds=0.008088666 deserialization_seconds=0.005923511
+scalar_commitments=148 proof_sha256=d1d25ee7cce2300674deee062708234ef9ce95fe630bf44e989e0a15e4fbccb7
+cross_terms_seconds=0.001840748 first_fold_seconds=0.000756343 reduced_check_seconds=0.000594678 binary_rounds_seconds=0.021723531
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== 8.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=8 basis_bit_width=254 entries=1073741824 packing_stride=64
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=1073741824 b_storage_bytes=960 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=1 packing_policy=adaptive projection_byte_products=1073741824 first_fold_byte_products=1073741824 folded_vector_entries=33554432 predicted_main_live_bytes=2147483648
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=d4c0be1bd65142b22ff28ceb41fc81a08a2fca96a67736aa16f7121c0989eaed
+generation_seconds=0.073473455 a_generation_seconds=0.073447693 b_generation_seconds=0.000025762
+claim_preparation_seconds=1.865775468
+setup_seconds=0.149806667 setup_excluded_from_prover_and_verifier=true
+prover_seconds=1.148411622
+proof_size_bytes=13368 proof_size_kib=13.054687500
+verifier_seconds=0.015206542
+peak_rss_kib=2085820 peak_rss_gib=1.989192963
+serialization_seconds=0.005243379 deserialization_seconds=0.003938514
+scalar_commitments=176 proof_sha256=3810aa0214a367ab7fcebaf4722134edbdf9e857bcec9ec948fc5574a21d735c
+cross_terms_seconds=0.362565558 first_fold_seconds=0.362138611 reduced_check_seconds=0.013383777 binary_rounds_seconds=0.130871078
+accepted=true
+
+===== build.log =====
+   Compiling batch v0.1.0 (/home/mscong1/packed_eo_bitwidth_v6_20261111/source/batch)
+warning: function `public_table_digest` is never used
+   --> batch/src/hidden_relation_batch.rs:638:4
+    |
+638 | fn public_table_digest(values: &[ark_bn254::Fr]) -> Result<[u8; 32], Hi...
+    |    ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `bind_hidden_field_vector_statement` is never used
+   --> batch/src/jolt_dory_adapter.rs:642:4
+    |
+642 | fn bind_hidden_field_vector_statement<T: Transcript<Challenge = Fr>>(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `open_hidden_field_vector_zk` is never used
+   --> batch/src/jolt_dory_adapter.rs:665:8
+    |
+665 | pub fn open_hidden_field_vector_zk<T: Transcript<Challenge = Fr>>(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `verify_hidden_field_vector_zk` is never used
+   --> batch/src/jolt_dory_adapter.rs:703:8
+    |
+703 | pub fn verify_hidden_field_vector_zk<T: Transcript<Challenge = Fr>>(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `bool_to_field` is never used
+    --> batch/src/section6_data.rs:1313:15
+     |
+1313 | pub(crate) fn bool_to_field<F: PrimeField>(bit: bool) -> F {
+     |               ^^^^^^^^^^^^^
+
+warning: methods `values` and `committed` are never used
+   --> batch/src/section6_values.rs:179:19
+    |
+178 | impl CommittedSection6ClaimValues {
+    | --------------------------------- methods in this implementation
+179 |     pub(crate) fn values(&self) -> &[ArkFr] {
+    |                   ^^^^^^
+...
+183 |     pub(crate) fn committed(&self) -> &CommittedDoryFieldVector {
+    |                   ^^^^^^^^^
+
+warning: methods `standard_point_ark`, `normalized_witness`, and `committed_values` are never used
+   --> batch/src/section6_values.rs:195:19
+    |
+188 | impl PendingSection6ClaimValueOpening<'_> {
+    | ----------------------------------------- methods in this implementation
+...
+195 |     pub(crate) fn standard_point_ark(&self) -> Vec<ArkFr> {
+    |                   ^^^^^^^^^^^^^^^^^^
+...
+203 |     pub(crate) fn normalized_witness(&self) -> &HiddenScalarWitness {
+    |                   ^^^^^^^^^^^^^^^^^^
+...
+207 |     pub(crate) fn committed_values(&self) -> &CommittedSection6ClaimVal...
+    |                   ^^^^^^^^^^^^^^^^
+
+warning: function `section6_claim_value_standard_point` is never used
+   --> batch/src/section6_values.rs:375:15
+    |
+375 | pub(crate) fn section6_claim_value_standard_point(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `section6_claim_value_logical_len` is never used
+   --> batch/src/section6_values.rs:384:15
+    |
+384 | pub(crate) fn section6_claim_value_logical_len(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `batch` (lib) generated 9 warnings
+    Finished `release` profile [optimized + debuginfo] target(s) in 32.79s
+
+===== full-max-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=max eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=254 basis_bit_width=254 entries=65536 packing_stride=2
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=2097152 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=0 packing_policy=adaptive projection_byte_products=0 first_fold_byte_products=0 folded_vector_entries=65536 predicted_main_live_bytes=4194304
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.006374025 a_generation_seconds=0.006362681 b_generation_seconds=0.000011344
+claim_preparation_seconds=0.000672692
+setup_seconds=0.162043589 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.112368943
+proof_size_bytes=7688 proof_size_kib=7.507812500
+verifier_seconds=0.009114283
+peak_rss_kib=12224 peak_rss_gib=0.011657715
+serialization_seconds=0.001814581 deserialization_seconds=0.001407971
+scalar_commitments=34 proof_sha256=2828305d881847564e7aac281e4e872c85b799c099418f937b0a217f443c7cd8
+cross_terms_seconds=0.003354944 first_fold_seconds=0.006714034 reduced_check_seconds=0.001116726 binary_rounds_seconds=0.037810812
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== full-min-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=min eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=254 basis_bit_width=254 entries=65536 packing_stride=2
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=2097152 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=0 packing_policy=adaptive projection_byte_products=0 first_fold_byte_products=0 folded_vector_entries=65536 predicted_main_live_bytes=4194304
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.006974577 a_generation_seconds=0.006965722 b_generation_seconds=0.000008855
+claim_preparation_seconds=0.000817713
+setup_seconds=0.163772239 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.061060516
+proof_size_bytes=7688 proof_size_kib=7.507812500
+verifier_seconds=0.008590778
+peak_rss_kib=12036 peak_rss_gib=0.011478424
+serialization_seconds=0.000838339 deserialization_seconds=0.000670739
+scalar_commitments=34 proof_sha256=efe21a174c488664239d196f1cc4621f3ea0f94ae1fc50b72c4d46d64a707909
+cross_terms_seconds=0.005172516 first_fold_seconds=0.006644715 reduced_check_seconds=0.001137257 binary_rounds_seconds=0.021645482
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== full-point-alternating-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=alternating
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=254 basis_bit_width=254 entries=256 packing_stride=2
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=8192 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=0 packing_policy=adaptive projection_byte_products=0 first_fold_byte_products=0 folded_vector_entries=256 predicted_main_live_bytes=16384
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=5fada1d3a9b687b3dd23144fc19a9cce41bf4d9c9c88f25705d52183021aa8ec
+generation_seconds=0.004560028 a_generation_seconds=0.004551982 b_generation_seconds=0.000008046
+claim_preparation_seconds=0.000072117
+setup_seconds=0.168804430 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.037721694
+proof_size_bytes=7048 proof_size_kib=6.882812500
+verifier_seconds=0.007794750
+peak_rss_kib=9848 peak_rss_gib=0.009391785
+serialization_seconds=0.000704690 deserialization_seconds=0.000560492
+scalar_commitments=18 proof_sha256=bfe21b64dc88c54579665461c3f75155dcb89b5bef179d416483715129de57b4
+cross_terms_seconds=0.000020839 first_fold_seconds=0.000014296 reduced_check_seconds=0.000320933 binary_rounds_seconds=0.006627021
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== full-point-one-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=one
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=254 basis_bit_width=254 entries=256 packing_stride=2
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=8192 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=0 packing_policy=adaptive projection_byte_products=0 first_fold_byte_products=0 folded_vector_entries=256 predicted_main_live_bytes=16384
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=2463879d19f25dcc76e2198c77b833e7b5fafea9690f1114d260de753ae073c6
+generation_seconds=0.004211301 a_generation_seconds=0.004202683 b_generation_seconds=0.000008618
+claim_preparation_seconds=0.000069835
+setup_seconds=0.171938904 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.041721954
+proof_size_bytes=7048 proof_size_kib=6.882812500
+verifier_seconds=0.007905967
+peak_rss_kib=9928 peak_rss_gib=0.009468079
+serialization_seconds=0.000533257 deserialization_seconds=0.000439568
+scalar_commitments=18 proof_sha256=e4c6644b2ed23993d259023c2e714bb5eb23c554bfc05ca7081df45d9fef6281
+cross_terms_seconds=0.000022410 first_fold_seconds=0.000014823 reduced_check_seconds=0.000706190 binary_rounds_seconds=0.009517962
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== full-point-zero-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=zero
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=254 basis_bit_width=254 entries=256 packing_stride=2
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=8192 b_storage_bytes=256 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=0 packing_policy=adaptive projection_byte_products=0 first_fold_byte_products=0 folded_vector_entries=256 predicted_main_live_bytes=16384
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=f71b30409c352bc1c88ac4cc65349badad1420689a06b378dfd1b44ee88fb632
+generation_seconds=0.004819647 a_generation_seconds=0.004809577 b_generation_seconds=0.000010070
+claim_preparation_seconds=0.000065459
+setup_seconds=0.170531413 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.037964794
+proof_size_bytes=7048 proof_size_kib=6.882812500
+verifier_seconds=0.007731247
+peak_rss_kib=9664 peak_rss_gib=0.009216309
+serialization_seconds=0.000510883 deserialization_seconds=0.000422616
+scalar_commitments=18 proof_sha256=b62e9661d2b87c301055c4851a749515c06b31a355939361ca345203c2e547c8
+cross_terms_seconds=0.000024064 first_fold_seconds=0.000015650 reduced_check_seconds=0.000404333 binary_rounds_seconds=0.009296248
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== full-resources.log =====
+	Command being timed: "/home/mscong1/packed_eo_bitwidth_v6_20261111/packed_eo_bitwidth_v6 full 30"
+	User time (seconds): 699.39
+	System time (seconds): 51.43
+	Percent of CPU this job got: 1809%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:41.50
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 67120784
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 20460283
+	Voluntary context switches: 11817
+	Involuntary context switches: 1568
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== full-smoke.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=254 basis_bit_width=254 entries=65536 packing_stride=2
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=2097152 b_storage_bytes=512 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=0 packing_policy=adaptive projection_byte_products=0 first_fold_byte_products=0 folded_vector_entries=65536 predicted_main_live_bytes=4194304
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=ac336616f2960aa27f67086edba9696c6afc01b8395afa4d2da045308f2bad76
+generation_seconds=0.007154701 a_generation_seconds=0.007149764 b_generation_seconds=0.000004937
+claim_preparation_seconds=0.000647696
+setup_seconds=0.162026662 setup_excluded_from_prover_and_verifier=true
+prover_seconds=0.109470396
+proof_size_bytes=7688 proof_size_kib=7.507812500
+verifier_seconds=0.009009502
+peak_rss_kib=11992 peak_rss_gib=0.011436462
+serialization_seconds=0.001783882 deserialization_seconds=0.001412925
+scalar_commitments=34 proof_sha256=4cc2d77c08bb904dcd3583a90ba2d33ef68f55951e3193f5f23aad4d0c41c3e0
+cross_terms_seconds=0.005661094 first_fold_seconds=0.007057100 reduced_check_seconds=0.001037037 binary_rounds_seconds=0.035896938
+endpoint_audit=true tamper_rejected=true full_field_equivalence_checked=true boundary_values_injected=true explicit_eq_claim_checked=true altered_point_rejected=true
+accepted=true
+
+===== full.log =====
+scope=hidden_implicit_eq_two_vector_eo_reduction_only
+cross_kernel=eq_lane_projection_radix256
+test_pattern=mixed eq_point_pattern=random
+input_pcs_commitment_and_openings_included=false bucket_count=not_applicable tensor_optimization=true basis_storage=implicit_eq point_order=lsb_first
+field=BN254_scalar field_modulus_bits=254 input_bit_width=254 basis_bit_width=254 entries=1073741824 packing_stride=2
+engine=implicit_eq_byte_planes_v6 tile_entries=32768 a_storage_bytes=34359738368 b_storage_bytes=960 prover_threads=64 verifier_threads=1 repetitions=1
+a_byte_planes=0 packing_policy=adaptive projection_byte_products=0 first_fold_byte_products=0 folded_vector_entries=1073741824 predicted_main_live_bytes=68719476736
+eq_row_weight_generation_in_prover=true eq_point_binding_sha256=d4c0be1bd65142b22ff28ceb41fc81a08a2fca96a67736aa16f7121c0989eaed
+generation_seconds=14.111492723 a_generation_seconds=14.111481544 b_generation_seconds=0.000011179
+claim_preparation_seconds=0.819633290
+setup_seconds=0.152836100 setup_excluded_from_prover_and_verifier=true
+prover_seconds=23.671327443
+proof_size_bytes=8808 proof_size_kib=8.601562500
+verifier_seconds=0.011000485
+peak_rss_kib=67120784 peak_rss_gib=64.011367798
+serialization_seconds=0.001154709 deserialization_seconds=0.000938660
+scalar_commitments=62 proof_sha256=62cae2233056fe100dbf9cfcdb98d8fb63895de00ef6468f98098f79b1d8729c
+cross_terms_seconds=8.186605533 first_fold_seconds=8.598675500 reduced_check_seconds=0.647275882 binary_rounds_seconds=4.590673400
+accepted=true
+
+===== machine.log =====
+2026-11-11T00:35:54+08:00
+Linux swiftlab 6.8.0-138-generic #138~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 13:43:15 UTC  x86_64 x86_64 x86_64 GNU/Linux
+架构：                                   x86_64
+CPU 运行模式：                           32-bit, 64-bit
+Address sizes:                           46 bits physical, 57 bits virtual
+字节序：                                 Little Endian
+CPU:                                     96
+在线 CPU 列表：                          0-95
+厂商 ID：                                GenuineIntel
+型号名称：                               Intel(R) Xeon(R) Gold 6342 CPU @ 2.80GHz
+CPU 系列：                               6
+型号：                                   106
+每个核的线程数：                         2
+每个座的核数：                           24
+座：                                     2
+步进：                                   6
+CPU 最大 MHz：                           3500.0000
+CPU 最小 MHz：                           800.0000
+BogoMIPS：                               5600.00
+标记：                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf pni pclmulqdq dtes64 ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid dca sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb cat_l3 intel_ppin ssbd mba ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb intel_pt avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local split_lock_detect wbnoinvd dtherm ida arat pln pts vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg tme avx512_vpopcntdq la57 rdpid fsrm md_clear pconfig flush_l1d arch_capabilities
+虚拟化：                                 VT-x
+L1d 缓存：                               2.3 MiB (48 instances)
+L1i 缓存：                               1.5 MiB (48 instances)
+L2 缓存：                                60 MiB (48 instances)
+L3 缓存：                                72 MiB (2 instances)
+NUMA 节点：                              2
+NUMA 节点0 CPU：                         0-23,48-71
+NUMA 节点1 CPU：                         24-47,72-95
+Vulnerability Gather data sampling:      Mitigation; Microcode
+Vulnerability Indirect target selection: Mitigation; Aligned branch/return thunks
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Mitigation; Clear CPU buffers; SMT vulnerable
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Not affected
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI SW loop, KVM SW loop
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+               total        used        free      shared  buff/cache   available
+内存：      377Gi        31Gi        98Gi       186Gi       247Gi       156Gi
+交换：      2.0Gi       1.3Gi       757Mi
+文件系统        大小  已用  可用 已用% 挂载点
+/dev/sdb2       879G  828G  6.3G  100% /
+tmpfs           189G  187G  2.6G   99% /dev/shm
+USER         PID %CPU %MEM COMMAND
+mscong   3392166  584  6.2 prove_inference
+root      660950 15.1  0.0 uhs-cfg
+root      660949  5.2  0.0 uhs-data
+gyt      1304655  3.1  0.0 nvtop
+root      660994  1.8  0.1 uhs-epp
+gyt      3371871  1.4  0.2 node
+gyt      3371860  1.0  0.1 node
+swift      12152  0.8  0.0 firefox
+swift      12316  0.6  0.0 Privileged Cont
+gyt      1021994  0.5  0.0 node
+gyt      1019242  0.4  0.0 node
+rustc 1.96.0-nightly (ac7f9ec7d 2026-03-20)
+binary: rustc
+commit-hash: ac7f9ec7da74d37fd28667c86bf117a39ba5b02a
+commit-date: 2026-03-20
+host: x86_64-unknown-linux-gnu
+release: 1.96.0-nightly
+LLVM version: 22.1.0

@@ -1,0 +1,214 @@
+Hyrax homomorphic batching — four scenarios
+Date: 2026-11-10
+STATUS: ALL FOUR COMPLETED; independent hidden-evaluation verification passed.
+Implementation: local poly-commit Hyrax snapshot, BN254, Merlin transcript; native commit/open/check unchanged.
+Batching: commit each original matrix, derive coefficients after all commitments, aggregate matrices, blinding factors and commitments by equal padded size.
+CPU only; 48 prover threads, sequential independent verifier; each scenario once.
+Timing: prover = commit + aggregation + native opening/serialization. Input conversion, field loading and parameter setup excluded.
+Verifier includes file reads, proof decoding, transcript derivation and original commitment aggregation; setup/metadata parsing excluded.
+Proof size sums the five group proofs; original commitments and public metadata are separate.
+Native check validates hidden evaluation commitments; supplied public values are ignored. This is not public-evaluation checking.
+Native setup is testing-only; these are implementation benchmarks, not a production-security claim.
+
+Model | Matrices | Openings | Commit (s) | Open including aggregation (s) | Prover (s) | Proof (KiB) | Verifier (s) | Peak RSS (GiB)
+Llama-8B-8bit | 291 | 5 | 1333.50 | 69.83 | 1403.33 | 1474.86 | 51.225 | 103.95
+Llama-8B-16bit | 291 | 5 | 1396.56 | 64.31 | 1460.87 | 1474.86 | 51.279 | 111.48
+Llama-70B-8bit | 723 | 5 | 10572.29 | 150.52 | 10722.81 | 1924.86 | 189.043 | 162.71
+Llama-70B-16bit | 723 | 5 | 11585.10 | 154.64 | 11739.74 | 1924.86 | 189.028 | 228.33
+
+Full-precision measurements and provenance:
+
+[8B-8bit]
+summary.json :
+{
+  "aggregation_seconds_in_open": 67.693573906,
+  "commit_seconds": 1333.4976496200006,
+  "commitment_bytes": 39981344,
+  "group_count": 5,
+  "group_matrix_counts": {
+    "12": 65,
+    "22": 64,
+    "24": 64,
+    "26": 96,
+    "30": 2
+  },
+  "input_seconds": 185.22754453599993,
+  "matrix_count": 291,
+  "native_open_seconds": 2.134173628,
+  "open_seconds": 69.827747534,
+  "padded_entries": 9932378112,
+  "peak_rss_kib": 109004220,
+  "physical_entries": 8030261248,
+  "proof_bytes": 1510256,
+  "prover_seconds": 1403.3253971540007,
+  "public_evaluation_checked": false,
+  "runs": 1,
+  "scope": "homomorphic size-grouped native Hyrax; hidden evaluation",
+  "setup_seconds": 0.169784685,
+  "source_stream_entries": 8053329920,
+  "threads": 48,
+  "scenario": "8B-8bit",
+  "independent_verify_seconds": 51.224582506,
+  "verifier_setup_seconds": 0.945981961,
+  "verifier_commitment_aggregation_seconds": 38.240191069,
+  "verified_hidden_evaluation": true
+}
+independent-verify.json :
+{"commitment_aggregation_seconds_in_verify":38.240191069,"groups":5,"public_evaluation_checked":false,"setup_seconds":0.945981961,"verified_hidden_evaluation":true,"verify_decode_io_seconds":51.224582506}
+input.json :
+{
+  "bytes": 8053329920,
+  "sha256": "5b3bccda178bea933b34100f2112fad6819d281be85cc9a9131728e4d883db5d",
+  "expected_sha256": "5b3bccda178bea933b34100f2112fad6819d281be85cc9a9131728e4d883db5d",
+  "conversion_seconds": 38.01084896095563
+}
+	Swaps: 0
+	Exit status: 0
+
+[8B-16bit]
+summary.json :
+{
+  "aggregation_seconds_in_open": 62.174456445000004,
+  "commit_seconds": 1396.5647531720006,
+  "commitment_bytes": 39981344,
+  "group_count": 5,
+  "group_matrix_counts": {
+    "12": 65,
+    "22": 64,
+    "24": 64,
+    "26": 96,
+    "30": 2
+  },
+  "input_seconds": 181.97616029799977,
+  "matrix_count": 291,
+  "native_open_seconds": 2.135515905,
+  "open_seconds": 64.30997235000001,
+  "padded_entries": 9932378112,
+  "peak_rss_kib": 116898300,
+  "physical_entries": 8030261248,
+  "proof_bytes": 1510256,
+  "prover_seconds": 1460.8747255220005,
+  "public_evaluation_checked": false,
+  "runs": 1,
+  "scope": "homomorphic size-grouped native Hyrax; hidden evaluation",
+  "setup_seconds": 0.227297858,
+  "source_stream_entries": 8053329920,
+  "threads": 48,
+  "scenario": "8B-16bit",
+  "independent_verify_seconds": 51.279273867,
+  "verifier_setup_seconds": 0.945465065,
+  "verifier_commitment_aggregation_seconds": 38.276833389,
+  "verified_hidden_evaluation": true
+}
+independent-verify.json :
+{"commitment_aggregation_seconds_in_verify":38.276833389,"groups":5,"public_evaluation_checked":false,"setup_seconds":0.945465065,"verified_hidden_evaluation":true,"verify_decode_io_seconds":51.279273867}
+input.json :
+{
+  "bytes": 16106659840,
+  "sha256": "4a402790ceb49665c11d0f1466f0893b3b32d9445740756ee7eaf1a65c8d1c5f",
+  "expected_sha256": "4a402790ceb49665c11d0f1466f0893b3b32d9445740756ee7eaf1a65c8d1c5f",
+  "conversion_seconds": 73.52017961500678
+}
+	Swaps: 0
+	Exit status: 0
+
+[70B-8bit]
+summary.json :
+{
+  "aggregation_seconds_in_open": 147.946637334,
+  "commit_seconds": 10572.289322194996,
+  "commitment_bytes": 191506080,
+  "group_count": 5,
+  "group_matrix_counts": {
+    "14": 161,
+    "24": 160,
+    "26": 160,
+    "28": 240,
+    "30": 2
+  },
+  "input_seconds": 1339.442661142001,
+  "matrix_count": 723,
+  "native_open_seconds": 2.573307116,
+  "open_seconds": 150.51994445,
+  "padded_entries": 79996403712,
+  "peak_rss_kib": 170619024,
+  "physical_entries": 70553706496,
+  "proof_bytes": 1971056,
+  "prover_seconds": 10722.809266644996,
+  "public_evaluation_checked": false,
+  "runs": 1,
+  "scope": "homomorphic size-grouped native Hyrax; hidden evaluation",
+  "setup_seconds": 0.285032045,
+  "source_stream_entries": 70599843840,
+  "threads": 48,
+  "scenario": "70B-8bit",
+  "independent_verify_seconds": 189.04345192,
+  "verifier_setup_seconds": 1.217045768,
+  "verifier_commitment_aggregation_seconds": 131.127845095,
+  "verified_hidden_evaluation": true
+}
+independent-verify.json :
+{"commitment_aggregation_seconds_in_verify":131.127845095,"groups":5,"public_evaluation_checked":false,"setup_seconds":1.217045768,"verified_hidden_evaluation":true,"verify_decode_io_seconds":189.04345192}
+input.json :
+{
+  "bytes": 70599843840,
+  "sha256": "1831cb4b5de22794fb7a98f0de0a54fc303738d572ca17934bc695cdee4bc6f8",
+  "expected_sha256": "1831cb4b5de22794fb7a98f0de0a54fc303738d572ca17934bc695cdee4bc6f8",
+  "conversion_seconds": 298.5131458869437
+}
+	Swaps: 0
+	Exit status: 0
+
+[70B-16bit]
+summary.json :
+{
+  "aggregation_seconds_in_open": 151.957982143,
+  "commit_seconds": 11585.101839181993,
+  "commitment_bytes": 191506080,
+  "group_count": 5,
+  "group_matrix_counts": {
+    "14": 161,
+    "24": 160,
+    "26": 160,
+    "28": 240,
+    "30": 2
+  },
+  "input_seconds": 1340.2562568070014,
+  "matrix_count": 723,
+  "native_open_seconds": 2.679643974,
+  "open_seconds": 154.637626117,
+  "padded_entries": 79996403712,
+  "peak_rss_kib": 239420456,
+  "physical_entries": 70553706496,
+  "proof_bytes": 1971056,
+  "prover_seconds": 11739.739465298991,
+  "public_evaluation_checked": false,
+  "runs": 1,
+  "scope": "homomorphic size-grouped native Hyrax; hidden evaluation",
+  "setup_seconds": 0.261308621,
+  "source_stream_entries": 70599843840,
+  "threads": 48,
+  "scenario": "70B-16bit",
+  "independent_verify_seconds": 189.028341443,
+  "verifier_setup_seconds": 1.238404163,
+  "verifier_commitment_aggregation_seconds": 131.06578693,
+  "verified_hidden_evaluation": true
+}
+independent-verify.json :
+{"commitment_aggregation_seconds_in_verify":131.06578693,"groups":5,"public_evaluation_checked":false,"setup_seconds":1.238404163,"verified_hidden_evaluation":true,"verify_decode_io_seconds":189.028341443}
+input.json :
+{
+  "bytes": 141199687680,
+  "sha256": "0aa5428f88d876241ce08db0a16c5a1d7a395cf6fde2a563052dc02a9ad6c7c3",
+  "expected_sha256": "0aa5428f88d876241ce08db0a16c5a1d7a395cf6fde2a563052dc02a9ad6c7c3",
+  "conversion_seconds": 803.3154117360245
+}
+	Swaps: 0
+	Exit status: 0
+
+All 68 downloaded evidence files match server SHA256SUMS.
+Evidence: experiments/hyrax_pcs/server-results-20261110/
+Source: experiments/hyrax_pcs/source-batched.tar.gz
+Source SHA-256: ec0c48a2951d4f84ac14bc3927fa52d99f7542d19d269f4347547c0c1619fb6b
+Peak RSS is process RSS, not total machine memory including tmpfs/cache.
+Physical model elements, BVA stream elements and Hyrax padded elements are recorded separately in each summary.

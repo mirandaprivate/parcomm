@@ -1,0 +1,139 @@
+FlashProve native PCS CPU benchmark — four scenarios
+Date: 2026-11-09
+Scope: CPU streaming native LIN PCS; not ParComm or full FlashProve inference end-to-end.
+Prover threads: 48 OpenMP; runs per scenario: 1.
+Prover = commitment + opening. Input conversion and parameter setup are excluded.
+Independent verifier includes statement/proof file reads and decoding, excludes verifier setup.
+Proof size includes framing, excludes the separate public statement/key.
+Peak RSS is process resident memory, not total machine memory.
+
+Model | Commit (s) | Open (s) | Prover (s) | Proof (bytes) | Proof (KiB) | Independent verifier (s) | Peak RSS (GiB)
+Llama-8B-8bit | 76.45 | 212.18 | 288.62 | 18393240 | 17962.15 | 0.716 | 13.72
+Llama-8B-16bit | 84.18 | 217.88 | 302.06 | 18392824 | 17961.74 | 0.717 | 21.22
+Llama-70B-8bit | 1112.41 | 1248.95 | 2361.36 | 274970360 | 268525.74 | 2.080 | 72.36
+Llama-70B-16bit | 1539.83 | 1475.30 | 3015.13 | 274973400 | 268528.71 | 2.104 | 138.12
+
+Full-precision measurements and input provenance:
+
+[8B-8bit]
+result.json :
+{
+"scope":"CPU streaming native LIN PCS; one-time proximity included in opening; public evaluation",
+"entries":8053329920,
+"input_width":1,
+"runs":1,
+"prover_threads":48,
+"setup_seconds":0.014879054,
+"commit_seconds":76.446487843,
+"open_seconds":212.177576085,
+"evaluation_seconds_in_open":2.147050651,
+"prover_seconds":288.624063928,
+"verify_seconds":0.699918775,
+"proof_bytes":18393240,
+"peak_rss_kib":14390176,
+"verified":true
+}
+independent-verify.json :
+{"setup_seconds":0.01525821,"verify_decode_io_seconds":0.71567359,"verified":true}
+input.json :
+{
+  "bytes": 8053329920,
+  "sha256": "5b3bccda178bea933b34100f2112fad6819d281be85cc9a9131728e4d883db5d",
+  "conversion_seconds": 38.4177542940015,
+  "expected_sha256": "5b3bccda178bea933b34100f2112fad6819d281be85cc9a9131728e4d883db5d"
+}
+	Swaps: 0
+	Exit status: 0
+
+[8B-16bit]
+result.json :
+{
+"scope":"CPU streaming native LIN PCS; one-time proximity included in opening; public evaluation",
+"entries":8053329920,
+"input_width":2,
+"runs":1,
+"prover_threads":48,
+"setup_seconds":0.015123229,
+"commit_seconds":84.184278563,
+"open_seconds":217.875235829,
+"evaluation_seconds_in_open":2.112817403,
+"prover_seconds":302.059514392,
+"verify_seconds":0.690188026,
+"proof_bytes":18392824,
+"peak_rss_kib":22254700,
+"verified":true
+}
+independent-verify.json :
+{"setup_seconds":0.014863509,"verify_decode_io_seconds":0.716889339,"verified":true}
+input.json :
+{
+  "bytes": 16106659840,
+  "sha256": "4a402790ceb49665c11d0f1466f0893b3b32d9445740756ee7eaf1a65c8d1c5f",
+  "conversion_seconds": 74.77089373907074,
+  "expected_sha256": "4a402790ceb49665c11d0f1466f0893b3b32d9445740756ee7eaf1a65c8d1c5f"
+}
+	Swaps: 0
+	Exit status: 0
+
+[70B-8bit]
+result.json :
+{
+"scope":"CPU streaming native LIN PCS; one-time proximity included in opening; public evaluation",
+"entries":70599843840,
+"input_width":1,
+"runs":1,
+"prover_threads":48,
+"setup_seconds":0.020514562,
+"commit_seconds":1112.41305911,
+"open_seconds":1248.94541417,
+"evaluation_seconds_in_open":33.100231218,
+"prover_seconds":2361.35847328,
+"verify_seconds":1.773062277,
+"proof_bytes":274970360,
+"peak_rss_kib":75879416,
+"verified":true
+}
+independent-verify.json :
+{"setup_seconds":0.01535661,"verify_decode_io_seconds":2.079979622,"verified":true}
+input.json :
+{
+  "bytes": 70599843840,
+  "sha256": "1831cb4b5de22794fb7a98f0de0a54fc303738d572ca17934bc695cdee4bc6f8",
+  "conversion_seconds": 283.19066694693174,
+  "expected_sha256": "1831cb4b5de22794fb7a98f0de0a54fc303738d572ca17934bc695cdee4bc6f8"
+}
+	Swaps: 0
+	Exit status: 0
+
+[70B-16bit]
+result.json :
+{
+"scope":"CPU streaming native LIN PCS; one-time proximity included in opening; public evaluation",
+"entries":70599843840,
+"input_width":2,
+"runs":1,
+"prover_threads":48,
+"setup_seconds":0.02014153,
+"commit_seconds":1539.82908532,
+"open_seconds":1475.29786274,
+"evaluation_seconds_in_open":33.165343501,
+"prover_seconds":3015.12694807,
+"verify_seconds":1.784937021,
+"proof_bytes":274973400,
+"peak_rss_kib":144831464,
+"verified":true
+}
+independent-verify.json :
+{"setup_seconds":0.015335836,"verify_decode_io_seconds":2.1039045,"verified":true}
+input.json :
+{
+  "bytes": 141199687680,
+  "sha256": "0aa5428f88d876241ce08db0a16c5a1d7a395cf6fde2a563052dc02a9ad6c7c3",
+  "conversion_seconds": 688.8319222650025,
+  "expected_sha256": "0aa5428f88d876241ce08db0a16c5a1d7a395cf6fde2a563052dc02a9ad6c7c3"
+}
+	Swaps: 0
+	Exit status: 0
+
+Evidence directory: experiments/flashprove_pcs/server-results-20261109/
+All four scenarios passed independent verification; all 56 downloaded evidence files matched server SHA256SUMS.
