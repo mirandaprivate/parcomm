@@ -1,0 +1,30 @@
+{
+  "8B-8bit": [
+    "Llama-3.1-8B-W8A8",
+    "llama-w8a8",
+    "i8",
+    8053329920,
+    "5b3bccda178bea933b34100f2112fad6819d281be85cc9a9131728e4d883db5d"
+  ],
+  "8B-16bit": [
+    "Llama-3.1-8B-BF16",
+    "llama-bf16",
+    "i16",
+    8053329920,
+    "4a402790ceb49665c11d0f1466f0893b3b32d9445740756ee7eaf1a65c8d1c5f"
+  ],
+  "70B-8bit": [
+    "Llama-3.1-70B-W8A8",
+    "llama-w8a8",
+    "i8",
+    70599843840,
+    "1831cb4b5de22794fb7a98f0de0a54fc303738d572ca17934bc695cdee4bc6f8"
+  ],
+  "70B-16bit": [
+    "Llama-3.1-70B-BF16-community",
+    "llama-bf16",
+    "i16",
+    70599843840,
+    "0aa5428f88d876241ce08db0a16c5a1d7a395cf6fde2a563052dc02a9ad6c7c3"
+  ]
+}

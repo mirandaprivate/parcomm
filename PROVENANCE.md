@@ -1,5 +1,11 @@
 # Source and measurement provenance
 
+Additional FlashProve, Hyrax and EO component results have reproducible source
+entry points under `benchmarks/`. Their result-to-source mapping, historical
+hashes, measurement boundaries and portable validation commands are documented
+in [benchmarks/README.md](benchmarks/README.md). Their arithmetic is preserved
+from the measured snapshots; artifact preparation does not rerun model timings.
+
 - Jolt ParComm remains in the repository's original root workspace. The
   eight reference logs are copied verbatim from the project root. The original
   four Jolt logs contain the historical command and acceptance marker; no new

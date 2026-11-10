@@ -1,0 +1,526 @@
+{
+  "benchmarks/flashprove/cpu/equivalence_test.cpp": {
+    "source": "experiments/flashprove_pcs/cpu/equivalence_test.cpp",
+    "sha256": "ae34ecc30a13c940a7fcf51fc409fbebca10edd918501ae1220c7e64b9537fdd"
+  },
+  "benchmarks/flashprove/cpu/index_stream.h": {
+    "source": "experiments/flashprove_pcs/cpu/index_stream.h",
+    "sha256": "fe211289a8b53ca07275f7affb06922e3fb8ba56548f48f61257d3dbd9f681e9"
+  },
+  "benchmarks/flashprove/cpu/model_bench.cpp": {
+    "source": "experiments/flashprove_pcs/cpu/model_bench.cpp",
+    "sha256": "360c769d3b4d3c06ac7c19ffada41d061edc73db63ac52104f82dd730bc1b029"
+  },
+  "benchmarks/flashprove/cpu/native_pcs.h": {
+    "source": "experiments/flashprove_pcs/cpu/native_pcs.h",
+    "sha256": "4661fe465b793edcbfbac12e89352e0ab0fef37e8e406ada7c066b1727a0951b"
+  },
+  "benchmarks/flashprove/cpu/native_test.cpp": {
+    "source": "experiments/flashprove_pcs/cpu/native_test.cpp",
+    "sha256": "3ad27c44ff47b9aa2121d75957d77f6fc6f33f9bc71944ec026a3b0c7642d086"
+  },
+  "benchmarks/flashprove/upstream/blocks/base.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/base.h",
+    "sha256": "b8cbd54e13a973162289ed985bec3088925c80016b7d48c52078f90b5ee9e8fc"
+  },
+  "benchmarks/flashprove/upstream/blocks/fence.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/fence.h",
+    "sha256": "d6fc0e6b302ba3f72925ba57d1c3c1124da93300e4d64d569d71c949136c4d3b"
+  },
+  "benchmarks/flashprove/upstream/blocks/chain/chain.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/chain/chain.h",
+    "sha256": "cfe9b071c0ea5da71a55ea27e63ea0e96f483ce7f3d4eec131655612934d2c2f"
+  },
+  "benchmarks/flashprove/upstream/blocks/chain/public.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/chain/public.h",
+    "sha256": "ce86114eb71e8284902f9ba76b4d6183d47af4b3a199fdcafde4517a23232d5b"
+  },
+  "benchmarks/flashprove/upstream/blocks/chain/rounds.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/chain/rounds.h",
+    "sha256": "7eaf25a90c441fc0be7e140e80338d87d44661cc74f7c1f4a2c95f43d058ea39"
+  },
+  "benchmarks/flashprove/upstream/blocks/chain/session.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/chain/session.h",
+    "sha256": "8ab5e0a2a35b45c84bb01dac0fcf98cb55173d4bd8a5cf95179dc1a295f0d911"
+  },
+  "benchmarks/flashprove/upstream/blocks/code/code.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/code/code.h",
+    "sha256": "1e3d7eef68d3ad48c2d883d4b56ed079811d8830d9f572800384c2704565a13d"
+  },
+  "benchmarks/flashprove/upstream/blocks/code/cosets.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/code/cosets.h",
+    "sha256": "4ce86d54b5e0b906c8dc31253db104305079d7a93427d35f9a0c1f64ab492ea4"
+  },
+  "benchmarks/flashprove/upstream/blocks/code/short_position.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/code/short_position.h",
+    "sha256": "01412175be7374edfc66b43a51921e389c5530e5842dad96b1d4eb145ece9290"
+  },
+  "benchmarks/flashprove/upstream/blocks/coins/chacha.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/coins/chacha.h",
+    "sha256": "4dd8a95ad97885b1c30385211db41cf757a694278ae4fbd7036fb29cfedc024f"
+  },
+  "benchmarks/flashprove/upstream/blocks/coins/coins.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/coins/coins.h",
+    "sha256": "393f8bca88b332c3d80bcbe4fa8b9994702a1cad78597820e3a05fc8d54394ac"
+  },
+  "benchmarks/flashprove/upstream/blocks/engine/engine.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/engine/engine.h",
+    "sha256": "0fcabbe225978bd7e8063429fb48f01392ced9476c84b3c00afca4983d8e1574"
+  },
+  "benchmarks/flashprove/upstream/blocks/engine/engine_cpu.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/engine/engine_cpu.h",
+    "sha256": "876b669b192f3720edd39972b45916d2ae32ebfe9f61cfd789abb565b8cb9c82"
+  },
+  "benchmarks/flashprove/upstream/blocks/engine/table.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/engine/table.h",
+    "sha256": "62ba3551beae025841985a6b13c809f37d6f9f7b9ae5439521a3de07a3da27ca"
+  },
+  "benchmarks/flashprove/upstream/blocks/field/field.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/field/field.h",
+    "sha256": "49392bf4da6528373a2c9765d5428680b3e1adbf0a0605a36653cc15302ac7e9"
+  },
+  "benchmarks/flashprove/upstream/blocks/field/gl64.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/field/gl64.h",
+    "sha256": "bece92054b9ee7e65c0fa5bba691b14a0a3eaef3481cebf3c64bda44a3fda429"
+  },
+  "benchmarks/flashprove/upstream/blocks/field/mle.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/field/mle.h",
+    "sha256": "bada719bd2c1bb6c467408ebab183812f4482ca763fd9b26a2d4f5dace2117c2"
+  },
+  "benchmarks/flashprove/upstream/blocks/frame/derive.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/frame/derive.h",
+    "sha256": "a0ad9b173183e28572a86c11198cf910f77a0ff2f28e6ae3a0a46cdf8fdfd537"
+  },
+  "benchmarks/flashprove/upstream/blocks/frame/lin_frame.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/frame/lin_frame.h",
+    "sha256": "87b8e186769c5ee196f83a5bdf273763e221b2428c74ebcb06b812bb187f8b99"
+  },
+  "benchmarks/flashprove/upstream/blocks/frame/parameters.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/frame/parameters.h",
+    "sha256": "cd616e51a944c6468ca5e4ea3709c01267145244f6681d194b8bde7af14392eb"
+  },
+  "benchmarks/flashprove/upstream/blocks/frame/version.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/frame/version.h",
+    "sha256": "0ee3aedb069a65c1677659ee34e788c644790becdc701ffa0299551595efd73e"
+  },
+  "benchmarks/flashprove/upstream/blocks/hash/blake2b_f.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/hash/blake2b_f.h",
+    "sha256": "ba8c1dc327225236c2f5886aa745f068fed6cf913af8aeed3495981b47135118"
+  },
+  "benchmarks/flashprove/upstream/blocks/hash/domains.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/hash/domains.h",
+    "sha256": "dd913937f18288b625abd8980a98dd335a05c7f33e34e57368b879e23f5de4f7"
+  },
+  "benchmarks/flashprove/upstream/blocks/hash/hash.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/hash/hash.h",
+    "sha256": "384594103ad482b7f75cf765ac605d62ff03aba1161a2a10bf5e0184d8f04323"
+  },
+  "benchmarks/flashprove/upstream/blocks/hash/tweak.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/hash/tweak.h",
+    "sha256": "b0e9dc9aa7f728843dfc0f81bda780ae06a71b529f79f39f256718eaceafc7db"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/base_case.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/base_case.h",
+    "sha256": "00c34c7d5fc3472f2eac2f1e2ee63067c2f872237d90951f945374eb4c96ef1c"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/bat.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/bat.h",
+    "sha256": "2036e4fb76feb094bdb24f64633df172a20788d45fd8139e508e516eec3c88aa"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/context.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/context.h",
+    "sha256": "8e5863d0a4e65fae4951199049b408ec71415f52e2466a9b7e71cd30b4e56f10"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/cs.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/cs.h",
+    "sha256": "9e967020c15b8830c9d7457ef9bf979def6ddb77dc4cca5393df665f6fabeb2a"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/fold.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/fold.h",
+    "sha256": "944a50d77d0fdcdcb58d1c740d6f7c78430cb593d21b4d726dc2e4f18044d0ca"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/foldeq.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/foldeq.h",
+    "sha256": "b1bb442b3277974f40b8920f3412e82e58cfdf44d7c55cda29f5bb6011ce358e"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/fold_algebra.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/fold_algebra.h",
+    "sha256": "e170e5c3a2b744ff104a4737051437815de40c5fe045f70f32f8a303f2bb9922"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/fold_rounds.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/fold_rounds.h",
+    "sha256": "91132fb09efe87bd4f525136f4b8c0732c67a1e194ff435b8e6272fc758a74fd"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/hp.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/hp.h",
+    "sha256": "65e5f10f7d116b283f543361407300dc031a3915e1a248c242f40fab82285322"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/index_cpu.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/index_cpu.h",
+    "sha256": "3f1edab8e85c8483bd0b70143f391395545caeb43667238b995ecff685507f62"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/iopp.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/iopp.h",
+    "sha256": "90f7b81238ebd85ef623d02f026267fddbd1bca17b3d7f3ef55fc0e6c9322d94"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/lin.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/lin.h",
+    "sha256": "d859f5518acae19ab498e3a3e8f0ec24ae71a83a1cd8bf0b1a8a8b74bc4bd13f"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/mask.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/mask.h",
+    "sha256": "9392c7ad14c77e1304c5e7ef659d4204ee9d563b20269fcaf4149c21077e81f0"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/message.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/message.h",
+    "sha256": "0f7414656c60e57ed03cfd51f8de992b67134e88d7a9c3e913f662e62503769c"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/relation.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/relation.h",
+    "sha256": "9752164ba91f5d06a694ea673c6890921a5de477d84a95e85aa935500475d8c9"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/row_value.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/row_value.h",
+    "sha256": "383ea750c92f33aeb1d7760d1ed463dde43940e51658f0654fa7152f3f297b54"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/send.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/send.h",
+    "sha256": "33840d0255e77f32d25a2f351e7f6aef45e1f2e0d6bd0206255e9da466d4f30f"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/single_rows.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/single_rows.h",
+    "sha256": "831622e9949f678110ec727735c2e8a7620341f3fe09ed5e998a13847d0b04e8"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/split.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/split.h",
+    "sha256": "6a01c0a125fb2dfdc1b5bc39aa3fce746650e0e0149c8d3dff5c8a3f634c0208"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/tensor.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/tensor.h",
+    "sha256": "3bbafef859cf13eb4a397590addac1f31dee05f4e593b0cf0365e22dd5d0d54e"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/tests/iopp_support.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/tests/iopp_support.h",
+    "sha256": "9f81e92204256f5f623a6ad32bdceba049b12509e36c7d1b961c5872453e87af"
+  },
+  "benchmarks/flashprove/upstream/blocks/iop/tests/lin_world.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/iop/tests/lin_world.h",
+    "sha256": "95c15f29e31d2812ff0581c854960aaf79374ec2bdb1627346d54e2d9ca968ac"
+  },
+  "benchmarks/flashprove/upstream/blocks/numbers/blocks.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/numbers/blocks.h",
+    "sha256": "3edaa14adbb61e7e4a175dbe68662c1c14c3d929acadf41fd1672acf63884c16"
+  },
+  "benchmarks/flashprove/upstream/blocks/numbers/codes.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/numbers/codes.h",
+    "sha256": "1c54e3af8b4033a43a4ebb048246b54a0d5557add76a8e90fc2f35f66619f320"
+  },
+  "benchmarks/flashprove/upstream/blocks/numbers/plan.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/numbers/plan.h",
+    "sha256": "e3a1e191cb23bdc9b74fe2177a7de2a5cad943089eb6cb83c1140e8740afc86f"
+  },
+  "benchmarks/flashprove/upstream/blocks/numbers/real.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/numbers/real.h",
+    "sha256": "ebe4c34ae57465ef768813b177df8615f6186b581e225b55b0582a5901adc7fd"
+  },
+  "benchmarks/flashprove/upstream/blocks/numbers/round_names.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/numbers/round_names.h",
+    "sha256": "b72296d0ad2f0b231deb5f0d5806263d38e5896a09c3b1f0efd6638c73be1139"
+  },
+  "benchmarks/flashprove/upstream/blocks/numbers/setting.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/numbers/setting.h",
+    "sha256": "73b799220e222ac259d359cef1d1054823ea75d38498769990574686bb11064a"
+  },
+  "benchmarks/flashprove/upstream/blocks/tree/opening.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/tree/opening.h",
+    "sha256": "b29ad3171ec3c38a69d2d407f86a3afc72193c95c1d60db0623b7115df374ab5"
+  },
+  "benchmarks/flashprove/upstream/blocks/tree/positions.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/tree/positions.h",
+    "sha256": "500a167768de30df20b36b9f24ebda716a277c7852e906fb3107646908efaf95"
+  },
+  "benchmarks/flashprove/upstream/blocks/tree/tree.h": {
+    "source": "experiments/flashprove_pcs/upstream/blocks/tree/tree.h",
+    "sha256": "49558ff3c36751235eb496acf49ae1cc968beee37d6befa5fcc59538f27cdc49"
+  },
+  "benchmarks/flashprove/README.md": {
+    "source": "experiments/flashprove_pcs/README.md",
+    "sha256": "25892ebace8c3203082d268ea4f72738ecc760fec5c8868cc91f3861d5832e0b"
+  },
+  "benchmarks/flashprove/run_models.py": {
+    "source": "experiments/flashprove_pcs/run_models.py",
+    "sha256": "e204608b556c1fb418ffca94d6046b11daaa24e03b50a6443021a0a66a961d71"
+  },
+  "benchmarks/flashprove/upstream/LICENSE": {
+    "source": "experiments/flashprove_pcs/upstream/LICENSE",
+    "sha256": "3ddf9be5c28fe27dad143a5dc76eea25222ad1dd68934a047064e56ed2fa40c5"
+  },
+  "benchmarks/flashprove/upstream/NOTICE": {
+    "source": "experiments/flashprove_pcs/upstream/NOTICE",
+    "sha256": "07dbcda3faf29c33bd7bce27bc5ec038876d780f97f63c17a2f05a8b08ee5018"
+  },
+  "benchmarks/flashprove/upstream/THIRD_PARTY.md": {
+    "source": "experiments/flashprove_pcs/upstream/THIRD_PARTY.md",
+    "sha256": "c9e7c4a386a1a14611b247056334bd61c8e82d59f7973d538a8694fb2e6682e3"
+  },
+  "benchmarks/flashprove/upstream/VERSION": {
+    "source": "experiments/flashprove_pcs/upstream/VERSION",
+    "sha256": "f2158278a038730ac2f0ed3e084c619fb6aed11aadaa36ec51c0de5e8f3eefe8"
+  },
+  "benchmarks/hyrax/src/main.rs": {
+    "source": "experiments/hyrax_pcs/src/main.rs",
+    "sha256": "978ac116a13cecff047b20e3f5d65a249a9f5faff0092e1fae8eaba8f9accb12"
+  },
+  "benchmarks/hyrax/native-poly-commit/Cargo.toml": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/Cargo.toml",
+    "sha256": "753acf99cdc586e8cff2e8822ecb05dc760d13b9b06ce39caaac8a2010bbb082"
+  },
+  "benchmarks/hyrax/native-poly-commit/bench-templates/Cargo.toml": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/bench-templates/Cargo.toml",
+    "sha256": "50ff7279243508e01dfecee205764d32f0d1cd2a9c3bfaa746b0c781ba50cfe6"
+  },
+  "benchmarks/hyrax/native-poly-commit/bench-templates/src/lib.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/bench-templates/src/lib.rs",
+    "sha256": "8fbe894a54163e405de3f0482b2a1a9964b6a71ff029e3e690001b79d0ccba52"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/constraints.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/constraints.rs",
+    "sha256": "062d60eb49d3366b3205c8682cdeb6550d6760d080b427f9c1c51b238f7617cd"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/data_structures.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/data_structures.rs",
+    "sha256": "9077b351165a58e05ffc70c08680ea0216ebfba840da31867f66edacb28d9910"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/error.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/error.rs",
+    "sha256": "c079dc486aae0e8a423e5c4f7a06d94f3aeb4f8ee1a640ba4ca9ca4af9b26f44"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/lib.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/lib.rs",
+    "sha256": "cd5217553c1bfd04e5afff5a1adc70643c4de32c5ee991684656557e5d41d728"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/optional_rng.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/optional_rng.rs",
+    "sha256": "d6f25e7e060da424e483e580e34cb95b1b4cbf358420688144005a3c3340bcab"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/utils.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/utils.rs",
+    "sha256": "d4caa0cb98519ea6be5bc5dae4e19529f70404a98d7706e7e7164a9aec3dec4e"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/hyrax/data_structures.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/hyrax/data_structures.rs",
+    "sha256": "d495f0f25d08aa753bee1c4c89af086f0b420aa5b47ff4562839454e2363e8d9"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/hyrax/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/hyrax/mod.rs",
+    "sha256": "a040fe9242eac878885b7953891ade12823e70e7712808dcade7845faf138f01"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/hyrax/tests.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/hyrax/tests.rs",
+    "sha256": "8db14b65c00cb4d6326c7e243a78e49b4fdab90cd66a918867a2aee243b5ceac"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/hyrax/utils.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/hyrax/utils.rs",
+    "sha256": "4e0cf1c6657a4ce4e15dcc33cc7fb0a86cbab88448e9cb4494cff3aa1cae38ff"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/ipa_pc/data_structures.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/ipa_pc/data_structures.rs",
+    "sha256": "73c4e42ec373b744617a26888db3faebd5000835605031c0c8d04506ddda65d5"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/ipa_pc/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/ipa_pc/mod.rs",
+    "sha256": "8e9d3a1660f070f4f30cc0c1c02574932f1a75ed12c774436b02c9ff3746731f"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/kzg10/data_structures.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/kzg10/data_structures.rs",
+    "sha256": "3ff8be179f79b6f011334df633d4ea081a1c918097a7fc84389d32e118c422ba"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/kzg10/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/kzg10/mod.rs",
+    "sha256": "6386ad967d9d83537caebc9bc13106a7e1f81fa43efd4dd012ea49f780523d70"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/linear_codes/brakedown.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/linear_codes/brakedown.rs",
+    "sha256": "13f015d8733107f4a44f2243586583febd5234ae2f3abe1ed099ac35f49f257b"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/linear_codes/data_structures.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/linear_codes/data_structures.rs",
+    "sha256": "ce9113217e28dbf1136b97fd7ee4ce5f9f3d7717abd8b57dc721d50f51d0f38e"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/linear_codes/ligero.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/linear_codes/ligero.rs",
+    "sha256": "a5576bb45201f105841f563dc1f62947fd3663bf73138d737140090dadabaf67"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/linear_codes/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/linear_codes/mod.rs",
+    "sha256": "247e1297ac75ad72d2668b3082fbe9f39b0775e670604b24ac5784bfdaa1c12f"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/linear_codes/utils.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/linear_codes/utils.rs",
+    "sha256": "7b0d8f63849165f06995dca73f651249442e2ed3a4a118876db8350d01b1c22a"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/linear_codes/multilinear_brakedown/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/linear_codes/multilinear_brakedown/mod.rs",
+    "sha256": "1fbf54b0126e20e1e8f1eb3cf44b8b2b5cbaf569f827fa09dd77f1f234611d56"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/linear_codes/multilinear_brakedown/tests.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/linear_codes/multilinear_brakedown/tests.rs",
+    "sha256": "d0d78a10c5f6a80160dddff1270be7028eeec91bb44598e363fa0323b838329e"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/linear_codes/multilinear_ligero/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/linear_codes/multilinear_ligero/mod.rs",
+    "sha256": "9befb7303f19d4fa5d6c74977d4893c36336d25a76e35297360f53fd456c37df"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/linear_codes/multilinear_ligero/tests.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/linear_codes/multilinear_ligero/tests.rs",
+    "sha256": "26437b88dbe99b2123faea47ac4c7e69ecb143f7eda8f6f634a50183a4a8eb75"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/linear_codes/univariate_ligero/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/linear_codes/univariate_ligero/mod.rs",
+    "sha256": "637253b87ff5afd72af2c8f803154ea65077a54330e2ddb5b0ad34edf5896de8"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/linear_codes/univariate_ligero/tests.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/linear_codes/univariate_ligero/tests.rs",
+    "sha256": "5aead5c82e5d7d07768f2166a8cb766ed1e9cac5c8cc606f6b4dd531e931fc22"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/marlin/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/marlin/mod.rs",
+    "sha256": "d53feba85b22aaac747d39e254df599f303c62430232e71723d309f030a08d0d"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/marlin/marlin_pc/data_structures.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/marlin/marlin_pc/data_structures.rs",
+    "sha256": "8b2099ada0eb992e39bb79901099493b6411a5fc27a58ef3d611554bcaf813fe"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/marlin/marlin_pc/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/marlin/marlin_pc/mod.rs",
+    "sha256": "ee8b13883fda79fd71b8acae1f793e12cf5fc2b5dd9a19c41ec505df98a6bad2"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/marlin/marlin_pst13_pc/combinations.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/marlin/marlin_pst13_pc/combinations.rs",
+    "sha256": "3db6e284303ea3cecf05f4c3dba01cc26e6905fda8be755ed55ccbd64de9033f"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/marlin/marlin_pst13_pc/data_structures.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/marlin/marlin_pst13_pc/data_structures.rs",
+    "sha256": "91910387d0a7e7bf43be1f1a42f40977bb45ddd284495ed0ff1e91e21822574f"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/marlin/marlin_pst13_pc/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/marlin/marlin_pst13_pc/mod.rs",
+    "sha256": "58c2b125b5ada9af319ccb5fa6e288080d129225b2980a012dfc62dc805d3a1e"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/multilinear_pc/data_structures.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/multilinear_pc/data_structures.rs",
+    "sha256": "e540f37d807418cbd9e679ff64ac2bc40e81702e5d55aa9562a026e980e4fee4"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/multilinear_pc/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/multilinear_pc/mod.rs",
+    "sha256": "cf64846bcad5ae999b9804413fb4f34964b030133472e40707b31b85bbf8f2f8"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/smart_pc/data_structures.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/smart_pc/data_structures.rs",
+    "sha256": "f383873bb25c7b517d0c9437e4ec9d51a3e8cbbac92c2272e0e40e6ea08f89fc"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/smart_pc/fiat_shamir.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/smart_pc/fiat_shamir.rs",
+    "sha256": "5180452f9dc92f6e672b0b448cceb87d052d9afc64c1d5c604f9490aabb34b26"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/smart_pc/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/smart_pc/mod.rs",
+    "sha256": "4d69f966233086eed2472fc917515f9160cd7446e48a24836a0ccdcff0cc4646"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/smart_pc/sub_protocols.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/smart_pc/sub_protocols.rs",
+    "sha256": "139aad22fd74f543692d0f1d948c4d0b2f74ca7301ea81e6d7fa1a25b92315ea"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/smart_pc/utils.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/smart_pc/utils.rs",
+    "sha256": "d8d49eb7447960aadeff235977693d5ad30179eab6c2d2b3b2900ffe73873479"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/smart_pc/xi.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/smart_pc/xi.rs",
+    "sha256": "49b3068e226e176a61c56715f83cb03cb5b6856bda8e5181c05ea1616475e16f"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/sonic_pc/data_structures.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/sonic_pc/data_structures.rs",
+    "sha256": "a5dddc6c822c3ad472e9a90fac414ba38f616caf97f766665d2f9fa4172efcf1"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/sonic_pc/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/sonic_pc/mod.rs",
+    "sha256": "95224bb21773837aa5fd7a614186f98d7ef898fa53bf8cc68818d4b6963054b2"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/streaming_kzg/data_structures.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/streaming_kzg/data_structures.rs",
+    "sha256": "264a4ccf7f4205a535c8c245a713e595a86b0fd4b669d0f29f3f6f533418ec41"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/streaming_kzg/mod.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/streaming_kzg/mod.rs",
+    "sha256": "50d0a907960244afe63e8792e569116d5ccbb3468ed96dac8b08cd85720ab584"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/streaming_kzg/space.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/streaming_kzg/space.rs",
+    "sha256": "6d8e412842d2832905df1c84ab651238fa55419447bdd302d36d50d23cf23624"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/streaming_kzg/tests.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/streaming_kzg/tests.rs",
+    "sha256": "919e5dea5b30061223366645a196372e956f94e7bcad5a46ac17ebe4f666cb78"
+  },
+  "benchmarks/hyrax/native-poly-commit/src/streaming_kzg/time.rs": {
+    "source": "experiments/hyrax_pcs/native-poly-commit/src/streaming_kzg/time.rs",
+    "sha256": "fda1184bd7692c5bdb0093dea8cb80a326d2d22059481174c0c51711c15d73c2"
+  },
+  "benchmarks/hyrax/Cargo.toml": {
+    "source": "experiments/hyrax_pcs/Cargo.toml",
+    "sha256": "54db104ede5cea705f19973bd6d53b7544c8e43ec919e9bc8167a041dbe54481"
+  },
+  "benchmarks/hyrax/Cargo.lock": {
+    "source": "experiments/hyrax_pcs/Cargo.lock",
+    "sha256": "1c1a1465e0b68e3359b1f22461002851b9f648e86877cf5740d4508e7c16f558"
+  },
+  "benchmarks/hyrax/README.md": {
+    "source": "experiments/hyrax_pcs/README.md",
+    "sha256": "3104fecb4f555ebd8e29f244f8077a8ce1893a46677e415337525c49eee874da"
+  },
+  "benchmarks/hyrax/run_models.py": {
+    "source": "experiments/hyrax_pcs/run_models.py",
+    "sha256": "6ae881abd8d70ad72db3038faad3cbbed0093ca8c3405ab8b7a090c0d892c293"
+  },
+  "benchmarks/hyrax/cases.json": {
+    "source": "experiments/hyrax_pcs/cases.json",
+    "sha256": "10844bcf8d6c98d06e568c44d319bbe64ab305d987fb47e00153b8ba1a2dbff4"
+  },
+  "benchmarks/hyrax/batch-smoke-description.json": {
+    "source": "experiments/hyrax_pcs/batch-smoke-description.json",
+    "sha256": "df652e8320e4204b290bab7b9f241517f7b60a75024d38d4bb0b1b2fd10a605f"
+  },
+  "benchmarks/packed_eo/prepare.py": {
+    "source": "experiments/packed_eo_bitwidth_v6/prepare.py",
+    "sha256": "9a2b05b593011ff9df51511adbe1cfb10723df60e4a7bb2249c710a787e49089"
+  },
+  "benchmarks/packed_eo/packed_eo_aware.inc.rs": {
+    "source": "experiments/packed_eo_bitwidth_v6/packed_eo_aware.inc.rs",
+    "sha256": "a2884708f8c007aedb6a00ce666311b26f61d47f1482d28916af2825b3d32b04"
+  },
+  "benchmarks/packed_eo/packed_eo_cross.inc.rs": {
+    "source": "experiments/packed_eo_bitwidth_v6/packed_eo_cross.inc.rs",
+    "sha256": "1a3a1e4686ad171bb8b8834d3efd34ef8bb58d9be9a5b464edc48094da34f6ea"
+  },
+  "benchmarks/packed_eo/packed_eo_bytewise.inc.rs": {
+    "source": "experiments/packed_eo_bitwidth_v6/packed_eo_bytewise.inc.rs",
+    "sha256": "dfa3fd3e561fe1944a33002aa9ae302de727f1f4a92343e7da77b06c88027e10"
+  },
+  "benchmarks/packed_eo/packed_eo_small.inc.rs": {
+    "source": "experiments/packed_eo_bitwidth_v6/packed_eo_small.inc.rs",
+    "sha256": "6c9cbe15273e6206678606a9646a44a856055a9321147d8f3fbe81f41d293b9c"
+  },
+  "benchmarks/packed_eo/packed_eo_eq.inc.rs": {
+    "source": "experiments/packed_eo_bitwidth_v6/packed_eo_eq.inc.rs",
+    "sha256": "b2b6c8d41c8501d74caad8fbf3cd2969f26f6cc08e5fffaedbf158917541caaf"
+  },
+  "benchmarks/packed_eo/packed_eo_bitwidth_v6.rs": {
+    "source": "experiments/packed_eo_bitwidth_v6/packed_eo_bitwidth_v6.rs",
+    "sha256": "460248a6931f3a9bb808770ab89d0bb5dcba729e5a3d7f720567c687ad607a42"
+  },
+  "benchmarks/modelconvert.py": {
+    "source": "experiments/flashprove_pcs/cpu-source.tar.gz:modelconvert.py",
+    "sha256": "f2d07b500be65483bb5158159c95565f5c49801f325a648a76d855c3233f3567"
+  }
+}

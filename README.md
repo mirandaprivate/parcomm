@@ -18,6 +18,7 @@ are needed to build the included source snapshots.
 | `scripts/summarize.py` | Check saved results and export reference CSV tables |
 | `results/reference/` | Eight original result logs, QAFold measurements and provenance |
 | `validation/` | Build and correctness validation evidence; these are not new model timings |
+| `benchmarks/` | Sources and portable runners for the FlashProve, Hyrax and implicit-eq EO result logs; see [benchmark reproduction](benchmarks/README.md) |
 
 ## Scope and timing
 

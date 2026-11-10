@@ -1,0 +1,143 @@
+{
+  "packed_eo": {
+    "status": "success",
+    "evidence": "runs/benchmark-source-eo",
+    "log_sha256": {
+      "runs/benchmark-source-eo/128-max.log": "156da2a0c018174a633659b4e2ea0d76835eaaa6e1e87f140a4618924d39d60e",
+      "runs/benchmark-source-eo/128-min.log": "cfa99bf97a6ae4ae4193ab0e75ae63e85d3e0a1d17271d889081dafad0a9ca01",
+      "runs/benchmark-source-eo/128-mixed.log": "6c3d10c456071c2bbdf7f120efc4bb0621edd71012fed6536c4e7877da3485b4",
+      "runs/benchmark-source-eo/128-point-alternating.log": "2d436c149de69c70eaa577dc14d8cf406815318514c5925d59ee23327c944bb3",
+      "runs/benchmark-source-eo/128-point-one.log": "307c1fb3c06686feb4db750a0ae1611c87f477eeb43518464955809528901099",
+      "runs/benchmark-source-eo/128-point-zero.log": "2a293532e938c477f7aa6a6cd965cc89e57bcb4d8044efa0f65e8e83129592c1",
+      "runs/benchmark-source-eo/16-max.log": "b6ab4b944c9adbd0e699955e19d17dd9f0713a584d72e66892bcaeb2e60c3f70",
+      "runs/benchmark-source-eo/16-min.log": "791c7c1c71348a3b3d1782626391f2434c72220fd2b7b1a2e1b5dab6140e773b",
+      "runs/benchmark-source-eo/16-mixed.log": "fc09fc0680c22ab49fbc671f8531e8e4a16cf240a7f9c85daee2c19f64a58171",
+      "runs/benchmark-source-eo/16-point-alternating.log": "d2ab3515a7ce098aa6298f5930d2a0731103a8fada06e47568bfe56dd059606e",
+      "runs/benchmark-source-eo/16-point-one.log": "183f5e175624461ebd94fc48323208e547853cdcca2a02caf70851ce4c55deeb",
+      "runs/benchmark-source-eo/16-point-zero.log": "c30e1808639f74f3b2c31faf3bdd7618b356dc86344ee4ac2f076ed9011c9326",
+      "runs/benchmark-source-eo/32-max.log": "98b8471cef05ebee68a6008738a6f814cc57a1f41b118a8b0e7fb9ac5ed1c46f",
+      "runs/benchmark-source-eo/32-min.log": "8a9baff2d1ba44b9c07c94933f59e50934176d4f115248a693ccf91fd344d24a",
+      "runs/benchmark-source-eo/32-mixed.log": "706ceb1b21fbb24f58957f41350736924bbc5ac367ada0b0be86564bb602b236",
+      "runs/benchmark-source-eo/32-point-alternating.log": "8b2041474cf434f16665947e58d802baff1a4968da955f9645855695e3e47913",
+      "runs/benchmark-source-eo/32-point-one.log": "d15fd5116c4a2e30574a11c875b4ef24c898375f188cc3ed609659c28680c5f9",
+      "runs/benchmark-source-eo/32-point-zero.log": "84f33fc42a486a2d5afcf4aa0fe5a6c1b5ec910b57808601c1aae95e9e72303c",
+      "runs/benchmark-source-eo/4-max.log": "8b3e9b8f987024a835776213d94b53a0d55258eb8453cfbb2e2a070c22d4cf5b",
+      "runs/benchmark-source-eo/4-min.log": "60daf301f0d08b292dccda1bba603f314af0c1de9d7d58d5a2cdbadb9e2e8dd9",
+      "runs/benchmark-source-eo/4-mixed.log": "04e6be46e8ae00862e5103cd937905f2a8b2c7eab6dc93826fd104c93020c94f",
+      "runs/benchmark-source-eo/4-point-alternating.log": "a158fc0376287132d7d8dfc01b77c0f9c6e87b0b1d7dd3f36b4a2c2bbf8cb500",
+      "runs/benchmark-source-eo/4-point-one.log": "61543291b22fd02fbdfdabb01b4f1d6436a7659076209fe2fa3862dff36ffbb7",
+      "runs/benchmark-source-eo/4-point-zero.log": "662531218c62b294f4604885c7ac2935dcb5b0314427f041358a067c23d0eea0",
+      "runs/benchmark-source-eo/64-max.log": "9e786dd48314a1a248fca79e57b68f5ff1fe1e608897b5520b45efb1df0a7f76",
+      "runs/benchmark-source-eo/64-min.log": "d5abaf0d9319e7ac654b0ef1f72794d11c357c35047b49141153edfd2968e27a",
+      "runs/benchmark-source-eo/64-mixed.log": "b89d3423f7618c3c362096ed8bb805ee52bd250de66fba06a4f837028a53eb91",
+      "runs/benchmark-source-eo/64-point-alternating.log": "58dbd542fa2bf73702baa89e78991e663714cf47f164e34d810e3fc0319de4a8",
+      "runs/benchmark-source-eo/64-point-one.log": "0bfd124ca873d7783a3499569201b80a4f25c766a3982f860964a1c189c4e7a2",
+      "runs/benchmark-source-eo/64-point-zero.log": "c72aab98eda789bb99777888ff7ad4ac82f294b27eb46101369f31027a7afe25",
+      "runs/benchmark-source-eo/8-max.log": "2b49637e1f3ad69f7d0e82fb14db332636339f3f858fae37fd3e7fa84d495fde",
+      "runs/benchmark-source-eo/8-min.log": "05150ae960ebab572551a55ebda7a5ba26ab85d4cf25818b0311ac3530ab1810",
+      "runs/benchmark-source-eo/8-mixed.log": "29191c94103a4865caf3311d6aaa449f5991c132da39df91a9089a23aadc0889",
+      "runs/benchmark-source-eo/8-point-alternating.log": "6cd6ea3c1ef4c5f4b53ee84a12aaae5449bbf051671ea28a16e71aece848d936",
+      "runs/benchmark-source-eo/8-point-one.log": "e17d454e84150c7fc58b481f6d56be85511e6f65a81fc3ada1c0e20e2797985e",
+      "runs/benchmark-source-eo/8-point-zero.log": "cbab0928445a39898367bf55cdaef309be81e8e1685a0a8ec861def430e7a2e4",
+      "runs/benchmark-source-eo/build.log": "4d2d950c69af44eacc90deba4140b033777a9d022b27b36d299bbbeaf80c4ea1",
+      "runs/benchmark-source-eo/full-max.log": "35d7335d176b55d8b543d8995f89d702dd05871a95ee86bb4e96885c60ea03aa",
+      "runs/benchmark-source-eo/full-min.log": "c327d093e7957cff52138427ee1ec64f1b972233de601029570d69ebbb80b6a3",
+      "runs/benchmark-source-eo/full-mixed.log": "025817dde1e3431d766a6a6493cec9f4ea8ad48643cef13ccc0f0cb82dea436f",
+      "runs/benchmark-source-eo/full-point-alternating.log": "f6818c4b8d5b55fc6ad92e7e4a1afb391aae2dabb8b8e56aaa253b3468fe95ca",
+      "runs/benchmark-source-eo/full-point-one.log": "3e418832e8eb87af1ae3efdaf517cc1d7186825e074f67a0b8554c94f29098e5",
+      "runs/benchmark-source-eo/full-point-zero.log": "a4aa63e4330216103adc9f0c864cff6892afa02b59951047d8c0f2254324370d",
+      "runs/benchmark-source-eo/prepare.log": "d080dc406acdb09dddf31c4503a13d8641b27c1420a2b5fa9cbe34321d9ae86f"
+    },
+    "correctness_cases": 42
+  },
+  "hyrax": {
+    "status": "success",
+    "evidence": "runs/benchmark-source-hyrax-final",
+    "log_sha256": {
+      "runs/benchmark-source-hyrax-final/1-prove.log": "717b5138c8dfbf21ddb0430675268c73f9362e1baef2ca9e1022e3975df841ed",
+      "runs/benchmark-source-hyrax-final/1-verify.log": "761030439cccdbe14fb77e3771d8350e16b1b249c13133f710c15608825c046c",
+      "runs/benchmark-source-hyrax-final/2-prove.log": "56fec34550c54ae6fe2b6b56ee9a5039767975aab87a1433928f048d3b9df107",
+      "runs/benchmark-source-hyrax-final/2-verify.log": "528f1ff0fc2dd7c9cd00106922311294ad0dd6bab72ded1c44318f053f3431fd",
+      "runs/benchmark-source-hyrax-final/build.log": "1d4a459075bb084f679636df54054e09c302d0ad0d545b52395925946c48d277"
+    },
+    "independently_verified_widths": [
+      8,
+      16
+    ]
+  },
+  "flashprove": {
+    "status": "success",
+    "evidence": "runs/benchmark-source-flashprove-final",
+    "log_sha256": {
+      "runs/benchmark-source-flashprove-final/build-equivalence_test.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "runs/benchmark-source-flashprove-final/build-model_bench.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "runs/benchmark-source-flashprove-final/build-native_test.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "runs/benchmark-source-flashprove-final/equivalence.log": "8679b338e284027f76b49661f057b2378cc6d8b14f72f580680624b009e39e6c",
+      "runs/benchmark-source-flashprove-final/independent-verify.log": "2db338ea3ae1671681ce7f7b990602715caacedb53930337f45a9d3d672d1157",
+      "runs/benchmark-source-flashprove-final/model.log": "0dc38883aa38aebdcd89b949eca30a823f628b851d0704589d014e72e9456d2a",
+      "runs/benchmark-source-flashprove-final/native.log": "0ca6b2020de26a2b0dfa258bfd339907d6e5d508195dbb48138838a6aed3cbbc"
+    },
+    "differential_configurations": 81
+  },
+  "arithmetic_source_hash_matches": 115,
+  "model_benchmarks_rerun": false,
+  "date": "2026-11-11",
+  "cleanup": [
+    {
+      "path": "experiments/packed_eo_bitwidth/source",
+      "bytes": 2929680,
+      "archived_files": 129,
+      "links": [
+        "experiments/packed_eo_bitwidth/source/dependencies-jolt",
+        "experiments/packed_eo_bitwidth/source/third_party",
+        "experiments/packed_eo_bitwidth/source/vendor"
+      ],
+      "archive": "experiments/packed_eo_bitwidth/source.tar.gz",
+      "archive_sha256": "1adf7e57a4768e821aed31037d4b8b2afa7c507321ae4ba37569415efa74e378"
+    },
+    {
+      "path": "experiments/packed_eo_bitwidth_v2/source",
+      "bytes": 2932410,
+      "archived_files": 129,
+      "links": [
+        "experiments/packed_eo_bitwidth_v2/source/dependencies-jolt",
+        "experiments/packed_eo_bitwidth_v2/source/third_party",
+        "experiments/packed_eo_bitwidth_v2/source/vendor"
+      ],
+      "archive": "experiments/packed_eo_bitwidth_v2/source.tar.gz",
+      "archive_sha256": "a2b45add44ef2441cd3d6b66bd79a99d158eec8d972140c7ec53581a98831c67"
+    },
+    {
+      "path": "experiments/packed_eo_bitwidth_v3/source",
+      "bytes": 2941192,
+      "archived_files": 130,
+      "links": [
+        "experiments/packed_eo_bitwidth_v3/source/dependencies-jolt",
+        "experiments/packed_eo_bitwidth_v3/source/third_party",
+        "experiments/packed_eo_bitwidth_v3/source/vendor"
+      ],
+      "archive": "experiments/packed_eo_bitwidth_v3/source.tar.gz",
+      "archive_sha256": "831cd0e2474ec83a015e6bcfa3569868d952d0fc71ab7015cd74a4ccee389736"
+    },
+    {
+      "path": "experiments/packed_eo_bitwidth_v4/source",
+      "bytes": 2949757,
+      "archived_files": 131,
+      "links": [
+        "experiments/packed_eo_bitwidth_v4/source/dependencies-jolt",
+        "experiments/packed_eo_bitwidth_v4/source/third_party",
+        "experiments/packed_eo_bitwidth_v4/source/vendor"
+      ],
+      "archive": "experiments/packed_eo_bitwidth_v4/source.tar.gz",
+      "archive_sha256": "04d8ad75f5eacbc23eec5ab817505de16fd82ff3d0ecd48b18c851d854622cc7"
+    },
+    {
+      "path": "experiments/packed_eo_bitwidth_v5/source",
+      "bytes": 2957392,
+      "archived_files": 132,
+      "links": [],
+      "archive": "experiments/packed_eo_bitwidth_v5/source.tar.gz",
+      "archive_sha256": "920af53e2ca83fd76a9d8bf45645cdc76a14285f7142b47f155e18021e231945"
+    }
+  ]
+}

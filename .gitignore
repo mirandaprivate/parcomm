@@ -89,6 +89,11 @@ __pycache__/
 /build/
 /runs/
 
+# Reproducible benchmark source is tracked; generated workspaces are not.
+/benchmarks/packed_eo/source/
+/benchmarks/packed_eo/source-sha256.json
+/benchmarks/**/build/
+
 # Reference measurements are part of the repository release.
 !/results/
 /results/*
