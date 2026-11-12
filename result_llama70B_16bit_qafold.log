@@ -1,176 +1,134 @@
-QAFold ParComm full public-metadata end-to-end experiment
-cache_mode = recompute (low memory)
-runs = 1; aggregation = none
-CPU only; prover_threads = 48; independent_verifier_threads = 1
-Scope: public shape/point/value; full verification; no zero-knowledge wrapper or model inference.
-16-bit input, where applicable: BF16 raw bit patterns.
-Timing: prover = commit + opening/serialization; setup, input and claims are separate.
-All codeword/Merkle reconstruction remains in prover time.
-source_measurement = C:\Users\miranda\git\parcomm\qafold\encoding_optimization_20261108\70b-evidence\logs\measurement.json
-source_record = 70b16
+QAFold ParComm full public-metadata end-to-end experiment: Llama-70B 16-bit
+Implementation: DRAM optimization; column-contiguous logical input; low-memory recompute.
+Layout: whole-matrix interleave; version=3; interleave_log=7 (128 columns).
+Persistent roots=1; native openings=1; no cross-root binding proof.
+packed_log=6; terminal_log=10; query_rf_bits=100.
+CPU only; prover_threads=64; independent_verifier_threads=1; runs=1.
+Input: BF16 raw bit patterns interpreted as signed i16.
+Scope: public shape/point/value; complete ParComm verification; no ZK wrapper or model inference.
+Prover=commit+opening/serialization; setup, input conversion/loading and claim generation are separate.
+Independent verifier includes proof read/decode, excludes setup. RAM is process Peak RSS.
+Unrelated concurrent workloads were preserved; single-run comparisons are not controlled speedup measurements.
+source_measurement = qafold/dram_64t_70b16_20261113/evidence/logs/measurements.json
+source_record = 70b16-recompute
+previous_result = qafold/root_log_update_20261113/previous_results/result_llama70B_16bit_qafold.log
+source_archive_sha256 = 855b1a96d683415b9f30149c503600a3314dad470a7b782c4a3b9f4df5ee512c
+source_manifest_sha256 = b0837f64bb5b4883f41c8513d893afccb145da79072e6f48118b5b7463312621
+results_archive_sha256 = 5d8f5569dffeaf7a7183e799559fb20d07bf93c9440465c057765b76464b128a
 
-prover_seconds = 351.719538323
-commit_seconds = 129.668610406
-opening_with_serialization_seconds = 222.050927917
-independent_verifier_seconds = 0.828312468
-prover_setup_seconds = 8.044517395
-verifier_setup_seconds = 10.376624583
-input_seconds = 807.956596936
-claim_generation_seconds = 7.863939134
-pipeline_wall_seconds = 1176.65206857305
-peak_rss_gib = 196.447154998779
-proof_bytes = 85993261
+prover_seconds = 521.906456453
+commit_seconds = 145.137559091
+opening_with_serialization_seconds = 376.768897362
+independent_verifier_seconds = 0.163329653
+prover_setup_seconds = 252.117043196
+verifier_setup_seconds = 323.242116743
+peak_rss_gib = 288.61352920532227
+proof_bytes = 11572159
+proof_kib = 11300.9365234375
+input_seconds = 851.81808362
+claim_generation_seconds = 7.896681318
 
 === Full original measurement record (JSON) ===
 {
+  "label": "70b16-recompute",
   "runs": 1,
+  "terminal_log": 10,
+  "interleave_log": 7,
   "result": {
     "active_entries": 70599843840,
     "bucket_count": 1209,
     "cache_mode": "recompute",
-    "claim_generation_seconds": 7.863939134,
-    "commit_seconds": 129.668610406,
+    "claim_generation_seconds": 7.896681318,
+    "commit_seconds": 145.137559091,
     "field": "KoalaBear/KoalaBear^4",
-    "input_seconds": 807.956596936,
+    "input_seconds": 851.81808362,
     "input_stream_blake2s": "6803d4e3499adf50c04f429d02b31a8810c4e8b9a2e64034eeece741beb0f0bc",
+    "interleave_columns": 128,
     "logical_entries": 137438953472,
     "matrix_count": 723,
-    "opening_with_serialization_seconds": 222.050927917,
-    "proof_blake2s": "[54, de, 3a, e6, a4, 95, ca, 94, 65, e4, d6, b8, 70, ab, d2, ae, 1f, bb, 3f, 1d, 5b, e5, 4f, d9, f2, 6e, 6e, 98, ca, c2, 60, 7c]",
-    "proof_bytes": 85993261,
+    "opening_with_serialization_seconds": 376.768897362,
+    "pcs_layout": "whole-matrix-interleaved",
+    "proof_blake2s": "[76, 4d, ca, 18, ce, 7e, d7, f, d1, 40, 5f, 9c, 3b, d1, 1e, 7e, 97, cf, 49, 55, 28, 14, c2, 84, 84, db, c9, 8b, 4a, b8, 81, e1]",
+    "proof_bytes": 11572159,
     "prover_profile": {
-      "conversion_seconds": 0.005482441,
+      "conversion_seconds": 0.005497495,
       "eo": {
-        "binary_eo_seconds": 15.772114179999999,
-        "consistency_check_seconds": 1.709387275,
-        "folded_tbv_seconds": 13.892249296,
-        "packed_witness_seconds": 9.978213065,
-        "tbv_cross_terms_seconds": 4.087453957
+        "binary_eo_seconds": 18.994152969,
+        "consistency_check_seconds": 1.822585696,
+        "folded_tbv_seconds": 15.786887413,
+        "packed_witness_seconds": 9.035668362,
+        "tbv_cross_terms_seconds": 5.164425244
       },
       "native_openings": 1,
-      "packed_eo_seconds": 48.082967911,
-      "pcs_decide_seconds": 0.71287991,
-      "pcs_native_opening_seconds": 2.116563764,
-      "pcs_open_seconds": 167.708910745,
-      "pcs_projection_seconds": 13.202637151,
-      "pcs_reconstruction_seconds": 0.0,
-      "pcs_sumcheck_seconds": 1.388758904,
-      "terminal_batch_binding_seconds": 127.46701375,
-      "terminal_batch_folding_seconds": 22.659933557
+      "packed_eo_seconds": 54.888466069,
+      "pcs_decide_seconds": 10.014734984,
+      "pcs_native_opening_seconds": 273.145748293,
+      "pcs_open_seconds": 315.253327057,
+      "pcs_projection_seconds": 21.732839981,
+      "pcs_reconstruction_seconds": 8.795257175,
+      "pcs_sumcheck_seconds": 1.5285988339999999,
+      "terminal_batch_binding_seconds": 0.0,
+      "terminal_batch_folding_seconds": 0.0
     },
-    "prover_threads": 48,
-    "public_commitment_json_bytes": 33893,
-    "root_bytes": 4096,
+    "prover_threads": 64,
+    "public_commitment_json_bytes": 18945,
+    "root_bytes": 32,
     "scope": "public-metadata ParComm complete flow",
-    "setup_seconds": 8.044517395,
-    "total_prover_seconds": 351.719538323,
+    "setup_seconds": 252.117043196,
+    "total_prover_seconds": 521.906456453,
     "verified": true,
     "verifier_profile": {
-      "authenticated_roots": 128,
-      "conversion_eo_seconds": 0.010950742,
+      "authenticated_roots": 1,
+      "conversion_eo_seconds": 0.012351525,
       "native_openings": 1,
-      "pcs_seconds": 0.642226285
+      "pcs_seconds": 0.076850649
     },
     "verifier_threads": 1,
-    "verify_decode_seconds": 0.798805395,
-    "workflow_wall_seconds": 1176.4299482
+    "verify_decode_seconds": 0.103670151,
+    "workflow_wall_seconds": 1633.86862209
   },
   "verification": {
     "profile": {
-      "authenticated_roots": 128,
-      "conversion_eo_seconds": 0.007715591,
+      "authenticated_roots": 1,
+      "conversion_eo_seconds": 0.012923032,
       "native_openings": 1,
-      "pcs_seconds": 0.622282667
+      "pcs_seconds": 0.092324093
     },
     "scope": "public-metadata ParComm complete flow",
-    "setup_seconds": 10.376624583,
+    "setup_seconds": 323.242116743,
     "threads": 1,
-    "verification_with_read_decode_seconds": 0.828312468,
+    "verification_with_read_decode_seconds": 0.163329653,
     "verified": true
   },
-  "peak_rss_kib": 205989772,
-  "pipeline_wall_seconds": 1176.6520685730502,
-  "artifacts_sha256": {
-    "commitment.json": "5313e58d9eca3c7f47c6a53c15562d1181b8baaebe6b9a085fc7e96aff07bcbd",
-    "claims.json": "48dfcfc6e58ed3d4da599665e7d44bd15f1bc885fcf5afeed10c157e9a6c4913",
-    "proof.bin": "866bf4709a4f47f04fa5984770e3cb37e3bb55aa5de7112422a0b4223faa846d"
+  "artifact_sha256": {
+    "commitment.json": "c1d4f95253eed492c73d8964d2d592f1e9b48a8dcc41ae68779b519b69f834f2",
+    "claims.json": "d22b6cf285b702c3b209116ddcf466cf19724daa5fb21829355b40318a43cac4",
+    "proof.bin": "abca54a1b725cdc9f29027d4b0cee53a66bbff73fa083757c99ce33228a8283c",
+    "result.json": "e4453c71710efaaddbb9a8b68d5ab59c9f42eea9d6e1700e4149cbcf1ac1b580",
+    "verification.json": "e860427bec5e5efdb9d576d0755d6c7299d200139e67cbd72797427593a04e6e"
   },
-  "input": {
-    "bytes": 141199687680,
-    "sha256": "0aa5428f88d876241ce08db0a16c5a1d7a395cf6fde2a563052dc02a9ad6c7c3",
-    "pipeline_input_seconds": 816.0064400970004,
-    "includes_prover_setup_and_backpressure": true
+  "input_sha256": "0aa5428f88d876241ce08db0a16c5a1d7a395cf6fde2a563052dc02a9ad6c7c3",
+  "input_bytes": 141199687680,
+  "peak_rss_kib": 302633220,
+  "pipeline_wall_seconds": 1635.7812596431468,
+  "host_before": {
+    "utc": "2026-11-12T19:18:24Z",
+    "load": [
+      10.0791015625,
+      12.84765625,
+      16.45654296875
+    ],
+    "available_gib": 354.81011962890625,
+    "processes": "    PID %CPU   RSS COMMAND\n2512822  798 3054164 cp_prove\n 660950 14.3 122276 uhs-cfg\n 660949  4.6 106728 uhs-data\n 660994  1.9 594580 uhs-epp\n  12152  0.8 280076 firefox\n  12316  0.6 45144 Privileged Cont\n 660948  0.3 13924 uhs-drv\n    603  0.1     0 kcompactd1\n   2510  0.1  2304 systemd-oomd\n   2562  0.1  2020 irqbalance\n   4368  0.1 76952 gnome-shell\n 608367  0.1  5968 user-session-he\n 608526  0.1 24288 python3\n4155044  0.1     0 kworker/0:1-events\n      1  0.0  8828 systemd"
   },
-  "memory_plan": {
-    "active_entries": 70599843840,
-    "logical_entries": 137438953472,
-    "matrix_count": 723,
-    "bucket_count": 1209,
-    "chunk_log": 30,
-    "packed_log": 6,
-    "pcs_roots": 128,
-    "prover_threads": 48,
-    "verifier_threads": 1,
-    "cache_mode": "recompute",
-    "runs": 1,
-    "input_mode": "pipe with SHA256; no compact input file",
-    "compact_bytes": 141199687680,
-    "eo_witness_plus_query_bytes": 68719476736,
-    "temporary_allowance_bytes": 25769803776,
-    "reserve_bytes": 34359738368,
-    "available_before_bytes": 391215071232,
-    "estimated_core_bytes": 209919164416,
-    "required_available_bytes": 270048706560
+  "host_after": {
+    "utc": "2026-11-12T19:45:40Z",
+    "load": [
+      35.63916015625,
+      43.216796875,
+      29.5810546875
+    ],
+    "available_gib": 354.8286895751953,
+    "processes": "    PID %CPU   RSS COMMAND\n2512822  798 3058756 cp_prove\n 608526 24.7 36788 python3\n 660950 14.3 118328 uhs-cfg\n 660949  4.6 109576 uhs-data\n 660994  1.9 594920 uhs-epp\n  12152  0.8 241548 firefox\n  12316  0.6 41824 Privileged Cont\n 660948  0.3 16520 uhs-drv\n    603  0.1     0 kcompactd1\n   2510  0.1  2300 systemd-oomd\n   2562  0.1  2016 irqbalance\n   4368  0.1 74716 gnome-shell\n4155044  0.1     0 kworker/0:1-kacpi_notify\n      1  0.0  8728 systemd\n      2  0.0     0 kthreadd"
   }
 }
-
-=== Exact prover command (JSON argv) ===
-[
-  "/usr/bin/time",
-  "-v",
-  "-o",
-  "/dev/shm/mscong1-parcomm-encoding-20261108/run70b/logs/prover-resources.log",
-  "/dev/shm/mscong1-parcomm-encoding-20261108/run70b/target-candidate/release/parcomm-qafold-koalabear-8b",
-  "prove",
-  "--description",
-  "/dev/shm/mscong1-parcomm-encoding-20261108/run70b/logs/description.json",
-  "--input",
-  "-",
-  "--output",
-  "/dev/shm/mscong1-parcomm-encoding-20261108/run70b/bundle",
-  "--threads",
-  "48",
-  "--chunk-log",
-  "30",
-  "--packed-log",
-  "6",
-  "--cache-mode",
-  "recompute"
-]
-
-
-=== Original process resource log ===
-	Command being timed: "/dev/shm/mscong1-parcomm-encoding-20261108/run70b/target-candidate/release/parcomm-qafold-koalabear-8b prove --description /dev/shm/mscong1-parcomm-encoding-20261108/run70b/logs/description.json --input - --output /dev/shm/mscong1-parcomm-encoding-20261108/run70b/bundle --threads 48 --chunk-log 30 --packed-log 6 --cache-mode recompute"
-	User time (seconds): 13255.17
-	System time (seconds): 497.72
-	Percent of CPU this job got: 1168%
-	Elapsed (wall clock) time (h:mm:ss or m:ss): 19:36.64
-	Average shared text size (kbytes): 0
-	Average unshared data size (kbytes): 0
-	Average stack size (kbytes): 0
-	Average total size (kbytes): 0
-	Maximum resident set size (kbytes): 205989772
-	Average resident set size (kbytes): 0
-	Major (requiring I/O) page faults: 0
-	Minor (reclaiming a frame) page faults: 147878036
-	Voluntary context switches: 2408476
-	Involuntary context switches: 18957
-	Swaps: 0
-	File system inputs: 0
-	File system outputs: 0
-	Socket messages sent: 0
-	Socket messages received: 0
-	Signals delivered: 0
-	Page size (bytes): 4096
-	Exit status: 0
-

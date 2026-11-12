@@ -1,151 +1,134 @@
-QAFold ParComm full public-metadata end-to-end experiment
-cache_mode = recompute (low memory)
-runs = 1; aggregation = none
-CPU only; prover_threads = 48; independent_verifier_threads = 1
-Scope: public shape/point/value; full verification; no zero-knowledge wrapper or model inference.
-16-bit input, where applicable: BF16 raw bit patterns.
-Timing: prover = commit + opening/serialization; setup, input and claims are separate.
-All codeword/Merkle reconstruction remains in prover time.
-source_measurement = C:\Users\miranda\git\parcomm\qafold\model_encoding_20261108\evidence\logs\measurements.json
+QAFold ParComm full public-metadata end-to-end experiment: Llama-8B 16-bit
+Implementation: DRAM optimization; column-contiguous logical input; low-memory recompute.
+Layout: whole-matrix interleave; version=3; interleave_log=7 (128 columns).
+Persistent roots=1; native openings=1; no cross-root binding proof.
+packed_log=4; terminal_log=10; query_rf_bits=100.
+CPU only; prover_threads=64; independent_verifier_threads=1; runs=1.
+Input: BF16 raw bit patterns interpreted as signed i16.
+Scope: public shape/point/value; complete ParComm verification; no ZK wrapper or model inference.
+Prover=commit+opening/serialization; setup, input conversion/loading and claim generation are separate.
+Independent verifier includes proof read/decode, excludes setup. RAM is process Peak RSS.
+Unrelated concurrent workloads were preserved; single-run comparisons are not controlled speedup measurements.
+source_measurement = qafold/dram_64t_8b16_20261113/evidence/logs/measurements.json
 source_record = 8b16-recompute
+previous_result = qafold/root_log_update_20261113/previous_results/result_llama8B_16bit_qafold.log
+source_archive_sha256 = see source manifest
+source_manifest_sha256 = dc0c8b6964c92588d037969eb123adce54ad0f92015c465a59a350e7fc57ced6
+results_archive_sha256 = cce4932f426fac99f029baf03b9d84ffb36d813c518f4c4e828f27c2ea0be72f
 
-prover_seconds = 72.415789405
-commit_seconds = 20.487045756
-opening_with_serialization_seconds = 51.928743649
-independent_verifier_seconds = 0.145789988
-prover_setup_seconds = 8.017747152
-verifier_setup_seconds = 10.448460385
-input_seconds = 81.277562105
-claim_generation_seconds = 0.769742233
-pipeline_wall_seconds = 162.699111399008
-peak_rss_gib = 37.9435691833496
-proof_bytes = 10404021
+prover_seconds = 68.89622234000001
+commit_seconds = 22.096056698
+opening_with_serialization_seconds = 46.800165642
+independent_verifier_seconds = 0.121958337
+prover_setup_seconds = 15.548539896
+verifier_setup_seconds = 19.446003144
+peak_rss_gib = 32.818138122558594
+proof_bytes = 8788658
+proof_kib = 8582.673828125
+input_seconds = 81.575248164
+claim_generation_seconds = 0.900678006
 
 === Full original measurement record (JSON) ===
 {
   "label": "8b16-recompute",
   "runs": 1,
+  "terminal_log": 10,
+  "interleave_log": 7,
   "result": {
     "active_entries": 8053329920,
     "bucket_count": 489,
     "cache_mode": "recompute",
-    "claim_generation_seconds": 0.769742233,
-    "commit_seconds": 20.487045756,
+    "claim_generation_seconds": 0.900678006,
+    "commit_seconds": 22.096056698,
     "field": "KoalaBear/KoalaBear^4",
-    "input_seconds": 81.277562105,
+    "input_seconds": 81.575248164,
     "input_stream_blake2s": "65657955844544f92da3325c1685ee9c783be5aa28a5173f4e605ec2eb16ab8d",
+    "interleave_columns": 128,
     "logical_entries": 8589934592,
     "matrix_count": 291,
-    "opening_with_serialization_seconds": 51.928743649,
-    "proof_blake2s": "[c4, 15, 1b, 24, 77, cd, 39, ed, 52, 4f, 3e, d4, 78, b7, cc, d, bb, ea, a1, 5f, df, 3, 65, 3c, 7, e8, b7, 30, e5, 74, be, 27]",
-    "proof_bytes": 10404021,
+    "opening_with_serialization_seconds": 46.800165642,
+    "pcs_layout": "whole-matrix-interleaved",
+    "proof_blake2s": "[23, 32, 59, 7b, af, f1, af, a3, 54, 17, 9d, 26, d8, 8, 57, a, 1d, 40, e3, 41, 24, a9, b1, c3, 41, aa, 35, 8d, af, d8, a2, 85]",
+    "proof_bytes": 8788658,
     "prover_profile": {
-      "conversion_seconds": 0.003139903,
+      "conversion_seconds": 0.002095039,
       "eo": {
-        "binary_eo_seconds": 4.074422219,
-        "consistency_check_seconds": 0.435126231,
-        "folded_tbv_seconds": 3.463014163,
-        "packed_witness_seconds": 0.583157105,
-        "tbv_cross_terms_seconds": 0.773337736
+        "binary_eo_seconds": 5.165504335,
+        "consistency_check_seconds": 0.481898448,
+        "folded_tbv_seconds": 3.697529669,
+        "packed_witness_seconds": 0.630502801,
+        "tbv_cross_terms_seconds": 0.873880631
       },
       "native_openings": 1,
-      "packed_eo_seconds": 10.271429168,
-      "pcs_decide_seconds": 0.698722354,
-      "pcs_native_opening_seconds": 2.281322266,
-      "pcs_open_seconds": 40.706096785,
-      "pcs_projection_seconds": 5.452676257,
-      "pcs_reconstruction_seconds": 0.0,
-      "pcs_sumcheck_seconds": 1.2939530989999999,
-      "terminal_batch_binding_seconds": 23.227566953,
-      "terminal_batch_folding_seconds": 7.742845903
+      "packed_eo_seconds": 11.694286136,
+      "pcs_decide_seconds": 0.850355811,
+      "pcs_native_opening_seconds": 31.11384196,
+      "pcs_open_seconds": 34.299162852,
+      "pcs_projection_seconds": 1.6143529939999999,
+      "pcs_reconstruction_seconds": 0.604551895,
+      "pcs_sumcheck_seconds": 0.109770144,
+      "terminal_batch_binding_seconds": 0.0,
+      "terminal_batch_folding_seconds": 0.0
     },
-    "prover_threads": 48,
-    "public_commitment_json_bytes": 8625,
-    "root_bytes": 256,
+    "prover_threads": 64,
+    "public_commitment_json_bytes": 7858,
+    "root_bytes": 32,
     "scope": "public-metadata ParComm complete flow",
-    "setup_seconds": 8.017747152,
-    "total_prover_seconds": 72.415789405,
+    "setup_seconds": 15.548539896,
+    "total_prover_seconds": 68.89622234000001,
     "verified": true,
     "verifier_profile": {
-      "authenticated_roots": 8,
-      "conversion_eo_seconds": 0.004226709,
+      "authenticated_roots": 1,
+      "conversion_eo_seconds": 0.006304139,
       "native_openings": 1,
-      "pcs_seconds": 0.079734382
+      "pcs_seconds": 0.060360539
     },
     "verifier_threads": 1,
-    "verify_decode_seconds": 0.099218544,
-    "workflow_wall_seconds": 162.595045172
+    "verify_decode_seconds": 0.077414776,
+    "workflow_wall_seconds": 167.01064179
   },
   "verification": {
     "profile": {
-      "authenticated_roots": 8,
-      "conversion_eo_seconds": 0.005045433,
+      "authenticated_roots": 1,
+      "conversion_eo_seconds": 0.006183341,
       "native_openings": 1,
-      "pcs_seconds": 0.094486617
+      "pcs_seconds": 0.070511388
     },
     "scope": "public-metadata ParComm complete flow",
-    "setup_seconds": 10.448460385,
+    "setup_seconds": 19.446003144,
     "threads": 1,
-    "verification_with_read_decode_seconds": 0.145789988,
+    "verification_with_read_decode_seconds": 0.121958337,
     "verified": true
   },
   "artifact_sha256": {
-    "commitment.json": "2ea47bb9f1ccedb93a2474ebc879691ca7926fc5417ad6af3ec3d4ba18e6fc29",
-    "claims.json": "7d4e2a4d8b3c3d99604e676b1e3b4cf3e1b9ea86e5772afe02f260fea41c3e88",
-    "proof.bin": "7c18b0bbdf9d070a0d2d8a2b5628486a67347749e3371e1b3792f8a52c5ef577"
+    "commitment.json": "abffa11132613a8e3d551aedac80c50318fb8f81dd4f201f27859c856408f6db",
+    "claims.json": "16f6d814360d864a7d0b46af615ae049e3efa5cb6a30b168ffdc92c70068e724",
+    "proof.bin": "386f5243b8166eaa4beeaf5b500f3212a5e76be351be445d8a7d4408acc872a9",
+    "result.json": "fef9e419369a9ee4d65194f1ae766b937e4f54f61088046603d6de877451e7ac",
+    "verification.json": "beeb50a92da77818937dbfab0a7846ae878b4ea2f0a649bb645415f7f96d13ad"
   },
   "input_sha256": "4a402790ceb49665c11d0f1466f0893b3b32d9445740756ee7eaf1a65c8d1c5f",
-  "peak_rss_kib": 39786716,
-  "pipeline_wall_seconds": 162.69911139900796
+  "input_bytes": 16106659840,
+  "peak_rss_kib": 34412312,
+  "pipeline_wall_seconds": 167.17287707701325,
+  "host_before": {
+    "utc": "2026-11-12T18:41:48Z",
+    "load": [
+      13.45361328125,
+      12.36279296875,
+      11.63818359375
+    ],
+    "available_gib": 354.73297119140625,
+    "processes": "    PID %CPU   RSS COMMAND\n2512822  798 3047252 cp_prove\n 660950 14.3 121696 uhs-cfg\n 660949  4.6 109820 uhs-data\n 660994  1.9 594580 uhs-epp\n  12152  0.8 284240 firefox\n  12316  0.6 45856 Privileged Cont\n 660948  0.3 13924 uhs-drv\n    603  0.1     0 kcompactd1\n   2510  0.1  2304 systemd-oomd\n   2562  0.1  2020 irqbalance\n   4368  0.1 76952 gnome-shell\n 596536  0.1 23368 python3\n4155044  0.1     0 kworker/0:1-events\n      1  0.0  8828 systemd\n      2  0.0     0 kthreadd"
+  },
+  "host_after": {
+    "utc": "2026-11-12T18:44:35Z",
+    "load": [
+      48.36767578125,
+      22.5146484375,
+      15.2216796875
+    ],
+    "available_gib": 354.2688217163086,
+    "processes": "    PID %CPU   RSS COMMAND\n2512822  798 3047252 cp_prove\n 660950 14.3 122188 uhs-cfg\n 596536 10.9 35600 python3\n 660949  4.6 107736 uhs-data\n 660994  1.9 594580 uhs-epp\n  12152  0.8 284328 firefox\n  12316  0.6 45176 Privileged Cont\n 660948  0.3 13924 uhs-drv\n    603  0.1     0 kcompactd1\n   2510  0.1  2304 systemd-oomd\n   2562  0.1  2020 irqbalance\n   4368  0.1 76952 gnome-shell\n4155044  0.1     0 kworker/0:1-events\n      1  0.0  8828 systemd\n      2  0.0     0 kthreadd"
+  }
 }
-
-=== Exact prover command (JSON argv) ===
-[
-  "/usr/bin/time",
-  "-v",
-  "-o",
-  "/dev/shm/mscong1-parcomm-model-encoding-20261108/logs/8b16-recompute-resources.log",
-  "/dev/shm/mscong1-parcomm-model-encoding-20261108/target-koalabear/release/parcomm-qafold-koalabear-8b",
-  "prove",
-  "--description",
-  "/dev/shm/mscong1-parcomm-model-encoding-20261108/logs/8b16-description.json",
-  "--input",
-  "-",
-  "--output",
-  "/dev/shm/mscong1-parcomm-model-encoding-20261108/bundles/8b16-recompute",
-  "--threads",
-  "48",
-  "--chunk-log",
-  "30",
-  "--packed-log",
-  "4",
-  "--cache-mode",
-  "recompute"
-]
-
-
-=== Original process resource log ===
-	Command being timed: "/dev/shm/mscong1-parcomm-model-encoding-20261108/target-koalabear/release/parcomm-qafold-koalabear-8b prove --description /dev/shm/mscong1-parcomm-model-encoding-20261108/logs/8b16-description.json --input - --output /dev/shm/mscong1-parcomm-model-encoding-20261108/bundles/8b16-recompute --threads 48 --chunk-log 30 --packed-log 4 --cache-mode recompute"
-	User time (seconds): 2215.19
-	System time (seconds): 131.40
-	Percent of CPU this job got: 1442%
-	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:42.69
-	Average shared text size (kbytes): 0
-	Average unshared data size (kbytes): 0
-	Average stack size (kbytes): 0
-	Average total size (kbytes): 0
-	Maximum resident set size (kbytes): 39786716
-	Average resident set size (kbytes): 0
-	Major (requiring I/O) page faults: 0
-	Minor (reclaiming a frame) page faults: 35957913
-	Voluntary context switches: 296855
-	Involuntary context switches: 4780
-	Swaps: 0
-	File system inputs: 0
-	File system outputs: 0
-	Socket messages sent: 0
-	Socket messages received: 0
-	Signals delivered: 0
-	Page size (bytes): 4096
-	Exit status: 0
-
